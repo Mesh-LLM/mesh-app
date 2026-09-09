@@ -41,19 +41,26 @@ struct App {
 }
 
 fn icon() -> Icon {
-    let mut rgba = Vec::with_capacity(32 * 32 * 4);
-    for y in 0..32_i32 {
-        for x in 0..32_i32 {
-            let d2 = (x - 16).pow(2) + (y - 16).pow(2);
-            let alpha = if d2 <= 24 || (120..=224).contains(&d2) {
-                255
-            } else {
-                0
-            };
-            rgba.extend_from_slice(&[70, 130, 180, alpha]);
-        }
+    // Mesh's existing jellyfish artwork, rasterized at tray resolution.
+    // macOS uses its alpha silhouette as a template on light and dark menu bars.
+    Icon::from_rgba(
+        include_bytes!("../assets/mesh-jellyfish.rgba").to_vec(),
+        32,
+        32,
+    )
+    .expect("valid bundled jellyfish icon")
+}
+
+#[cfg(test)]
+mod icon_tests {
+    #[test]
+    fn bundled_jellyfish_has_transparency_and_visible_pixels() {
+        super::icon();
+        let rgba = include_bytes!("../assets/mesh-jellyfish.rgba");
+        assert_eq!(rgba.len(), 32 * 32 * 4);
+        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
+        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
     }
-    Icon::from_rgba(rgba, 32, 32).expect("valid icon")
 }
 
 impl App {
@@ -107,7 +114,6 @@ impl App {
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon())
             .with_icon_as_template(true)
-            .with_title("Mesh Preview")
             .with_tooltip("Mesh")
             .build()
             .map_err(|e| e.to_string())?;
