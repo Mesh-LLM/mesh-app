@@ -18,7 +18,9 @@ pub struct Settings {
     pub connection: Connection,
     /// Owner identities explicitly approved on this node; never imported from an invite.
     pub admitted_owners: Vec<String>,
-    pub exchange: mesh_tray::exchange::ExchangeState,
+    pub owner_names: std::collections::BTreeMap<String, String>,
+    pub exchange: crate::exchange::ExchangeState,
+    pub replies: Vec<crate::consent::Reply>,
     pub console_port: u16,
     pub api_port: u16,
 }
@@ -28,6 +30,8 @@ impl Default for Settings {
         Self {
             connection: Connection::Automatic,
             admitted_owners: Vec::new(),
+            owner_names: Default::default(),
+            replies: Vec::new(),
             exchange: Default::default(),
             console_port: 3232,
             api_port: 9447,
@@ -65,6 +69,18 @@ impl Settings {
             validate_invite(invite)?;
         }
         crate::admission::validate_owners(&self.admitted_owners)?;
+        if self.replies.len() > 32 {
+            return Err("Too many pending replies".into());
+        }
+        if self.owner_names.len() > 1024
+            || self.owner_names.iter().any(|(id, name)| {
+                !self.admitted_owners.contains(id)
+                    || name.len() > 128
+                    || name.chars().any(char::is_control)
+            })
+        {
+            return Err("Invalid allowed-person labels".into());
+        }
         Ok(())
     }
 

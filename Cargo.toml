@@ -18,6 +18,8 @@ sha2 = "0.10"
 rand = "0.8"
 hex = "0.4"
 tempfile = "3"
+fs2 = "0.4"
+rfd = "0.16"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 winit = "0.30"

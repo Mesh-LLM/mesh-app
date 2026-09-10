@@ -61,6 +61,20 @@ pub fn prepare_store(home: &Path, owners: &[String]) -> Result<(), String> {
             return Err(format!("Invalid {key}; private trust store left unchanged"));
         }
     }
+    if object
+        .get("revoked_owners")
+        .and_then(Value::as_array)
+        .is_some_and(|revoked| {
+            revoked.iter().any(|entry| {
+                entry
+                    .get("owner_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| owners.iter().any(|owner| owner == id))
+            })
+        })
+    {
+        return Err("An allowed identity is revoked in this profile. Mesh remains stopped; remove that entry or restore the intended trust state before retrying.".into());
+    }
     object.insert(
         "trusted_owners".into(),
         Value::Array(
@@ -112,6 +126,19 @@ mod tests {
         std::fs::write(&path, store.to_string()).unwrap();
         prepare_store(home.path(), &[]).unwrap();
         store["trusted_owners"] = json!([]);
+        assert_eq!(read(home.path()), store);
+    }
+
+    #[test]
+    fn cannot_report_a_revoked_owner_as_applied() {
+        let home = tempfile::tempdir().unwrap();
+        prepare_store(home.path(), &[]).unwrap();
+        let path = home.path().join(".mesh-llm/trusted-owners.json");
+        let mut store = read(home.path());
+        let owner = "ab".repeat(32);
+        store["revoked_owners"] = json!([{"owner_id": owner}]);
+        std::fs::write(&path, store.to_string()).unwrap();
+        assert!(prepare_store(home.path(), &[owner]).is_err());
         assert_eq!(read(home.path()), store);
     }
 

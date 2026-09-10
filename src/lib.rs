@@ -2,3 +2,8 @@
 pub mod exchange;
 
 pub mod share_file;
+
+pub mod admission;
+pub mod consent;
+pub mod identity;
+pub mod settings;

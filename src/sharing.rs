@@ -1,8 +1,7 @@
-//! Native transport controller. Opening verifies, but this draft cannot approve.
-use crate::{native, App};
+//! Native presentation delegates all consent changes to the common controller.
+use crate::{consent, identity, native, App};
 use mesh_tray::{exchange, share_file};
 use std::path::Path;
-
 fn now() -> Result<u64, String> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -11,7 +10,6 @@ fn now() -> Result<u64, String> {
         .try_into()
         .map_err(|_| "Invalid clock".into())
 }
-
 impl App {
     fn share_ready(&self) -> Result<(), String> {
         if self.stopping.is_some() || self.pending_settings.is_some() {
@@ -19,18 +17,14 @@ impl App {
         }
         Ok(())
     }
-
     fn owner(&self) -> Result<mesh_llm_identity::OwnerKeypair, String> {
-        // Match the child's isolated HOME. Never use the control machine's identity.
-        mesh_llm_identity::load_keystore(&self.root.join("home/.mesh-llm/owner-keystore.json"), None)
-            .map_err(|_| "This app needs an unlocked private-profile Mesh owner identity. Native identity setup is not implemented in this draft; your existing identity was not changed.".into())
+        identity::ensure(&self.root)
     }
-
     pub(crate) fn share_request(&mut self) {
         let result = (|| {
             self.share_ready()?;
+            if !native::confirm("Request to join a private Mesh?", "Send this request to someone you know. Your private keys stay on this device. Their reply still needs your approval.", "Share request") { return Ok(()); }
             let owner = self.owner()?;
-            if !native::confirm("Request to join a private Mesh?", "Share your public Mesh identity with someone you know. This does not share a private key, approve anyone, or change your connection. A response still needs your approval.", "Share request") { return Ok(()); }
             let now = now()?;
             let mut next = self.settings.clone();
             let (bytes, pending) = exchange::create_request(
@@ -42,48 +36,132 @@ impl App {
             )?;
             let file = share_file::stage(&bytes)?;
             next.exchange.add_pending(pending, now)?;
-            // The pending correlation must exist on disk before a file leaves this app.
             next.save(&self.root)?;
             self.settings = next;
-            let tray = &self.ui.as_ref().ok_or("Tray is not ready")?._tray;
-            self.native.share(file, tray)
+            self.native
+                .share(file, &self.ui.as_ref().ok_or("Tray is not ready")?._tray)
         })();
         if let Err(e) = result {
             native::notice("Could not share request", &e);
         }
     }
-
     pub(crate) fn review_file(&mut self, path: &Path) {
         let result = (|| {
             self.share_ready()?;
             let bytes = share_file::read(path)?;
             let owner = self.owner()?;
-            let now = now()?;
-            if let Ok(request) = exchange::verify_request(&bytes, &owner.owner_id(), now) {
-                native::notice("Mesh request verified — not approved", &format!("Claimed name: {}\nOwner identity:\n{}\n\nConfirm this identity through your known conversation. Approval and response sharing are not wired in this draft. No access was granted.", request.claimed_name(), request.owner_id()));
+            let time = now()?;
+            let generation = self.settings.exchange.generation();
+            if let Ok(request) = exchange::verify_request(&bytes, &owner.owner_id(), time) {
+                let Some(approve)=native::decision("Allow this person on your private Mesh?",&format!("Claimed name: {}\nIdentity: {}\n\nCheck this identity through your known conversation. Allowing shares access to this node, not every friend's node. Once Mesh is ready, the share picker opens for your reply. If delivery fails, use Share approved reply to retry.",request.claimed_name(),request.owner_id()),"Allow & reply") else{return Ok(());};
+                let next = consent::decide_request(
+                    &self.settings,
+                    &bytes,
+                    &owner.owner_id(),
+                    generation,
+                    approve,
+                    now()?,
+                )?;
+                if approve {
+                    self.queue_settings(next);
+                } else {
+                    next.save(&self.root)?;
+                    self.settings = next;
+                }
             } else {
-                let response = self.settings.exchange.verify(&owner, &bytes, now)?;
-                native::notice("Mesh response verified — not joined", &format!("Owner identity:\n{}\n\nConfirm this identity through your known conversation. Join approval is not wired in this draft. Your connection and admitted identities are unchanged.", response.owner_id()));
+                let response = self.settings.exchange.verify(&owner, &bytes, time)?;
+                let Some(approve)=native::decision("Join this private Mesh?",&format!("Identity: {}\n\nConfirm this is the person you requested. Join allows them on this node and switches this app to their private Mesh. Decline discards this reply permanently.",response.owner_id()),"Join") else{return Ok(());};
+                let next = consent::decide_response(&self.settings, &response, approve, now()?)?;
+                if approve {
+                    self.queue_settings(next);
+                } else {
+                    next.save(&self.root)?;
+                    self.settings = next;
+                }
             }
             Ok::<(), String>(())
         })();
         if let Err(e) = result {
-            native::notice("Could not open Mesh file", &e);
+            native::notice("Could not apply Mesh file", &e);
         }
     }
-
+    pub(crate) fn share_reply(&mut self) {
+        let result = (|| {
+            self.share_ready()?;
+            let owner = self.owner()?;
+            let time = now()?;
+            let ready = self
+                .settings
+                .replies
+                .iter()
+                .filter_map(|reply| reply.verify(&self.settings, &owner.owner_id(), time).ok())
+                .collect::<Vec<_>>();
+            if ready.is_empty() {
+                return Err(
+                    "No current approved reply is waiting. Open a friend's request first.".into(),
+                );
+            }
+            // On automatic offer the latest approval is first. Keep earlier retries
+            // durable instead of silently overwriting an undelivered grant response.
+            let request = if ready.len() == 1 {
+                ready.into_iter().next().unwrap()
+            } else {
+                let mut selected = None;
+                for request in ready.into_iter().rev() {
+                    if native::confirm("Share this approved reply?", &format!("Claimed name: {}\nIdentity: {}\n\nCancel skips to the next pending reply. Previously approved people remain allowed.", request.claimed_name(), request.owner_id()), "Share reply") { selected = Some(request); break; }
+                }
+                let Some(request) = selected else {
+                    return Ok(());
+                };
+                request
+            };
+            // Never use the pre-restart snapshot. PID and owner are checked in the status adapter.
+            let pid = self
+                .child
+                .as_ref()
+                .ok_or("Mesh is not running. Retry startup before sharing.")?
+                .id();
+            let invite =
+                crate::status::private_invite(self.settings.console_port, pid, &owner.owner_id())?;
+            let bytes = exchange::seal_response(&owner, &request, &invite, now()?)?;
+            let file = share_file::stage(&bytes)?;
+            self.native
+                .share(file, &self.ui.as_ref().ok_or("Tray is not ready")?._tray)
+        })();
+        if let Err(e) = result {
+            native::notice("Could not share reply", &e);
+        }
+    }
     pub(crate) fn cancel_requests(&mut self) {
         let result = (|| {
             self.share_ready()?;
-            if !native::confirm("Cancel all pending requests?", "Previously shared requests can no longer be used to join from this app. Files already sent cannot be recalled. This does not remove any existing admitted identity.", "Cancel requests") { return Ok(()); }
-            let mut next = self.settings.clone();
-            next.exchange.invalidate()?;
+            if !native::confirm("Cancel pending requests and replies?","Files already sent cannot be recalled. Existing allowed people remain allowed; use People allowed to remove them.","Cancel pending"){return Ok(());}
+            let next = consent::cancel(&self.settings)?;
             next.save(&self.root)?;
             self.settings = next;
             Ok::<(), String>(())
         })();
         if let Err(e) = result {
-            native::notice("Could not cancel requests", &e);
+            native::notice("Could not cancel", &e);
+        }
+    }
+    pub(crate) fn remove_person(&mut self, owner: &str) {
+        let result = (|| {
+            self.share_ready()?;
+            let generation = self.settings.exchange.generation();
+            let name = self
+                .settings
+                .owner_names
+                .get(owner)
+                .map(String::as_str)
+                .unwrap_or("Mesh person");
+            if !native::confirm("Remove this person?", &format!("{name}\nIdentity: {owner}\n\nThis stops this app's Mesh before removing access. Other nodes' allowed lists are unchanged."), "Remove") { return Ok(()); }
+            let next = consent::remove(&self.settings, owner, generation)?;
+            self.queue_settings(next);
+            Ok::<(), String>(())
+        })();
+        if let Err(e) = result {
+            native::notice("Could not remove person", &e);
         }
     }
 }

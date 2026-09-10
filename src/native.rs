@@ -80,3 +80,18 @@ pub fn confirm(title: &str, detail: &str, action: &str) -> bool {
     alert.addButtonWithTitle(&NSString::from_str(action));
     alert.runModal() == 1001
 }
+
+pub fn decision(title: &str, detail: &str, action: &str) -> Option<bool> {
+    let mtm = MainThreadMarker::new()?;
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    alert.addButtonWithTitle(&NSString::from_str(action));
+    alert.addButtonWithTitle(&NSString::from_str("Decline"));
+    match alert.runModal() {
+        1001 => Some(true),
+        1002 => Some(false),
+        _ => None,
+    }
+}

@@ -1,10 +1,11 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-mod admission;
+use mesh_tray::{admission, consent, identity, settings};
 mod lifecycle;
 #[cfg(target_os = "macos")]
 mod native;
-mod settings;
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "macos"))]
+#[path = "native_portable.rs"]
+mod native;
 mod sharing;
 mod status;
 
@@ -25,12 +26,13 @@ struct Ui {
     retry: MenuItem,
     retry_visible: bool,
     quit: MenuItem,
+    people: muda::Submenu,
+    people_ids: Vec<String>,
     _tray: TrayIcon,
 }
 
 struct App {
     settings: settings::Settings,
-    #[cfg(target_os = "macos")]
     native: native::Native,
     pending_settings: Option<settings::Settings>,
     root: PathBuf,
@@ -46,6 +48,7 @@ struct App {
     error: Option<String>,
     open_when_ready: Option<&'static str>,
     exit: bool,
+    offer_reply: bool,
 }
 
 fn icon() -> Icon {
@@ -86,7 +89,6 @@ impl App {
         Self {
             root,
             settings,
-            #[cfg(target_os = "macos")]
             native: native::Native::default(),
             pending_settings: None,
             ui: None,
@@ -101,6 +103,7 @@ impl App {
             error: None,
             open_when_ready: None,
             exit: false,
+            offer_reply: false,
         }
     }
 
@@ -112,24 +115,11 @@ impl App {
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
         let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
-        let request = MenuItem::with_id(
-            "share-request",
-            "Request to join…",
-            cfg!(target_os = "macos"),
-            None,
-        );
-        let open = MenuItem::with_id(
-            "open-file",
-            "Open Mesh file…",
-            cfg!(target_os = "macos"),
-            None,
-        );
-        let cancel = MenuItem::with_id(
-            "cancel-requests",
-            "Cancel pending requests…",
-            cfg!(target_os = "macos"),
-            None,
-        );
+        let request = MenuItem::with_id("share-request", "Request to join…", true, None);
+        let open = MenuItem::with_id("open-file", "Open Mesh file…", true, None);
+        let cancel = MenuItem::with_id("cancel-requests", "Cancel pending requests…", true, None);
+        let reply = MenuItem::with_id("share-reply", "Share approved reply…", true, None);
+        let people = muda::Submenu::new("People allowed", true);
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         menu.append_items(&[
             &status,
@@ -139,6 +129,8 @@ impl App {
             &request,
             &open,
             &cancel,
+            &reply,
+            &people,
             &PredefinedMenuItem::separator(),
             &chat,
             &settings,
@@ -161,6 +153,8 @@ impl App {
             retry,
             retry_visible: false,
             quit,
+            people,
+            people_ids: Vec::new(),
             _tray: tray,
         });
         self.start();
@@ -183,6 +177,9 @@ impl App {
     }
 
     fn spawn(&self) -> Result<Child, String> {
+        if cfg!(windows) {
+            return Err("Windows runtime launch is unavailable until Mesh supports isolated identity and trust paths. Your existing Mesh state was not touched.".into());
+        }
         for port in [self.settings.console_port, self.settings.api_port] {
             if std::net::TcpStream::connect_timeout(
                 &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -211,6 +208,7 @@ impl App {
             self.settings.connection,
             settings::Connection::Private { .. }
         ) {
+            identity::ensure(&self.root)?;
             admission::prepare_store(&home, &self.settings.admitted_owners)?;
         }
         let log = std::fs::OpenOptions::new()
@@ -228,7 +226,8 @@ impl App {
             .env("USERPROFILE", &home)
             .env("MESH_LLM_CONFIG", home.join(".mesh-llm/config.toml"))
             .env("MESH_LLM_RUNTIME_ROOT", self.root.join("runtime"))
-            .env_remove("MESH_LLM_EPHEMERAL_KEY");
+            .env_remove("MESH_LLM_EPHEMERAL_KEY")
+            .env_remove("MESH_LLM_OWNER_PASSPHRASE");
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -241,6 +240,30 @@ impl App {
 
     fn render(&mut self) {
         let Some(ui) = &mut self.ui else { return };
+        if ui.people_ids != self.settings.admitted_owners || ui.people.items().is_empty() {
+            while ui.people.remove_at(0).is_some() {}
+            if self.settings.admitted_owners.is_empty() {
+                let _ = ui
+                    .people
+                    .append(&MenuItem::new("Nobody allowed yet", false, None));
+            }
+            for owner in &self.settings.admitted_owners {
+                let name = self
+                    .settings
+                    .owner_names
+                    .get(owner)
+                    .map(String::as_str)
+                    .unwrap_or("Mesh person");
+                let label = format!("{} · {}…", name, &owner[..12]);
+                let _ = ui.people.append(&MenuItem::with_id(
+                    format!("remove:{owner}"),
+                    label,
+                    true,
+                    None,
+                ));
+            }
+            ui.people_ids = self.settings.admitted_owners.clone();
+        }
         let text = if self.stopping.is_some() {
             "Mesh · Stopping…"
         } else if self.error.is_some() {
@@ -301,6 +324,7 @@ impl App {
 
     fn quit(&mut self) {
         self.pending_settings = None;
+        self.offer_reply = false;
         let Some(child) = &mut self.child else {
             self.exit = true;
             return;
@@ -318,18 +342,18 @@ impl App {
                 "settings" => self.open("/configuration/mesh"),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
-                #[cfg(target_os = "macos")]
                 "share-request" => self.share_request(),
-                #[cfg(target_os = "macos")]
                 "open-file" => {
                     if let Some(path) = native::choose_file() {
                         self.review_file(&path);
                     }
                 }
-                #[cfg(target_os = "macos")]
                 "cancel-requests" => self.cancel_requests(),
+                "share-reply" => self.share_reply(),
+
                 "retry" => self.start(),
                 "quit" => self.quit(),
+                id if id.starts_with("remove:") => self.remove_person(&id[7..]),
                 _ => {}
             }
         }
@@ -347,6 +371,10 @@ impl App {
             };
             if self.snapshot.running {
                 self.started = None;
+                if self.offer_reply && self.snapshot.private_owner.is_some() {
+                    self.offer_reply = false;
+                    self.share_reply();
+                }
                 if let Some(path) = self.open_when_ready.take() {
                     self.open(path);
                 }
@@ -406,33 +434,38 @@ impl App {
         {
             return;
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = connection;
-            self.error =
-                Some("Native mode confirmation is not implemented on this platform yet".into());
-        }
-        #[cfg(target_os = "macos")]
-        {
-            if !native::confirm("Change Mesh connection?", "This restarts only this app’s Mesh and cancels outstanding join requests. Private requires an existing owner identity; it never falls back to Public.", "Change connection") { return; }
-            let mut next = self.settings.clone();
-            if let Err(e) = next.exchange.invalidate() {
-                self.error = Some(e);
+        if !native::confirm("Change Mesh connection?", "Only this app’s Mesh restarts. Private sets up your identity securely and cancels outstanding requests. It never falls back to Public.", "Change connection") { return; }
+        if matches!(connection, settings::Connection::Private { .. }) {
+            if let Err(e) = identity::ensure(&self.root) {
+                native::notice("Could not set up Private", &e);
                 return;
             }
-            next.connection = connection;
-            self.pending_settings = Some(next);
-            if let Some(child) = &mut self.child {
-                match lifecycle::request_stop(child, self.settings.console_port) {
-                    Ok(()) => self.stopping = Some(Instant::now()),
-                    Err(e) => {
-                        self.error = Some(e);
-                        self.pending_settings = None;
-                    }
-                }
-            } else {
-                self.apply_pending();
+        }
+        match consent::cancel(&self.settings) {
+            Ok(mut next) => {
+                next.connection = connection;
+                self.queue_settings(next);
             }
+            Err(e) => native::notice("Could not change connection", &e),
+        }
+    }
+
+    fn queue_settings(&mut self, next: settings::Settings) {
+        if self.stopping.is_some() || self.pending_settings.is_some() {
+            return;
+        }
+        self.pending_settings = Some(next);
+        self.open_when_ready = None;
+        if let Some(child) = &mut self.child {
+            match lifecycle::request_stop(child, self.settings.console_port) {
+                Ok(()) => self.stopping = Some(Instant::now()),
+                Err(e) => {
+                    self.error = Some(e);
+                    self.pending_settings = None;
+                }
+            }
+        } else {
+            self.apply_pending();
         }
     }
 
@@ -440,6 +473,7 @@ impl App {
         if let Some(next) = self.pending_settings.take() {
             match next.save(&self.root) {
                 Ok(()) => {
+                    self.offer_reply = !next.replies.is_empty();
                     self.settings = next;
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
@@ -536,7 +570,9 @@ mod desktop {
                 let button = gtk::Button::with_label(label);
                 let app = app.clone();
                 button.connect_clicked(move |_| {
-                    let mut app = app.borrow_mut();
+                    let Ok(mut app) = app.try_borrow_mut() else {
+                        return;
+                    };
                     if let Some(path) = route {
                         app.open(path);
                     } else {
@@ -545,10 +581,84 @@ mod desktop {
                 });
                 content.add(&button);
             }
+            for (label, action) in [
+                ("Public", "public"),
+                ("Private", "private"),
+                ("Request to join", "request"),
+                ("Open Mesh file", "open"),
+                ("Share approved reply", "reply"),
+                ("Cancel pending", "cancel"),
+            ] {
+                let button = gtk::Button::with_label(label);
+                let app = app.clone();
+                button.connect_clicked(move |_| {
+                    let Ok(mut app) = app.try_borrow_mut() else {
+                        return;
+                    };
+                    match action {
+                        "public" => app.change_mode(settings::Connection::Automatic),
+                        "private" => {
+                            app.change_mode(settings::Connection::Private { invite: None })
+                        }
+                        "request" => app.share_request(),
+                        "open" => {
+                            if let Some(path) = native::choose_file() {
+                                app.review_file(&path);
+                            }
+                        }
+                        "reply" => app.share_reply(),
+                        "cancel" => app.cancel_requests(),
+                        _ => {}
+                    }
+                });
+                content.add(&button);
+            }
+            let people = gtk::MenuButton::new();
+            people.set_label("People allowed");
+            let popover = gtk::Popover::new(Some(&people));
+            let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
+            popover.add(&list);
+            people.set_popover(Some(&popover));
+            let state = app.clone();
+            people.connect_toggled(move |button| {
+                if !button.is_active() {
+                    return;
+                }
+                for child in list.children() {
+                    list.remove(&child);
+                }
+                let Ok(state_ref) = state.try_borrow() else {
+                    return;
+                };
+                for owner in &state_ref.settings.admitted_owners {
+                    let name = state_ref
+                        .settings
+                        .owner_names
+                        .get(owner)
+                        .map(String::as_str)
+                        .unwrap_or("Mesh person");
+                    let remove = gtk::Button::with_label(&format!("{name} · {}…", &owner[..12]));
+                    let owner = owner.clone();
+                    let state = state.clone();
+                    remove.connect_clicked(move |_| {
+                        if let Ok(mut app) = state.try_borrow_mut() {
+                            app.remove_person(&owner);
+                        }
+                    });
+                    list.add(&remove);
+                }
+                if state_ref.settings.admitted_owners.is_empty() {
+                    list.add(&gtk::Label::new(Some("Nobody allowed yet")));
+                }
+                list.show_all();
+            });
+            content.add(&people);
             window.add(&content);
             let closing = app.clone();
             window.connect_delete_event(move |_, _| {
-                closing.borrow_mut().quit();
+                if let Ok(mut app) = closing.try_borrow_mut() {
+                    app.quit();
+                }
                 gtk::glib::Propagation::Stop
             });
             window.show_all();
@@ -558,7 +668,9 @@ mod desktop {
         };
         gtk::glib::timeout_add_local(Duration::from_millis(100), move || {
             let _ = &window;
-            let mut app = app.borrow_mut();
+            let Ok(mut app) = app.try_borrow_mut() else {
+                return gtk::glib::ControlFlow::Continue;
+            };
             app.tick();
             if app.exit {
                 gtk::main_quit();
@@ -576,6 +688,7 @@ fn main() {
     let result = (|| {
         let root = settings::data_root()?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let _profile_lock = identity::lock_profile(&root)?;
         let settings = settings::Settings::load(&root)?;
         if std::env::args().any(|arg| arg == "--print-launch") {
             // Omit private invitation material from diagnostic output.
@@ -598,3 +711,111 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod transaction_tests {
+    #[cfg(target_os = "macos")]
+    use crate::portable_test as portable;
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn portable_adapter_api_compiles_without_launching_dialogs() {
+        let mut adapter = portable::Native::default();
+        let _ = &mut adapter;
+        let _ = portable::Native::share;
+        let _ = portable::choose_file;
+        let _ = portable::notice;
+        let _ = portable::confirm;
+        let _ = portable::decision;
+    }
+    use super::*;
+    fn app(root: &std::path::Path) -> App {
+        App::new(root.into(), settings::Settings::default())
+    }
+    #[test]
+    fn failed_save_leaves_current_memory_and_disk_unchanged() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        std::fs::create_dir(root.path().join("launcher.json")).unwrap();
+        let mut candidate = app.settings.clone();
+        candidate.admitted_owners.push("ab".repeat(32));
+        app.pending_settings = Some(candidate);
+        app.apply_pending();
+        assert!(app.settings.admitted_owners.is_empty());
+        assert!(app.child.is_none());
+        assert!(app.error.as_ref().unwrap().contains("save"));
+        assert!(app.pending_settings.is_none());
+    }
+    #[test]
+    fn startup_failure_keeps_committed_removal_never_restores_old_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        let owner = "ab".repeat(32);
+        app.settings.admitted_owners.push(owner.clone());
+        app.settings.save(root.path()).unwrap();
+        // Deterministic occupied-port failure, never start a Mesh process.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        app.settings.console_port = listener.local_addr().unwrap().port();
+        app.settings.api_port = if app.settings.console_port == 9447 {
+            9448
+        } else {
+            9447
+        };
+        let next = consent::remove(&app.settings, &owner, 0).unwrap();
+        app.pending_settings = Some(next);
+        app.apply_pending();
+        assert!(app.child.is_none());
+        assert!(app.error.is_some());
+        assert!(app.settings.admitted_owners.is_empty());
+        assert!(settings::Settings::load(root.path())
+            .unwrap()
+            .admitted_owners
+            .is_empty());
+        assert_eq!(app.settings.exchange.generation(), 1);
+        app.start();
+        assert!(app.settings.admitted_owners.is_empty());
+    }
+    #[cfg(unix)]
+    #[test]
+    fn consent_is_not_saved_until_owned_child_is_reaped_and_busy_actions_do_not_replace_it() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.settings.save(root.path()).unwrap();
+        let mut other = Command::new("sleep").arg("30").spawn().unwrap();
+        app.child = Some(Command::new("sleep").arg("30").spawn().unwrap());
+        let mut next = app.settings.clone();
+        next.admitted_owners.push("ab".repeat(32));
+        app.queue_settings(next);
+        assert!(settings::Settings::load(root.path())
+            .unwrap()
+            .admitted_owners
+            .is_empty());
+        app.queue_settings(settings::Settings::default());
+        assert_eq!(
+            app.pending_settings.as_ref().unwrap().admitted_owners.len(),
+            1
+        );
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app.child.as_mut().unwrap().try_wait().unwrap().is_none() && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut child = app.child.take().unwrap();
+        let _ = child.kill();
+        child.wait().unwrap();
+        app.stopping = None;
+        // Force save failure so this test cannot spawn a runtime after reaping.
+        std::fs::remove_file(root.path().join("launcher.json")).unwrap();
+        std::fs::create_dir(root.path().join("launcher.json")).unwrap();
+        app.apply_pending();
+        assert!(app.settings.admitted_owners.is_empty());
+        assert!(app.child.is_none());
+        let alive = other.try_wait().unwrap().is_none();
+        other.kill().unwrap();
+        other.wait().unwrap();
+        assert!(alive);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+#[path = "native_portable.rs"]
+mod portable_test;

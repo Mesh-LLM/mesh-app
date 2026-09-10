@@ -1,7 +1,8 @@
 # Product
 
 ## Platform
-Native desktop Rust tray. This draft implements macOS sharing only.
+Native desktop Rust tray for macOS, Windows and Linux. macOS sharing and portable
+file/consent adapters are implemented; Windows runtime launch is safety-gated.
 
 ## Users and purpose
 People sharing a private Mesh with friends and family, without network setup.
@@ -21,13 +22,16 @@ People sharing a private Mesh with friends and family, without network setup.
 - Preserve app data and unrelated Mesh processes. Stop only the retained child.
 
 ## Draft boundary
-Implemented: native request share picker, local file open panel, verification-only dialogs, persistent pending requests and
-cancellation, native mode selection, authoritative startup owner-list projection.
+Implemented in source: automatic keychain-backed profile setup/reuse, shared
+explicit consent/decline/join/remove transitions, replay persistence, owned-child
+stop/save/project/restart, ready-only reply sharing/retry, native allowed list,
+macOS share picker and portable native file/consent adapters.
 
-Not implemented: native owner provisioning/unlock, host approval + response share,
-joiner approval + list/connection transaction, admitted-owner removal UI, reliable
-service-completion cleanup, and safe OS-open integration, packaged file type registration/cold-open validation.
-No native admission workflow is ready for ordinary users yet.
+Not verified: real OS credential setup, delivery, live admission/removal and native
+Windows/Linux packaging. Windows runtime cannot yet isolate default trust/node
+paths and launch is blocked. Safe OS file activation, service-completion cleanup,
+manual-passphrase recovery and power-loss durability remain unfinished.
+No end-to-end workflow has been demonstrated in a launched app yet.
 
 ## Brand
 Keep the existing jellyfish artwork and ordinary OS menu/dialog conventions.
