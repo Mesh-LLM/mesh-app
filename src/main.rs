@@ -1,6 +1,11 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+mod admission;
 mod lifecycle;
+#[cfg(target_os = "macos")]
+mod native;
 mod settings;
+#[cfg(target_os = "macos")]
+mod sharing;
 mod status;
 
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -15,8 +20,8 @@ const POLL: Duration = Duration::from_secs(3);
 struct Ui {
     menu: Menu,
     status: MenuItem,
-    requests: MenuItem,
-    requests_visible: bool,
+    public: muda::CheckMenuItem,
+    private: muda::CheckMenuItem,
     retry: MenuItem,
     retry_visible: bool,
     quit: MenuItem,
@@ -25,6 +30,9 @@ struct Ui {
 
 struct App {
     settings: settings::Settings,
+    #[cfg(target_os = "macos")]
+    native: native::Native,
+    pending_settings: Option<settings::Settings>,
     root: PathBuf,
     ui: Option<Ui>,
     child: Option<Child>,
@@ -78,6 +86,9 @@ impl App {
         Self {
             root,
             settings,
+            #[cfg(target_os = "macos")]
+            native: native::Native::default(),
+            pending_settings: None,
             ui: None,
             child: None,
             rx,
@@ -88,7 +99,7 @@ impl App {
             started: None,
             stopping: None,
             error: None,
-            open_when_ready: Some("/chat"),
+            open_when_ready: None,
             exit: false,
         }
     }
@@ -99,10 +110,35 @@ impl App {
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let settings = MenuItem::with_id("settings", "Settings…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        let requests = MenuItem::with_id("requests", "Review connection request…", true, None);
+        let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
+        let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
+        let request = MenuItem::with_id(
+            "share-request",
+            "Request to join…",
+            cfg!(target_os = "macos"),
+            None,
+        );
+        let open = MenuItem::with_id(
+            "open-file",
+            "Open Mesh file…",
+            cfg!(target_os = "macos"),
+            None,
+        );
+        let cancel = MenuItem::with_id(
+            "cancel-requests",
+            "Cancel pending requests…",
+            cfg!(target_os = "macos"),
+            None,
+        );
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         menu.append_items(&[
             &status,
+            &PredefinedMenuItem::separator(),
+            &public,
+            &private,
+            &request,
+            &open,
+            &cancel,
             &PredefinedMenuItem::separator(),
             &chat,
             &settings,
@@ -120,8 +156,8 @@ impl App {
         self.ui = Some(Ui {
             menu,
             status,
-            requests,
-            requests_visible: false,
+            public,
+            private,
             retry,
             retry_visible: false,
             quit,
@@ -171,6 +207,12 @@ impl App {
         // from CLI/lab instances. It persists across launches of this app.
         let home = self.root.join("home");
         std::fs::create_dir_all(home.join(".mesh-llm")).map_err(|e| e.to_string())?;
+        if matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        ) {
+            admission::prepare_store(&home, &self.settings.admitted_owners)?;
+        }
         let log = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -211,19 +253,14 @@ impl App {
             "Mesh · Finding models…"
         };
         ui.status.set_text(text);
-        let pending = self.snapshot.pending > 0 && self.child.is_some();
-        ui.requests.set_text(format!(
-            "Review connection requests ({})…",
-            self.snapshot.pending
-        ));
-        if pending != ui.requests_visible {
-            if pending {
-                let _ = ui.menu.insert(&ui.requests, 4);
-            } else {
-                let _ = ui.menu.remove(&ui.requests);
-            }
-            ui.requests_visible = pending;
-        }
+        let private = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        ui.public.set_checked(!private);
+        ui.private.set_checked(private);
+        ui.public.set_enabled(self.stopping.is_none());
+        ui.private.set_enabled(self.stopping.is_none());
         let retry = self.error.is_some() && self.child.is_none();
         if retry != ui.retry_visible {
             if retry {
@@ -263,6 +300,7 @@ impl App {
     }
 
     fn quit(&mut self) {
+        self.pending_settings = None;
         let Some(child) = &mut self.child else {
             self.exit = true;
             return;
@@ -278,7 +316,18 @@ impl App {
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
                 "settings" => self.open("/configuration/mesh"),
-                "requests" => self.open("/#pairing"),
+                "public" => self.change_mode(settings::Connection::Automatic),
+                "private" => self.change_mode(settings::Connection::Private { invite: None }),
+                #[cfg(target_os = "macos")]
+                "share-request" => self.share_request(),
+                #[cfg(target_os = "macos")]
+                "open-file" => {
+                    if let Some(path) = native::choose_file() {
+                        self.review_file(&path);
+                    }
+                }
+                #[cfg(target_os = "macos")]
+                "cancel-requests" => self.cancel_requests(),
                 "retry" => self.start(),
                 "quit" => self.quit(),
                 _ => {}
@@ -309,7 +358,11 @@ impl App {
                     self.child = None;
                     self.snapshot = status::Snapshot::default();
                     if self.stopping.take().is_some() {
-                        self.exit = true;
+                        if self.pending_settings.is_some() {
+                            self.apply_pending();
+                        } else {
+                            self.exit = true;
+                        }
                     } else {
                         self.error = Some(format!("Mesh exited ({code}). Open Settings for the startup log, then Retry startup."));
                     }
@@ -323,6 +376,7 @@ impl App {
             .is_some_and(|at| at.elapsed() > Duration::from_secs(20))
         {
             self.stopping = None;
+            self.pending_settings = None;
             self.error = Some(
                 "Mesh did not stop. App remains open; retry Quit. No other processes were stopped."
                     .into(),
@@ -343,6 +397,59 @@ impl App {
             self.next_poll = Instant::now() + POLL;
         }
         self.render();
+    }
+    fn change_mode(&mut self, connection: settings::Connection) {
+        if self.stopping.is_some()
+            || self.pending_settings.is_some()
+            || std::mem::discriminant(&self.settings.connection)
+                == std::mem::discriminant(&connection)
+        {
+            return;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = connection;
+            self.error =
+                Some("Native mode confirmation is not implemented on this platform yet".into());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if !native::confirm("Change Mesh connection?", "This restarts only this app’s Mesh and cancels outstanding join requests. Private requires an existing owner identity; it never falls back to Public.", "Change connection") { return; }
+            let mut next = self.settings.clone();
+            if let Err(e) = next.exchange.invalidate() {
+                self.error = Some(e);
+                return;
+            }
+            next.connection = connection;
+            self.pending_settings = Some(next);
+            if let Some(child) = &mut self.child {
+                match lifecycle::request_stop(child, self.settings.console_port) {
+                    Ok(()) => self.stopping = Some(Instant::now()),
+                    Err(e) => {
+                        self.error = Some(e);
+                        self.pending_settings = None;
+                    }
+                }
+            } else {
+                self.apply_pending();
+            }
+        }
+    }
+
+    fn apply_pending(&mut self) {
+        if let Some(next) = self.pending_settings.take() {
+            match next.save(&self.root) {
+                Ok(()) => {
+                    self.settings = next;
+                    self.snapshot = status::Snapshot::default();
+                    self.error = None;
+                    self.start();
+                }
+                Err(e) => {
+                    self.error = Some(format!("Could not save connection: {e}"));
+                }
+            }
+        }
     }
 }
 
@@ -387,11 +494,8 @@ mod desktop {
             use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
             builder.with_activation_policy(ActivationPolicy::Accessory);
         }
-        builder
-            .build()
-            .map_err(|e| e.to_string())?
-            .run_app(&mut app)
-            .map_err(|e| e.to_string())
+        let event_loop = builder.build().map_err(|e| e.to_string())?;
+        event_loop.run_app(&mut app).map_err(|e| e.to_string())
     }
 }
 

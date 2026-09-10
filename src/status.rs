@@ -1,12 +1,10 @@
 //! Read-only, bounded loopback requests. No peer-provided management URLs.
-use serde::Deserialize;
 use std::time::Duration;
 
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub running: bool,
     pub models_available: bool,
-    pub pending: usize,
     pub pid: Option<u32>,
 }
 
@@ -43,9 +41,7 @@ pub fn snapshot(port: u16) -> Snapshot {
         return Snapshot::default();
     }
     let models_available = get(port, "/v1/models").is_ok_and(|v| actual_models(&v));
-    let pending = get(port, "/api/pairing/sessions")
-        .map(|v| pending_count(&v))
-        .unwrap_or(0);
+
     let pid = value["local_instances"]
         .as_array()
         .and_then(|instances| {
@@ -59,7 +55,6 @@ pub fn snapshot(port: u16) -> Snapshot {
         pid,
         running: true,
         models_available,
-        pending,
     }
 }
 
@@ -71,23 +66,6 @@ fn actual_models(value: &serde_json::Value) -> bool {
                 .is_some_and(|id| !id.is_empty() && !matches!(id, "auto" | "mesh"))
         })
     })
-}
-
-#[derive(Deserialize)]
-struct Session {
-    status: String,
-    expires_at: u64,
-}
-fn pending_count(value: &serde_json::Value) -> usize {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    serde_json::from_value::<Vec<Session>>(value["sessions"].clone())
-        .unwrap_or_default()
-        .iter()
-        .filter(|s| s.status == "awaiting_approval" && s.expires_at > now)
-        .count()
 }
 
 #[cfg(windows)]
@@ -124,17 +102,6 @@ mod tests {
         assert!(actual_models(
             &serde_json::json!({"data":[{"id":"real/model"}]})
         ));
-    }
-    #[test]
-    fn only_live_approval_requests_surface() {
-        assert_eq!(
-            pending_count(&serde_json::json!({"sessions":[
-                {"status":"awaiting_approval","expires_at":9999999999u64},
-                {"status":"awaiting_approval","expires_at":1},
-                {"status":"approved","expires_at":9999999999u64}
-            ]})),
-            1
-        );
     }
     #[test]
     fn unavailable_daemon_is_not_ready() {
