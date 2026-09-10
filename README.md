@@ -68,8 +68,12 @@ replies does not remove existing grants or recall already-sent files.
 
 macOS uses AppKit sharing. Other desktop adapters use native open/save/dialogs via
 rfd, saving a `.meshfile` attachment for your chat app. Linux no-tray fallback also
-exposes these controls. Those platform paths are source implementations, not yet
-packaged Windows/Linux verification. Windows child launch remains safely gated.
+exposes these controls, Retry startup, and a changing status/error label. Portable
+consent handles both native Windows and custom-labeled dialog results; unit tests
+exercise that mapping without opening dialogs. Those platform paths are source
+implementations, not yet packaged Windows/Linux verification. Windows child launch
+remains safely gated. Portable Cancel-default and keyboard behavior still require
+native validation; Cancel-default is currently established only in the macOS adapter.
 
 Shared files/pickers are retained until normal app exit, bounded to 32 per session;
 service-completion and crash-leftover cleanup are unfinished. Imported files remain

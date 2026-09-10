@@ -304,7 +304,7 @@ impl App {
             // Native text viewer, not a second settings application. Works even
             // when startup failed before the management server could exist.
             let details = self.root.join("STARTUP_ERROR.txt");
-            let body = format!("Mesh needs attention\n\n{message}\n\nUse Retry startup in the tray after fixing the installation.\nRuntime log: {}\n", log.display());
+            let body = format!("Mesh needs attention\n\n{message}\n\nUse Retry startup after fixing the installation.\nRuntime log: {}\n", log.display());
             if std::fs::write(&details, body).is_ok() {
                 let _ = open::that(details);
             }
@@ -554,6 +554,7 @@ mod desktop {
         let fallback = !tray_host_available();
         app.build()?;
         let app = std::rc::Rc::new(std::cell::RefCell::new(app));
+        let fallback_status = gtk::Label::new(Some("Mesh · Getting ready…"));
         // GNOME without an extension must never leave an invisible daemon.
         let window = if fallback {
             let window = gtk::Window::new(gtk::WindowType::Toplevel);
@@ -561,7 +562,7 @@ mod desktop {
             window.set_default_size(320, 180);
             let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
             content.set_border_width(24);
-            content.add(&gtk::Label::new(Some("Mesh runs until you quit.")));
+            content.add(&fallback_status);
             for (label, route) in [
                 ("Open Chat", Some("/chat")),
                 ("Settings", Some("/configuration/mesh")),
@@ -588,6 +589,7 @@ mod desktop {
                 ("Open Mesh file", "open"),
                 ("Share approved reply", "reply"),
                 ("Cancel pending", "cancel"),
+                ("Retry startup", "retry"),
             ] {
                 let button = gtk::Button::with_label(label);
                 let app = app.clone();
@@ -608,6 +610,7 @@ mod desktop {
                         }
                         "reply" => app.share_reply(),
                         "cancel" => app.cancel_requests(),
+                        "retry" => app.start(),
                         _ => {}
                     }
                 });
@@ -672,6 +675,19 @@ mod desktop {
                 return gtk::glib::ControlFlow::Continue;
             };
             app.tick();
+            if fallback {
+                let text = if let Some(error) = &app.error {
+                    format!("Mesh needs attention: {error}")
+                } else if app.stopping.is_some() {
+                    "Mesh · Applying change…".into()
+                } else if app.snapshot.running {
+                    "Mesh · Running".into()
+                } else {
+                    "Mesh · Getting ready…".into()
+                };
+                fallback_status.set_text(&text);
+                fallback_status.set_line_wrap(true);
+            }
             if app.exit {
                 gtk::main_quit();
                 gtk::glib::ControlFlow::Break

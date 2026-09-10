@@ -34,18 +34,18 @@ pub fn notice(title: &str, detail: &str) {
         .show();
 }
 pub fn confirm(title: &str, detail: &str, action: &str) -> bool {
-    rfd::MessageDialog::new()
+    let result = rfd::MessageDialog::new()
         .set_title(title)
         .set_description(detail)
         .set_buttons(rfd::MessageButtons::OkCancelCustom(
             action.into(),
             "Cancel".into(),
         ))
-        .show()
-        == rfd::MessageDialogResult::Custom(action.into())
+        .show();
+    confirmation_result(result, action)
 }
 pub fn decision(title: &str, detail: &str, action: &str) -> Option<bool> {
-    match rfd::MessageDialog::new()
+    let result = rfd::MessageDialog::new()
         .set_title(title)
         .set_description(detail)
         .set_buttons(rfd::MessageButtons::YesNoCancelCustom(
@@ -53,10 +53,46 @@ pub fn decision(title: &str, detail: &str, action: &str) -> Option<bool> {
             "Decline".into(),
             "Cancel".into(),
         ))
-        .show()
-    {
+        .show();
+    decision_result(result, action)
+}
+fn confirmation_result(result: rfd::MessageDialogResult, action: &str) -> bool {
+    matches!(result, rfd::MessageDialogResult::Ok)
+        || result == rfd::MessageDialogResult::Custom(action.into())
+}
+fn decision_result(result: rfd::MessageDialogResult, action: &str) -> Option<bool> {
+    match result {
+        rfd::MessageDialogResult::Yes => Some(true),
+        rfd::MessageDialogResult::No => Some(false),
         rfd::MessageDialogResult::Custom(value) if value == action => Some(true),
         rfd::MessageDialogResult::Custom(value) if value == "Decline" => Some(false),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rfd::MessageDialogResult::*;
+    #[test]
+    fn native_and_custom_results_preserve_consent_and_decline() {
+        for result in [Yes, Custom("Allow".into())] {
+            assert_eq!(decision_result(result, "Allow"), Some(true));
+        }
+        for result in [No, Custom("Decline".into())] {
+            assert_eq!(decision_result(result, "Allow"), Some(false));
+        }
+        for result in [
+            Cancel,
+            Ok,
+            Custom("Cancel".into()),
+            Custom("unexpected".into()),
+        ] {
+            assert_eq!(decision_result(result, "Allow"), None);
+        }
+        assert!(confirmation_result(Ok, "Remove"));
+        assert!(confirmation_result(Custom("Remove".into()), "Remove"));
+        assert!(!confirmation_result(Cancel, "Remove"));
+        assert!(!confirmation_result(No, "Remove"));
     }
 }

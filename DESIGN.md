@@ -12,7 +12,8 @@ visual identity. Mode: Operate.
 - macOS `NSSharingServicePicker` anchored to the status button; `NSOpenPanel` for
   a local file; `NSAlert` for explicit confirmations and verification results.
 - OS fonts, colors, focus and light/dark behavior; no custom typography/chrome.
-- Cancel is the default confirmation button. A verified self-claimed name is
+- Cancel is the default macOS confirmation button; portable default-button and
+  keyboard behavior remain unverified. A verified self-claimed name is
   labeled as claimed; the owner fingerprint is separate. Verification-only
   dialogs request explicit Allow & reply / Join / Decline; merely opening grants
   nothing. People entries show a claimed label and fingerprint, not a certified name.
