@@ -20,7 +20,7 @@ impl App {
             }
             if !native::confirm(
                 "Invite someone to your Mesh",
-                "Three cards, like a party invitation:\n\n1. You send this invitation. It grants no access on its own.\n2. They RSVP. That sends you their identity — they are still not in.\n3. You compare a short code with them and confirm. That puts them on the list.\n\nSend the card however you like — Messages, Mail, AirDrop. The invitation expires in 30 minutes.",
+                "Three cards, like a party invitation:\n\n1. You send this invitation. It grants no access on its own.\n2. They RSVP. That sends you their identity — they are still not in.\n3. You confirm it is really them. That puts them on the list.\n\nSend the card however you like — Messages, Mail, AirDrop. The invitation expires in 30 minutes.",
                 "Create invitation",
             ) { return Ok(()); }
             let owner = identity::ensure(&self.root)?;
@@ -68,10 +68,10 @@ impl App {
                     "They're on the list — send them this confirmation",
                     "You have added them. They are not able to join until they open this confirmation card, so send it back the same way the RSVP arrived.",
                 );
-            } else if let Ok((_, code)) = invitation::matching_code(bytes, now()?) {
+            } else {
                 native::notice(
                     "RSVP ready to send — you have not joined yet",
-                    &format!("Your matching code:\n\n{code}\n\nSend this RSVP back to whoever invited you. When they ask, read this code out — over a call, in person, or in a chat you already trust. If their code differs, someone has swapped an identity: decline.\n\nThey then send you a confirmation card. Open that and you are in."),
+                    "Send this RSVP back to whoever invited you. They confirm you, then send you a confirmation card. Open that and you are in.",
                 );
             }
             self.native.share(
@@ -107,11 +107,12 @@ impl App {
                 self.share_membership();
             }
             Some("acceptance") => {
-                let (member, code) = invitation::matching_code(bytes, time)?;
+                // Verifies the reply against the invitation; the code itself is not shown.
+                let (member, _) = invitation::matching_code(bytes, time)?;
                 let Some(allow) = native::decision(
-                    "Do the codes match?",
-                    &format!("Matching code:\n\n{code}\n\nAsk them what code their Mesh is showing — in person, on a call, or in a chat you already trust. Confirm only if it is the same. A different code means this RSVP is not theirs.\n\nIdentity: {member}\n\nConfirming puts this exact identity on your list and hands you a confirmation card to send back. Mesh restarts itself; that takes a moment and needs nothing from you."),
-                    "Codes match — confirm",
+                    "Is this really them?",
+                    &format!("Someone has RSVP'd to your invitation.\n\nIdentity: {member}\n\nConfirm only if you are expecting this — a name is not proof, and only you know whether you asked them. Confirming puts this exact identity on your list and hands you a confirmation card to send back. Mesh restarts itself; that takes a moment and needs nothing from you."),
+                    "Confirm",
                 ) else { return Ok(true); };
                 let next =
                     invitation::decide_acceptance(owner, &self.settings, bytes, allow, now()?)?;

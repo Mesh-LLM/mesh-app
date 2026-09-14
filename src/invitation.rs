@@ -272,9 +272,10 @@ pub fn matching_code(bytes: &[u8], now: u64) -> Result<(String, String), String>
 }
 
 /// Invoked only after human out-of-band checking and explicit Allow/Decline.
-/// The matching code is the check the tray asks the human to make -- it is
-/// derived from the full signed reply, so a substituted identity yields a
-/// different code -- but it is advisory here: only Allow/Decline is enforced.
+/// `matching_code` derives an 80-bit code from the full signed reply, so a
+/// substituted identity yields a different one. The tray does not currently
+/// show it: the human is asked only whether they expect this reply. Nothing
+/// here was ever enforced by the code -- only Allow/Decline is.
 /// Consume the issued invitation on either decision; one response cannot admit
 /// several identities. Persist the candidate with the owned runtime stopped.
 pub fn decide_acceptance(
