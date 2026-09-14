@@ -1,7 +1,10 @@
-//! Native Invitation → RSVP → You're on the list journey, in party terms: the
-//! inviter sends a card, the guest RSVPs (which grants nothing), and only the
-//! inviter's confirmation puts that exact identity on the list. File delivery
-//! stays explicit -- the OS share sheet works on any network, or none.
+//! Native Invitation → RSVP → connected journey, in party terms. Two cards:
+//! the inviter sends an invitation, and the guest RSVPs. Accepting the
+//! invitation joins the guest to the inviter alone; confirming the RSVP admits
+//! that exact identity on the inviter's side, which is what connects them. A
+//! third card exists and is now optional -- it introduces the inviter's other
+//! members. File delivery stays explicit: the share sheet works on any
+//! network, or none.
 use crate::{native, App};
 use mesh_tray::{identity, invitation, share_file};
 fn now() -> Result<u64, String> {
@@ -20,7 +23,7 @@ impl App {
             }
             if !native::confirm(
                 "Invite someone to your Mesh",
-                "Three cards, like a party invitation:\n\n1. You send this invitation. It grants no access on its own.\n2. They RSVP. That sends you their identity — they are still not in.\n3. You confirm it is really them. That puts them on the list.\n\nSend the card however you like — Messages, Mail, AirDrop. The invitation expires in 30 minutes.",
+                "Like a party invitation:\n\n1. You send this invitation. It grants no access on its own.\n2. They RSVP, which sends you their identity.\n3. You confirm it is really them — and you are connected.\n\nSend the card however you like — Messages, Mail, AirDrop. The invitation expires in 30 minutes.",
                 "Create invitation",
             ) { return Ok(()); }
             let owner = identity::ensure(&self.root)?;
@@ -65,13 +68,13 @@ impl App {
             }
             if invitation::card_kind(bytes) == Some("confirmation") {
                 native::notice(
-                    "They're on the list — send them this confirmation",
-                    "You have added them. They are not able to join until they open this confirmation card, so send it back the same way the RSVP arrived.",
+                    "They're on your list — you are connected",
+                    "Nothing else is needed from you. The card in the share sheet is optional: it introduces them to your other members, so send it if you want them to know each other. Closing the share sheet changes nothing.",
                 );
             } else {
                 native::notice(
-                    "RSVP ready to send — you have not joined yet",
-                    "Send this RSVP back to whoever invited you. They confirm you, then send you a confirmation card. Open that and you are in.",
+                    "RSVP ready to send — not connected yet",
+                    "You have joined their Mesh on your side. Send this RSVP back to them: once they confirm it, you are connected and there is nothing further to do.",
                 );
             }
             self.native.share(
@@ -98,25 +101,27 @@ impl App {
                 let invite = invitation::inspect(bytes, time)?;
                 if !native::confirm(
                     "RSVP to this invitation?",
-                    &format!("Invitation from: {}\n{} people already on their list.\n\nRSVP sends them your identity. It does not join you: they must confirm you first, and then send you a confirmation card to open.\n\nA name is not proof of who this is. Your Mesh, your serving and your connections stay exactly as they are.", invite.inviter(), invite.member_count()),
+                    &format!("Invitation from: {}\n{} people already on their list.\n\nRSVP if you are expecting this — a name is not proof, and only you know whether you asked for it.\n\nIt adds this one person to your Mesh, nobody else, and sends them your identity. They still have to confirm you before anything connects. Your serving and your existing connections stay as they are.", invite.inviter(), invite.member_count()),
                     "RSVP",
                 ) { return Ok(true); }
                 let next = invitation::accept(owner, &self.settings, bytes, now()?)?;
-                next.save(&self.root)?;
-                self.settings = next;
-                self.share_membership();
+                // Accepting joins this Mesh on our side, so the runtime has to
+                // restart with the inviter admitted before the reply is shared.
+                self.offer_membership_card = true;
+                self.queue_settings(next);
             }
             Some("acceptance") => {
                 // Verifies the reply against the invitation; the code itself is not shown.
                 let (member, _) = invitation::matching_code(bytes, time)?;
                 let Some(allow) = native::decision(
                     "Is this really them?",
-                    &format!("Someone has RSVP'd to your invitation.\n\nIdentity: {member}\n\nConfirm only if you are expecting this — a name is not proof, and only you know whether you asked them. Confirming puts this exact identity on your list and hands you a confirmation card to send back. Mesh restarts itself; that takes a moment and needs nothing from you."),
+                    &format!("Someone has RSVP'd to your invitation.\n\nIdentity: {member}\n\nConfirm only if you are expecting this — a name is not proof, and only you know whether you asked them. Confirming puts this exact identity on your list and connects you; nothing further is needed from either of you. Mesh restarts itself, which takes a moment."),
                     "Confirm",
                 ) else { return Ok(true); };
                 let next =
                     invitation::decide_acceptance(owner, &self.settings, bytes, allow, now()?)?;
                 if allow {
+                    self.offer_membership_card = true;
                     self.queue_settings(next);
                 } else {
                     next.save(&self.root)?;
@@ -128,8 +133,8 @@ impl App {
                     invitation::apply_receipt(&owner.owner_id(), &self.settings, bytes, now()?)?;
                 self.queue_settings(next);
                 native::notice(
-                    "You're on the list",
-                    "Their confirmation checked out and you have been added. Mesh is restarting to pick it up; that takes a moment and needs nothing from you.",
+                    "Their members list has been added",
+                    "Their confirmation checked out. You were already connected to them; this adds the other people on their Mesh. Mesh is restarting to pick it up.",
                 );
             }
             _ => return Err("Unsupported membership file".into()),

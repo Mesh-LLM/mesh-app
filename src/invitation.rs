@@ -210,7 +210,18 @@ pub fn accept(
         acceptance,
     })?;
     let mut next = settings.clone();
-    // Accept only records the identity-bound reply. No grants, seeds or mode change.
+    // Accepting is a deliberate act on an identity the recipient chose to open,
+    // so it commits to the inviter here: without that, joining needs a third
+    // hand-carried card just to say "yes, it was you". The commitment is
+    // narrow on purpose -- the inviter alone, never their roster. Their other
+    // members arrive only once the inviter has vouched for this recipient
+    // (`apply_receipt`), so a forwarded invitation cannot enrol a bystander
+    // into anyone else's trust. It grants nothing in the other direction: the
+    // inviter's allowlist still admits this identity only on their own Allow.
+    add_members(&mut next, [invitation.inviter.clone()], &owner.owner_id());
+    for seed in &invitation.offer.seeds {
+        next.accept_seed(seed)?;
+    }
     next.pending_membership_acceptance = Some(hex::encode(Sha256::digest(&receipt)));
     next.membership_receipt = Some(receipt);
     next.validate()?;
@@ -359,6 +370,12 @@ pub fn apply_receipt(
         }
     } else if !matches!(settings.connection, Connection::Private { .. })
         || !settings.admitted_owners.contains(&approver)
+        // Accepting an invitation now trusts the inviter, so trusting them is
+        // no longer proof of being one of their members. Applying someone
+        // else's grant is a member's transitive act: refuse it while this
+        // profile's own join is still unresolved, or a forwarded invitation
+        // would let a bystander enrol the inviter's whole roster.
+        || settings.pending_membership_acceptance.is_some()
     {
         return Err("Approval inviter is not a member of this private Mesh".into());
     }
@@ -470,8 +487,14 @@ mod tests {
         let offer = create(&a, &private(), "seed", 100).unwrap();
         let sa = remember_invitation(&private(), &offer, 100).unwrap();
         let sb = accept(&b, &Settings::default(), &offer, 101).unwrap();
-        assert!(sb.admitted_owners.is_empty());
-        assert_eq!(sb.connection, Connection::Automatic);
+        // Accepting commits the recipient to the inviter, and to nobody else.
+        assert_eq!(sb.admitted_owners, [a.owner_id()]);
+        assert_eq!(
+            sb.connection,
+            Connection::Private {
+                invite: Some("seed".into())
+            }
+        );
         let reply = sb.membership_receipt.as_ref().unwrap();
         let declined = decide_acceptance(&a, &sa, reply, false, 102).unwrap();
         assert!(declined.admitted_owners.is_empty());
@@ -479,6 +502,26 @@ mod tests {
         assert!(apply_receipt(&a.owner_id(), &sa, reply, 103).is_err());
         assert_eq!(matching_code(reply, 102).unwrap().0, b.owner_id());
     }
+    /// The recipient's own commitment on accept must not extend to the
+    /// inviter's other members: a forwarded invitation would otherwise enrol a
+    /// bystander into the trust of people who never heard of them.
+    #[test]
+    fn accepting_commits_to_the_inviter_only_never_their_roster() {
+        let a = OwnerKeypair::generate();
+        let b = OwnerKeypair::generate();
+        let x = OwnerKeypair::generate();
+        let (sa, _) = pair(&a, &private(), &b, &private(), "seed-a");
+        assert!(sa.admitted_owners.contains(&b.owner_id()));
+        // X gets a copy of A's next invitation without A ever hearing of them.
+        let offer = create(&a, &sa, "seed-b", 200).unwrap();
+        assert!(inspect(&offer, 200).unwrap().member_count() > 1);
+        let sx = accept(&x, &private(), &offer, 201).unwrap();
+        assert_eq!(sx.admitted_owners, [a.owner_id()]);
+        assert!(!sx.admitted_owners.contains(&b.owner_id()));
+        // And A is still unaware of X until A allows that reply.
+        assert!(!sa.admitted_owners.contains(&x.owner_id()));
+    }
+
     #[test]
     fn forwarded_invitation_cannot_admit_second_identity_after_allow() {
         let a = OwnerKeypair::generate();
@@ -532,7 +575,9 @@ mod tests {
             .unwrap();
         let sa = Settings::load(ra.path()).unwrap();
         let sb = Settings::load(rb.path()).unwrap();
-        assert!(sa.admitted_owners.is_empty() && sb.admitted_owners.is_empty());
+        // The inviter admits nobody until Allow; the recipient holds only the inviter.
+        assert!(sa.admitted_owners.is_empty());
+        assert_eq!(sb.admitted_owners, [a.owner_id()]);
         let sa =
             decide_acceptance(&a, &sa, sb.membership_receipt.as_ref().unwrap(), true, 102).unwrap();
         sa.save(ra.path()).unwrap();

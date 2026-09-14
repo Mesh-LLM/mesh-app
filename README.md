@@ -1,62 +1,64 @@
-# Mesh Tray — standalone private pooling human trial
+# Mesh Tray
 
-Native jellyfish tray using the unchanged official prebuilt Mesh **v0.76.1**.
-This candidate is ready for an **attended manual trial**, not a replacement release.
-Start with [HUMAN_TESTING.md](HUMAN_TESTING.md). The installed preview and identity
-remain untouched.
+A native menu-bar tray that runs a private Mesh for you and the people you invite.
+No webview. It launches the official prebuilt Mesh executable unchanged — the tray
+owns the menus, the pairing journey and the child process, not the runtime.
 
-## Using Members
+## Inviting someone
 
-1. Choose Private. The app serves a locally selected model; joins also keep serving.
-2. Members → Invite a member. Send the invitation to your friend with native sharing.
-3. They open it via Members → Open invitation or reply, choose **Accept & reply**,
-   and send back the reply. Their connection and grants are still unchanged.
-4. Check with your friend outside Mesh that the reply is theirs. The optional
-   code can help; it is not a mandatory ceremony. The inviter chooses **Allow** or Decline. A name alone is not proof of identity.
-5. Once restarted/ready, Members → Share reply or approval sends the final approval.
-   The recipient opens it to join. Existing members open that same approval to
-   admit the new member transitively, without another pairwise approval.
+Two cards, like a party invitation.
 
-**File delivery is manual in this checkpoint.** Automatic receipt propagation,
-link/QR transport, cold/warm Finder file association and friendly names remain work.
-The old request/reply adapter remains under Members → Legacy request exchange for
-existing saved state; it is not the new invitation journey.
+1. **Members → Invite someone.** The invitation lands in the share sheet; send it
+   however you like — Messages, Mail, AirDrop, a USB stick. It grants no access.
+2. **They open it and RSVP.** That joins them to you on their side and puts their
+   RSVP in their share sheet to send back. Nothing of yours has changed yet.
+3. **You open the RSVP and confirm it is really them.** That admits that exact
+   identity and connects you. Nothing further is needed from either of you.
 
-Invitations expire after 30 minutes and are single-decision on the inviter. Both
-Decline and Allow consume the local pending invitation. Acceptances alone cannot
-admit anybody; signed final approvals bind the exact invitation and recipient.
-Issued invitations, pending acceptance, outgoing reply/approval and consumed grant
-IDs persist across restarts. Only the latest outgoing membership file is retained;
-finish delivery before starting another acceptance/approval. Cancel pending exchanges
-clears pending membership work, not established member grants.
+A third card is produced when you confirm, and it is optional: it introduces the
+new person to the other members of your Mesh. Ignore it and the two of you are
+still connected.
+
+Delivery is by file on purpose. It works for family on another network, on a
+phone, or with no network at all, and it needs no discovery service.
+
+### What each step does and does not do
+
+- An invitation is a signed offer with your identity and how to reach you. It is
+  a file, so it can be forwarded: opening one adds **the inviter only**, never
+  the inviter's other members.
+- An RSVP proves the sender holds their key and binds their reply to your exact
+  invitation. It admits nobody on your side.
+- Confirming is the only thing that admits an identity to your Mesh, and only
+  the one identity in front of you. A name is not proof; only you know whether
+  you asked for it.
+- Invitations expire after 30 minutes and are single-decision: Confirm and
+  Decline both consume the pending invitation.
+- Members you admit can be removed from the Members menu.
 
 ## Runtime and identity
 
-`MESH_LLM_BIN` points to the verified official executable, retaining its adjacent
-native-runtimes bundle. `--profile-dir` is no longer passed. The child gets an
-app-owned HOME and XDG/runtime paths; inherited MESH_LLM overrides are stripped.
-The GUI keeps real OS HOME. Private identity remains at the established absolute
-`<app>/home/.mesh-llm/owner-keystore.json` path with its stable keychain account.
+`MESH_LLM_BIN` points to the official executable, retaining its adjacent
+native-runtimes bundle. The child gets an app-owned HOME and XDG/runtime paths;
+inherited `MESH_LLM_*` overrides are stripped, while the GUI keeps the real OS
+HOME. The private identity lives at `<app>/home/.mesh-llm/owner-keystore.json`
+with a stable keychain account, and Hugging Face caches are shared with yours so
+models are not downloaded twice.
 
-On macOS `security default-keychain -d user` discovers the OS-selected keychain;
-only `<app-home>/Library/Keychains/login.keychain-db` is linked to that file. No
-secrets or keychain ACLs are copied/changed. Existing different routing fails
-without overwriting. This is storage separation, **not an OS security sandbox**.
-OS prompts are still possible with unsigned/changing developer executables,
-including on first run. Mic cleared the prior zero-prompts blocker; unattended
-validation still avoids credential probes and repeated launch/retry loops.
-Missing/corrupt established identities are never silently regenerated. Windows remains launch-gated; Linux is not native-verified.
+On macOS the OS-selected keychain is discovered with
+`security default-keychain -d user`, and only `login.keychain-db` is linked into
+the app home. No secrets or keychain ACLs are copied or changed. This is storage
+separation, **not** an OS security sandbox, and unsigned developer builds can
+still raise OS prompts. Missing or corrupt identities are never silently
+regenerated.
 
-Public now uses `<app>/public-home/.mesh-llm`; an established old development
-`public/key` blocks automatic migration rather than silently replacing that identity.
-Tests/demos must use a fresh `MESH_TRAY_DATA_DIR`, not the retained preview profile.
-Ports are overridable with MESH_LLM_CONSOLE_PORT / MESH_LLM_API_PORT. Occupied ports
-are not adopted or stopped. Only retained children are terminated.
+Ports are overridable with `MESH_LLM_CONSOLE_PORT` / `MESH_LLM_API_PORT`.
+Occupied ports are not adopted or stopped, and only children this tray started
+are ever terminated. Tests and demos must use a fresh `MESH_TRAY_DATA_DIR`.
 
-Private model selection: Qwen2.5 3B Q4_K_M for 8–23 GiB RAM; Qwen3.5 9B Q4_K_M for
-24+ GiB. Below 8 GiB the automatic selection errors. This is a total-memory
-heuristic, not free GPU memory assurance. Joins retain serving and original seeds;
-first start can download weights. `ready_idle` is not inference readiness.
+Private model selection is a total-memory heuristic, not a free-VRAM assurance:
+Qwen2.5 3B Q4_K_M for 8–23 GiB, Qwen3.5 9B Q4_K_M for 24+ GiB, and an error
+below 8 GiB. First start can download weights.
 
 ## Developer checks
 
@@ -64,40 +66,24 @@ first start can download weights. `ready_idle` is not inference readiness.
 just verify # fmt, check, full tests/doctests, all-targets Clippy -D warnings
 just build  # release tray executable, no distribution/updater
 just clean
-# Interactive probes below may prompt for keychain permission. Do not run while
-# the user is working; fresh roots only, never existing identities:
+# Interactive probes may prompt for keychain permission. Fresh roots only,
+# never an existing identity, and not while someone is working:
 just profile-probe /absolute/fresh/root
 just released-pool-probe /absolute/official/mesh-llm /absolute/fresh/pool-root
 ```
 
-The identity-only crate remains pinned to immutable upstream d4ffbbacd9c8486e0b80c44452876ffa17785964,
-not a sibling checkout; no embedded Mesh SDK/runtime build. The wire identity
-format was exercised with official 0.76.1.
+The identity crate is pinned to an immutable upstream revision rather than a
+sibling checkout, and no Mesh SDK or runtime is built here.
 
-## Verified / not verified
+## State of it
 
-- Full checks: 48 library + 15 executable + 2 compile-fail doctests passed; release
-  build passed, no warning suppression added.
-- Fresh encrypted owner unlocked in official runtime under app HOME; `/api/status`
-  reported version 0.76.1 and verified owner. No plaintext/env/argv secret handoff.
-- Three official `serve` nodes, distinct owners, two peers each after onward
-  membership and restarts. This used the earlier bearer-consent draft; it proves
-  runtime connectivity, NOT the corrected identity-confirmation journey.
-- Corrected journey and decline/replay/tamper/expiry/seed preservation pass unit
-  tests. Updated three-node probe compiles but is not rerun after the prompt report.
-- Native tray process launched. Screen capture unavailable (`could not create image
-  from display`). No click/share-service/screenshots/real chat demonstrated.
-- No replacement preview, distribution, updater, public release or independent
-  review completion claimed. Review requested; outcome pending.
+The pairing logic — accept, confirm, decline, replay, tamper, expiry and seed
+preservation — is covered by unit tests. Live multi-node connectivity has been
+exercised with official `serve` nodes.
 
-Keep the established preview unchanged during this attended candidate trial.
-Corrected live journey, native delivery and inference are human acceptance checks,
-not prerequisites to trying it. Temporary probe credentials/profile artifacts
-are retained for scoped cleanup without triggering further OS dialogs; do not remove user models
-or established identities as part of build cleanup.
+Not verified: the journey clicked end to end on two machines by a human. The
+dialog wording, the share-sheet timing and Finder file association want an
+attended trial. Windows is launch-gated; Linux is not natively verified.
 
-## Local candidate packaging
-
-See [HUMAN_TESTING.md](HUMAN_TESTING.md) for the reproducible checksum-verified
-macOS arm64 bundle and manual test procedure. The bundle is not launched during
-verification; ordinary first-run authorization is handled by the human tester.
+[HUMAN_TESTING.md](HUMAN_TESTING.md) has the reproducible checksum-verified
+macOS arm64 bundle and the manual test procedure.
