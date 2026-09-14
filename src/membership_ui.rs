@@ -1,5 +1,7 @@
-//! Native Invite → Accept & reply → Verify & allow journey. File delivery is
-//! explicit until a standalone transport can propagate final grants to members.
+//! Native Invitation → RSVP → You're on the list journey, in party terms: the
+//! inviter sends a card, the guest RSVPs (which grants nothing), and only the
+//! inviter's confirmation puts that exact identity on the list. File delivery
+//! stays explicit -- the OS share sheet works on any network, or none.
 use crate::{native, App};
 use mesh_tray::{identity, invitation, share_file};
 fn now() -> Result<u64, String> {
@@ -16,7 +18,11 @@ impl App {
             if self.stopping.is_some() || self.pending_settings.is_some() {
                 return Err("Wait for Mesh to finish restarting".into());
             }
-            if !native::confirm("Invite a member", "Send this invitation to your friend. It grants no access. When they accept and reply, check with them outside Mesh that the reply is theirs, then Allow. After admission they can invite others onward.\n\nThis preview uses files for replies and final approvals; automatic delivery is not implemented. Invitations expire in 30 minutes.", "Create invitation") { return Ok(()); }
+            if !native::confirm(
+                "Invite someone to your Mesh",
+                "Three cards, like a party invitation:\n\n1. You send this invitation. It grants no access on its own.\n2. They RSVP. That sends you their identity — they are still not in.\n3. You compare a short code with them and confirm. That puts them on the list.\n\nSend the card however you like — Messages, Mail, AirDrop. The invitation expires in 30 minutes.",
+                "Create invitation",
+            ) { return Ok(()); }
             let owner = identity::ensure(&self.root)?;
             let pid = self
                 .child
@@ -43,11 +49,9 @@ impl App {
             if self.stopping.is_some() || self.pending_settings.is_some() {
                 return Err("Wait for the connection change to finish before sharing".into());
             }
-            let bytes = self
-                .settings
-                .membership_receipt
-                .as_ref()
-                .ok_or("No reply or approval to share yet")?;
+            let bytes = self.settings.membership_receipt.as_ref().ok_or(
+                "Nothing to send yet. Invite someone, or open an invitation and RSVP to it first.",
+            )?;
             let value: serde_json::Value =
                 serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
             if value["mesh_pool_file"] == "approval" {
@@ -59,8 +63,16 @@ impl App {
                     .id();
                 crate::status::private_invite(self.settings.console_port, pid, &owner.owner_id())?;
             }
-            if let Ok((_, code)) = invitation::matching_code(bytes, now()?) {
-                native::notice("Reply ready — waiting for approval", &format!("{code}\n\nSend your reply and check with your friend outside Mesh. This optional reference code can help; no code or QR ceremony is required. Wait for their final approval file. You have not joined yet."));
+            if invitation::card_kind(bytes) == Some("confirmation") {
+                native::notice(
+                    "They're on the list — send them this confirmation",
+                    "You have added them. They are not able to join until they open this confirmation card, so send it back the same way the RSVP arrived.",
+                );
+            } else if let Ok((_, code)) = invitation::matching_code(bytes, now()?) {
+                native::notice(
+                    "RSVP ready to send — you have not joined yet",
+                    &format!("Your matching code:\n\n{code}\n\nSend this RSVP back to whoever invited you. When they ask, read this code out — over a call, in person, or in a chat you already trust. If their code differs, someone has swapped an identity: decline.\n\nThey then send you a confirmation card. Open that and you are in."),
+                );
             }
             self.native.share(
                 share_file::stage(bytes)?,
@@ -84,7 +96,11 @@ impl App {
         match kind.as_str() {
             Some("invitation") => {
                 let invite = invitation::inspect(bytes, time)?;
-                if !native::confirm("Accept and reply to this invitation?", &format!("Inviter identity: {}\n{} members in their signed roster.\n\nThis sends your identity, not permission to join. Check with your friend outside Mesh; they must Allow and return the final approval. Existing serving and connections stay unchanged.", invite.inviter(), invite.member_count()), "Accept & reply") { return Ok(true); }
+                if !native::confirm(
+                    "RSVP to this invitation?",
+                    &format!("Invitation from: {}\n{} people already on their list.\n\nRSVP sends them your identity. It does not join you: they must confirm you first, and then send you a confirmation card to open.\n\nA name is not proof of who this is. Your Mesh, your serving and your connections stay exactly as they are.", invite.inviter(), invite.member_count()),
+                    "RSVP",
+                ) { return Ok(true); }
                 let next = invitation::accept(owner, &self.settings, bytes, now()?)?;
                 next.save(&self.root)?;
                 self.settings = next;
@@ -92,7 +108,11 @@ impl App {
             }
             Some("acceptance") => {
                 let (member, code) = invitation::matching_code(bytes, time)?;
-                let Some(allow) = native::decision("Confirm this is your friend", &format!("Identity: {member}\nOptional reference code: {code}\n\nCheck with your friend outside Mesh that this request is theirs, then Allow. How you check is up to you — in person, a call, or your existing chat. A claimed name is not proof. Allow binds this identity to your invitation. After restarting, share the final approval through Members → Share reply or approval. Existing members can apply that approval without further pairwise confirmation."), "Allow") else { return Ok(true); };
+                let Some(allow) = native::decision(
+                    "Do the codes match?",
+                    &format!("Matching code:\n\n{code}\n\nAsk them what code their Mesh is showing — in person, on a call, or in a chat you already trust. Confirm only if it is the same. A different code means this RSVP is not theirs.\n\nIdentity: {member}\n\nConfirming puts this exact identity on your list and hands you a confirmation card to send back. Mesh restarts itself; that takes a moment and needs nothing from you."),
+                    "Codes match — confirm",
+                ) else { return Ok(true); };
                 let next =
                     invitation::decide_acceptance(owner, &self.settings, bytes, allow, now()?)?;
                 if allow {
@@ -106,6 +126,10 @@ impl App {
                 let next =
                     invitation::apply_receipt(&owner.owner_id(), &self.settings, bytes, now()?)?;
                 self.queue_settings(next);
+                native::notice(
+                    "You're on the list",
+                    "Their confirmation checked out and you have been added. Mesh is restarting to pick it up; that takes a moment and needs nothing from you.",
+                );
             }
             _ => return Err("Unsupported membership file".into()),
         }

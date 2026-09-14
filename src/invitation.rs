@@ -57,6 +57,16 @@ enum File {
     },
 }
 
+/// Which of the three cards this file is, in the words the tray shows a human.
+/// Presentation only: it neither verifies signatures nor grants anything.
+pub fn card_kind(bytes: &[u8]) -> Option<&'static str> {
+    match parse(bytes).ok()? {
+        File::Invitation { .. } => Some("invitation"),
+        File::Acceptance { .. } => Some("RSVP"),
+        File::Approval { .. } => Some("confirmation"),
+    }
+}
+
 pub struct VerifiedInvitation {
     signed: Signed,
     offer: Offer,
@@ -262,7 +272,9 @@ pub fn matching_code(bytes: &[u8], now: u64) -> Result<(String, String), String>
 }
 
 /// Invoked only after human out-of-band checking and explicit Allow/Decline.
-/// The optional reference code is not a mandatory verification ceremony.
+/// The matching code is the check the tray asks the human to make -- it is
+/// derived from the full signed reply, so a substituted identity yields a
+/// different code -- but it is advisory here: only Allow/Decline is enforced.
 /// Consume the issued invitation on either decision; one response cannot admit
 /// several identities. Persist the candidate with the owned runtime stopped.
 pub fn decide_acceptance(
@@ -399,6 +411,30 @@ mod tests {
         )
         .unwrap();
         (sa, sb)
+    }
+    #[test]
+    fn card_kind_names_each_leg_of_the_journey() {
+        let a = OwnerKeypair::generate();
+        let b = OwnerKeypair::generate();
+        let sa = private();
+        let invitation = create(&a, &sa, "seed-a", 100).unwrap();
+        let sa = remember_invitation(&sa, &invitation, 100).unwrap();
+        let sb = accept(&b, &private(), &invitation, 101).unwrap();
+        let rsvp = sb.membership_receipt.clone().unwrap();
+        let sa = decide_acceptance(&a, &sa, &rsvp, true, 102).unwrap();
+        let confirmation = sa.membership_receipt.clone().unwrap();
+        assert_eq!(card_kind(&invitation), Some("invitation"));
+        assert_eq!(card_kind(&rsvp), Some("RSVP"));
+        assert_eq!(card_kind(&confirmation), Some("confirmation"));
+        assert_eq!(card_kind(b"not a card"), None);
+        // The card the guest shows and the card the inviter reads derive the
+        // same matching code, which is the whole point of comparing them.
+        assert_eq!(
+            matching_code(&rsvp, 102).unwrap().1,
+            matching_code(sb.membership_receipt.as_ref().unwrap(), 102)
+                .unwrap()
+                .1
+        );
     }
     #[test]
     fn onward_pooling_requires_inviter_allow_not_every_members_approval() {

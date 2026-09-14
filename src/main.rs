@@ -29,7 +29,7 @@ struct Ui {
     quit: MenuItem,
     people: muda::Submenu,
     people_ids: Vec<String>,
-    people_offer: Option<bool>,
+    people_offer: Option<Option<&'static str>>,
     _tray: TrayIcon,
 }
 
@@ -52,6 +52,10 @@ struct App {
     open_when_ready: Option<&'static str>,
     exit: bool,
     offer_reply: bool,
+    /// A confirmation card was produced by Approve and still has to reach the
+    /// person it admits. Sent for them once the restart Approve triggered is
+    /// finished, so nobody has to find a menu item for it.
+    offer_confirmation: bool,
 }
 
 fn icon() -> Icon {
@@ -108,6 +112,7 @@ impl App {
             open_when_ready: None,
             exit: false,
             offer_reply: false,
+            offer_confirmation: false,
         }
     }
 
@@ -262,9 +267,19 @@ impl App {
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
         // Only two actions are ever useful here -- invite someone, or open what
-        // they sent back. Sharing a reply is offered only when one exists, so
-        // the menu never asks about a step the user has nothing to do for.
-        let offer = self.settings.membership_receipt.is_some();
+        // they sent back. Re-sending a card is offered only when one exists, so
+        // the menu never asks about a step the user has nothing to do for, and
+        // it is named after the card it would send. Each card is offered
+        // automatically when it is made; this entry is the retry.
+        let offer = self
+            .settings
+            .membership_receipt
+            .as_deref()
+            .and_then(mesh_tray::invitation::card_kind)
+            .map(|kind| match kind {
+                "confirmation" => "Send their confirmation again…",
+                _ => "Send your RSVP again…",
+            });
         if ui.people_ids != self.settings.admitted_owners
             || ui.people_offer != Some(offer)
             || ui.people.items().is_empty()
@@ -272,15 +287,17 @@ impl App {
             while ui.people.remove_at(0).is_some() {}
             let _ = ui.people.append_items(&[
                 &MenuItem::with_id("invite-member", "Invite someone…", true, None),
-                &MenuItem::with_id("open-file", "Open an invitation or reply…", true, None),
-            ]);
-            if offer {
-                let _ = ui.people.append(&MenuItem::with_id(
-                    "share-membership",
-                    "Send your reply back…",
+                &MenuItem::with_id(
+                    "open-file",
+                    "Open an invitation, RSVP or confirmation…",
                     true,
                     None,
-                ));
+                ),
+            ]);
+            if let Some(label) = offer {
+                let _ = ui
+                    .people
+                    .append(&MenuItem::with_id("share-membership", label, true, None));
             }
             let _ = ui.people.append(&PredefinedMenuItem::separator());
             if self.settings.admitted_owners.is_empty() {
@@ -363,6 +380,7 @@ impl App {
     fn quit(&mut self) {
         self.pending_settings = None;
         self.offer_reply = false;
+        self.offer_confirmation = false;
         let Some(child) = &mut self.child else {
             self.exit = true;
             return;
@@ -415,6 +433,10 @@ impl App {
                 if self.offer_reply && self.snapshot.private_owner.is_some() {
                     self.offer_reply = false;
                     self.share_reply();
+                }
+                if self.offer_confirmation && self.snapshot.private_owner.is_some() {
+                    self.offer_confirmation = false;
+                    self.share_membership();
                 }
                 if let Some(path) = self.open_when_ready.take() {
                     self.open(path);
@@ -563,6 +585,12 @@ impl App {
             match next.save(&self.root) {
                 Ok(()) => {
                     self.offer_reply = !next.replies.is_empty();
+                    self.offer_confirmation = next
+                        .membership_receipt
+                        .as_deref()
+                        .and_then(mesh_tray::invitation::card_kind)
+                        == Some("confirmation")
+                        && next.membership_receipt != self.settings.membership_receipt;
                     self.settings = next;
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
