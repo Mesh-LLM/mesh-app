@@ -30,6 +30,18 @@ pub fn lock_profile(root: &Path) -> Result<File, String> {
 pub fn ensure(root: &Path) -> Result<OwnerKeypair, String> {
     ensure_with(root, &NativeStore)
 }
+
+/// Confirm this profile has a usable identity **without reading its secret**.
+///
+/// Startup only needs to know the profile is established and which owner it is;
+/// the runtime child is the component that actually unlocks the key. Reading the
+/// secret here would make the user approve a second Keychain prompt for the same
+/// identity every launch. The owner id returned by `keystore_metadata` is
+/// verified against the keystore's signing public key, so this is a real check,
+/// not a file-exists test.
+pub fn establish(root: &Path) -> Result<String, String> {
+    establish_with(root, &NativeStore)
+}
 trait Store {
     fn load(&self, path: &Path) -> Result<OwnerKeypair, String>;
     fn create(&self, path: &Path, owner: &OwnerKeypair) -> Result<(), String>;
@@ -53,6 +65,53 @@ impl Store for NativeStore {
             .map_err(|_| "Could not securely set up Mesh. Unlock or enable your OS credential store and retry. No unprotected identity was created.".into())
     }
 }
+fn keystore_path(root: &Path) -> Result<std::path::PathBuf, String> {
+    let directory = root.join("home/.mesh-llm");
+    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    Ok(directory.join("owner-keystore.json"))
+}
+
+fn establish_with(root: &Path, store: &impl Store) -> Result<String, String> {
+    let path = keystore_path(root)?;
+    match std::fs::symlink_metadata(&path) {
+        // Established: read public metadata only, so no credential is unlocked.
+        Ok(meta) if meta.is_file() => {
+            let info = keystore_metadata(&path).map_err(|_| {
+                "Mesh identity cannot be read. Restore this profile; it was not replaced."
+                    .to_string()
+            })?;
+            confirm_owner(root, info.owner_id)
+        }
+        Ok(_) => Err("Mesh identity must be a regular file, not a link.".into()),
+        // Not established yet: creating one is the only path that touches the
+        // credential store, and it happens once per profile.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            Ok(ensure_with(root, store)?.owner_id())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// Bind an owner id to this profile, or refuse if the profile already belongs to
+/// a different one.
+fn confirm_owner(root: &Path, id: String) -> Result<String, String> {
+    let marker = root.join("owner-id");
+    match std::fs::read_to_string(&marker) {
+        Ok(expected) if expected == id => Ok(id),
+        Ok(_) => Err(
+            "Mesh identity changed unexpectedly. Restore this profile before continuing.".into(),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let mut file = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
+            file.write_all(id.as_bytes()).map_err(|e| e.to_string())?;
+            file.as_file().sync_all().map_err(|e| e.to_string())?;
+            file.persist_noclobber(marker).map_err(|e| e.to_string())?;
+            Ok(id)
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 fn ensure_with(root: &Path, store: &impl Store) -> Result<OwnerKeypair, String> {
     let directory = root.join("home/.mesh-llm");
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
@@ -111,6 +170,46 @@ mod tests {
             mesh_llm_identity::save_keystore(p, o, None, false).map_err(|e| e.to_string())
         }
     }
+    #[test]
+    fn startup_verification_never_reads_the_secret() {
+        /// Establishes normally, then refuses every secret read afterwards.
+        struct CreateOnly;
+        impl Store for CreateOnly {
+            fn load(&self, _: &Path) -> Result<OwnerKeypair, String> {
+                Err("startup must not unlock the credential store".into())
+            }
+            fn create(&self, p: &Path, o: &OwnerKeypair) -> Result<(), String> {
+                mesh_llm_identity::save_keystore(p, o, None, false).map_err(|e| e.to_string())
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let owner = ensure_with(root, &TestStore).unwrap().owner_id();
+        // Established profile: no load, so no Keychain prompt on launch.
+        assert_eq!(establish_with(root, &CreateOnly).unwrap(), owner);
+        assert_eq!(establish_with(root, &CreateOnly).unwrap(), owner);
+        // A different identity in an established profile is still refused.
+        mesh_llm_identity::save_keystore(
+            &root.join("home/.mesh-llm/owner-keystore.json"),
+            &OwnerKeypair::generate(),
+            None,
+            true,
+        )
+        .unwrap();
+        assert!(establish_with(root, &CreateOnly).is_err());
+    }
+
+    #[test]
+    fn first_run_still_establishes_an_identity_through_the_store() {
+        let root = tempfile::tempdir().unwrap();
+        let id = establish_with(root.path(), &TestStore).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("owner-id")).unwrap(),
+            id
+        );
+        assert_eq!(ensure_with(root.path(), &TestStore).unwrap().owner_id(), id);
+    }
+
     #[test]
     fn creates_once_and_missing_established_identity_fails_closed() {
         let root = tempfile::tempdir().unwrap();

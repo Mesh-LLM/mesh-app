@@ -29,6 +29,7 @@ struct Ui {
     quit: MenuItem,
     people: muda::Submenu,
     people_ids: Vec<String>,
+    people_offer: Option<bool>,
     _tray: TrayIcon,
 }
 
@@ -152,6 +153,7 @@ impl App {
             quit,
             people,
             people_ids: Vec::new(),
+            people_offer: None,
             _tray: tray,
         });
         self.start();
@@ -209,7 +211,9 @@ impl App {
             self.settings.connection,
             settings::Connection::Private { .. }
         ) {
-            identity::ensure(&self.root)?;
+            // Startup verifies the identity without unlocking it; the runtime
+            // child unlocks the key, so the user sees one prompt, not two.
+            identity::establish(&self.root)?;
             admission::prepare_store(&home, &self.settings.admitted_owners)?;
         }
         let log = std::fs::OpenOptions::new()
@@ -257,21 +261,28 @@ impl App {
     fn render(&mut self) {
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
-        if ui.people_ids != self.settings.admitted_owners || ui.people.items().is_empty() {
+        // Only two actions are ever useful here -- invite someone, or open what
+        // they sent back. Sharing a reply is offered only when one exists, so
+        // the menu never asks about a step the user has nothing to do for.
+        let offer = self.settings.membership_receipt.is_some();
+        if ui.people_ids != self.settings.admitted_owners
+            || ui.people_offer != Some(offer)
+            || ui.people.items().is_empty()
+        {
             while ui.people.remove_at(0).is_some() {}
-            let legacy = muda::Submenu::new("Legacy request exchange", true);
-            let _ = legacy.append_items(&[
-                &MenuItem::with_id("share-request", "Request to join…", true, None),
-                &MenuItem::with_id("share-reply", "Share approved reply…", true, None),
-                &MenuItem::with_id("cancel-requests", "Cancel pending exchanges…", true, None),
-            ]);
             let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite-member", "Invite a member…", true, None),
-                &MenuItem::with_id("share-membership", "Share reply or approval…", true, None),
-                &MenuItem::with_id("open-file", "Open invitation or reply…", true, None),
-                &legacy,
-                &PredefinedMenuItem::separator(),
+                &MenuItem::with_id("invite-member", "Invite someone…", true, None),
+                &MenuItem::with_id("open-file", "Open an invitation or reply…", true, None),
             ]);
+            if offer {
+                let _ = ui.people.append(&MenuItem::with_id(
+                    "share-membership",
+                    "Send your reply back…",
+                    true,
+                    None,
+                ));
+            }
+            let _ = ui.people.append(&PredefinedMenuItem::separator());
             if self.settings.admitted_owners.is_empty() {
                 let _ = ui
                     .people
@@ -293,6 +304,7 @@ impl App {
                 ));
             }
             ui.people_ids = self.settings.admitted_owners.clone();
+            ui.people_offer = Some(offer);
         }
         let text = if self.stopping.is_some() {
             "Mesh · Stopping…"
@@ -470,7 +482,7 @@ impl App {
         }
         if !native::confirm("Change Mesh connection?", "Only this app’s Mesh restarts. Private sets up your identity securely and cancels outstanding requests. It never falls back to Public.", "Change connection") { return; }
         if matches!(connection, settings::Connection::Private { .. }) {
-            if let Err(e) = identity::ensure(&self.root) {
+            if let Err(e) = identity::establish(&self.root) {
                 native::notice("Could not set up Private", &e);
                 return;
             }

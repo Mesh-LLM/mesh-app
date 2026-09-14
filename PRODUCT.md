@@ -26,6 +26,14 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   A pre-existing per-tray copy is moved aside, never deleted. On macOS a
   narrow link to the OS-selected default keychain enables encrypted key unlock;
   no exported passphrases, ACL weakening, personal Mesh state or identity replacement.
+- One credential prompt per launch, not two: startup verifies the profile's
+  identity from public keystore metadata (owner id checked against the signing
+  key) and never unlocks the secret. Only the runtime child unlocks it, plus the
+  explicit invite/share actions the user just clicked.
+- A missing OS file dialog is reported, never a panic: losing the tray also
+  orphans the user's running Mesh.
+- Members menu offers inviting someone and opening what they sent back; sending
+  a reply appears only when there is one to send.
 - Identity and pairings persist across ordinary runs. "Start Over" forgets this
   tray's identity, trust and remembered people after stopping the child; it never
   touches downloaded models, the user's own `~/.mesh-llm`, or another Mesh node.

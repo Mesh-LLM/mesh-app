@@ -50,7 +50,20 @@ fn foreground_dialog(mtm: MainThreadMarker) {
 
 pub fn choose_file() -> Option<PathBuf> {
     let mtm = MainThreadMarker::new()?;
-    let panel = NSOpenPanel::openPanel(mtm);
+    // AppKit returns nil here when the open panel's service is unavailable -- an
+    // unbundled development build, or a ViewBridge connection that dropped. The
+    // generated binding panics on nil, which would take the whole tray (and the
+    // user's running Mesh) down over a cancelled file dialog. Ask for the
+    // optional form and report it as "no file chosen".
+    let panel: Option<Retained<NSOpenPanel>> =
+        unsafe { objc2::msg_send![<NSOpenPanel as objc2::ClassType>::class(), openPanel] };
+    let Some(panel) = panel else {
+        notice(
+            "Cannot open the file chooser",
+            "macOS did not provide a file dialog for this build of Mesh. Nothing was changed. Install the Mesh app bundle and try again.",
+        );
+        return None;
+    };
     panel.setCanChooseFiles(true);
     panel.setCanChooseDirectories(false);
     panel.setAllowsMultipleSelection(false);
