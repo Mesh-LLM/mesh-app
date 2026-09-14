@@ -10,8 +10,8 @@ ready-to-test replacement preview**. The existing preview and identity are untou
 2. Members → Invite a member. Send the invitation to your friend with native sharing.
 3. They open it via Members → Open invitation or reply, choose **Accept & reply**,
    and send back the reply. Their connection and grants are still unchanged.
-4. Compare the displayed matching code over your known conversation. The inviter
-   chooses **Allow & connect** or Decline. A name alone is not proof of identity.
+4. Check with your friend outside Mesh that the reply is theirs. The optional
+   code can help; it is not a mandatory ceremony. The inviter chooses **Allow** or Decline. A name alone is not proof of identity.
 5. Once restarted/ready, Members → Share reply or approval sends the final approval.
    The recipient opens it to join. Existing members open that same approval to
    admit the new member transitively, without another pairwise approval.
@@ -94,3 +94,9 @@ corrected live journey, file activation/delivery, inference and independent revi
 are complete. Temporary probe credentials/profile artifacts are retained for
 scoped cleanup without triggering further OS dialogs; do not remove user models
 or established identities as part of build cleanup.
+
+## Local candidate packaging
+
+See [HUMAN_TESTING.md](HUMAN_TESTING.md) for the reproducible checksum-verified
+macOS arm64 bundle and manual test procedure. The bundle is not launched during
+verification; native credential access remains an explicit unresolved gate.

@@ -7,14 +7,15 @@ No extra settings website, wizard, Buzz UI/runtime, custom typography or webview
 
 ## Identity-bound consent
 
-Invite → Accept & reply → compare code → inviter Allow/Decline → deliver approval.
+Invite → Accept & reply → human out-of-band check → Allow/Decline → deliver approval.
 Cancel is the first/default macOS button. Accept only persists the signed reply,
 not admission or a mode switch. Allow signs the exact recipient and consumes the
 local pending invitation; Decline consumes it without granting. Existing members
 trust a member's final approval transitively; no Mic↔Oli approval after Jo admits Oli.
 
 The matching code is 80 bits of the canonical signed acceptance transcript,
-displayed in five four-hex groups. Compare through an established conversation;
+displayed in five four-hex groups as an optional helper, not a required ceremony.
+Human identity checks are best-effort outside Mesh;
 identities and self-claimed names do not establish human identity on their own.
 
 A file-open operation verifies signatures, time, correlation and replay before

@@ -16,7 +16,7 @@ impl App {
             if self.stopping.is_some() || self.pending_settings.is_some() {
                 return Err("Wait for Mesh to finish restarting".into());
             }
-            if !native::confirm("Invite a member", "Send this invitation to your friend. It grants no access. When they accept and reply, compare the matching code with them and Allow. After admission they can invite others onward.\n\nThis preview uses files for replies and final approvals; automatic delivery is not implemented. Invitations expire in 30 minutes.", "Create invitation") { return Ok(()); }
+            if !native::confirm("Invite a member", "Send this invitation to your friend. It grants no access. When they accept and reply, check with them outside Mesh that the reply is theirs, then Allow. After admission they can invite others onward.\n\nThis preview uses files for replies and final approvals; automatic delivery is not implemented. Invitations expire in 30 minutes.", "Create invitation") { return Ok(()); }
             let owner = identity::ensure(&self.root)?;
             let pid = self
                 .child
@@ -60,7 +60,7 @@ impl App {
                 crate::status::private_invite(self.settings.console_port, pid, &owner.owner_id())?;
             }
             if let Ok((_, code)) = invitation::matching_code(bytes, now()?) {
-                native::notice("Compare this code with your friend", &format!("{code}\n\nSend your reply, then compare this code through your known conversation. Wait for their final approval file. You have not joined yet."));
+                native::notice("Reply ready — waiting for approval", &format!("{code}\n\nSend your reply and check with your friend outside Mesh. This optional reference code can help; no code or QR ceremony is required. Wait for their final approval file. You have not joined yet."));
             }
             self.native.share(
                 share_file::stage(bytes)?,
@@ -84,7 +84,7 @@ impl App {
         match kind.as_str() {
             Some("invitation") => {
                 let invite = invitation::inspect(bytes, time)?;
-                if !native::confirm("Accept and reply to this invitation?", &format!("Inviter identity: {}\n{} members in their signed roster.\n\nThis sends your identity, not permission to join. Compare the matching code with your friend; they must Allow and return the final approval. Existing serving and connections stay unchanged.", invite.inviter(), invite.member_count()), "Accept & reply") { return Ok(true); }
+                if !native::confirm("Accept and reply to this invitation?", &format!("Inviter identity: {}\n{} members in their signed roster.\n\nThis sends your identity, not permission to join. Check with your friend outside Mesh; they must Allow and return the final approval. Existing serving and connections stay unchanged.", invite.inviter(), invite.member_count()), "Accept & reply") { return Ok(true); }
                 let next = invitation::accept(owner, &self.settings, bytes, now()?)?;
                 next.save(&self.root)?;
                 self.settings = next;
@@ -92,7 +92,7 @@ impl App {
             }
             Some("acceptance") => {
                 let (member, code) = invitation::matching_code(bytes, time)?;
-                let Some(allow) = native::decision("Confirm this is your friend", &format!("Identity: {member}\nMatching code: {code}\n\nCompare this code over your known conversation. A claimed name is not proof. Allow binds this identity to your invitation. After restarting, share the final approval through Members → Share reply or approval. Existing members can apply that approval without further pairwise confirmation."), "Allow & connect") else { return Ok(true); };
+                let Some(allow) = native::decision("Confirm this is your friend", &format!("Identity: {member}\nOptional reference code: {code}\n\nCheck with your friend outside Mesh that this request is theirs, then Allow. How you check is up to you — in person, a call, or your existing chat. A claimed name is not proof. Allow binds this identity to your invitation. After restarting, share the final approval through Members → Share reply or approval. Existing members can apply that approval without further pairwise confirmation."), "Allow") else { return Ok(true); };
                 let next =
                     invitation::decide_acceptance(owner, &self.settings, bytes, allow, now()?)?;
                 if allow {

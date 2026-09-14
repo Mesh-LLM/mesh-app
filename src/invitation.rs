@@ -261,7 +261,8 @@ pub fn matching_code(bytes: &[u8], now: u64) -> Result<(String, String), String>
     ))
 }
 
-/// Invoked only after the inviter compares the code and explicitly Allow/Declines.
+/// Invoked only after human out-of-band checking and explicit Allow/Decline.
+/// The optional reference code is not a mandatory verification ceremony.
 /// Consume the issued invitation on either decision; one response cannot admit
 /// several identities. Persist the candidate with the owned runtime stopped.
 pub fn decide_acceptance(
@@ -441,6 +442,84 @@ mod tests {
         assert!(apply_receipt(&a.owner_id(), &sa, reply, 103).is_err());
         assert_eq!(matching_code(reply, 102).unwrap().0, b.owner_id());
     }
+    #[test]
+    fn forwarded_invitation_cannot_admit_second_identity_after_allow() {
+        let a = OwnerKeypair::generate();
+        let b = OwnerKeypair::generate();
+        let x = OwnerKeypair::generate();
+        let offer = create(&a, &private(), "seed", 100).unwrap();
+        let sa = remember_invitation(&private(), &offer, 100).unwrap();
+        let sb = accept(&b, &private(), &offer, 101).unwrap();
+        let sx = accept(&x, &private(), &offer, 101).unwrap();
+        let sa =
+            decide_acceptance(&a, &sa, sb.membership_receipt.as_ref().unwrap(), true, 102).unwrap();
+        assert_eq!(sa.admitted_owners, [b.owner_id()]);
+        assert!(
+            decide_acceptance(&a, &sa, sx.membership_receipt.as_ref().unwrap(), true, 103).is_err()
+        );
+        assert!(apply_receipt(
+            &x.owner_id(),
+            &sx,
+            sa.membership_receipt.as_ref().unwrap(),
+            103
+        )
+        .is_err());
+        // Substituting a valid but different acceptance cannot reuse A's approval.
+        let mut grant = parse(sa.membership_receipt.as_ref().unwrap()).unwrap();
+        let File::Acceptance {
+            acceptance: other, ..
+        } = parse(sx.membership_receipt.as_ref().unwrap()).unwrap()
+        else {
+            panic!()
+        };
+        if let File::Approval { acceptance, .. } = &mut grant {
+            *acceptance = other;
+        }
+        assert!(apply_receipt(&x.owner_id(), &sx, &serialize(&grant).unwrap(), 103).is_err());
+    }
+
+    #[test]
+    fn persisted_exchange_survives_restart_without_early_admission() {
+        let a = OwnerKeypair::generate();
+        let b = OwnerKeypair::generate();
+        let ra = tempfile::tempdir().unwrap();
+        let rb = tempfile::tempdir().unwrap();
+        let offer = create(&a, &private(), "seed", 100).unwrap();
+        remember_invitation(&private(), &offer, 100)
+            .unwrap()
+            .save(ra.path())
+            .unwrap();
+        accept(&b, &private(), &offer, 101)
+            .unwrap()
+            .save(rb.path())
+            .unwrap();
+        let sa = Settings::load(ra.path()).unwrap();
+        let sb = Settings::load(rb.path()).unwrap();
+        assert!(sa.admitted_owners.is_empty() && sb.admitted_owners.is_empty());
+        let sa =
+            decide_acceptance(&a, &sa, sb.membership_receipt.as_ref().unwrap(), true, 102).unwrap();
+        sa.save(ra.path()).unwrap();
+        let sa = Settings::load(ra.path()).unwrap();
+        let sb = apply_receipt(
+            &b.owner_id(),
+            &sb,
+            sa.membership_receipt.as_ref().unwrap(),
+            103,
+        )
+        .unwrap();
+        sb.save(rb.path()).unwrap();
+        let sb = Settings::load(rb.path()).unwrap();
+        assert_eq!(sb.admitted_owners, [a.owner_id()]);
+        assert_eq!(sb.args()[0], "serve");
+        assert!(apply_receipt(
+            &b.owner_id(),
+            &sb,
+            sa.membership_receipt.as_ref().unwrap(),
+            104
+        )
+        .is_err());
+    }
+
     #[test]
     fn forged_replayed_expired_and_uncorrelated_approval_rejected() {
         let a = OwnerKeypair::generate();

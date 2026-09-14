@@ -8,8 +8,8 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
 - Members → Invite a member → native share sheet. Recipient Accept & reply sends
   their signed identity bound to the invitation, but grants nothing and does not
   change their serving connection.
-- Inviter compares the 80-bit matching code over a known conversation, then Allow
-  or Decline. Allow signs that exact acceptance. Final approval must be delivered
+- Inviter checks with their friend outside Mesh, best efforts, then Allow or
+  Decline. The 80-bit reference code is optional, not a required ceremony. Allow signs that exact acceptance. Final approval must be delivered
   back; only then does the recipient join and admit the signed roster.
 - After admission membership is transitive: Jo can invite Oli through the same
   identity check; Mic applies Jo's final approval without another pairwise decision.
