@@ -23,11 +23,12 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   narrow link to the OS-selected default keychain enables encrypted key unlock;
   no exported passphrases, ACL weakening, personal Mesh state or identity replacement.
 
-## Current acceptance gate
+## Current human trial
 
 Full package checks and release tray build pass. Official runtime encrypted-owner
 startup and a three-full-node networking probe passed before the final confirmation
 correction. Corrected Invite/Accept/Allow/transitive approval flow passes unit tests;
-its live probe is updated but deliberately NOT rerun after Mic reported keychain
-interruptions. No further native launches/keychain calls until that UX is resolved.
+its live probe is updated but not rerun unattended. Mic cleared the prior
+zero-Keychain-prompts blocker: ordinary attended first-run authorization is allowed.
+Use HUMAN_TESTING.md; no engine change or zero-prompt guarantee is required.
 No inference, screenshot, native delivery or replacement-preview success claimed.

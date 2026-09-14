@@ -34,8 +34,9 @@ membership artifact retained. Expired replies require a fresh invitation.
 ## Native verification still required
 
 No final screenshots or UI click/delivery proof. Screen capture failed in this
-session. macOS credential prompts were observed; interactive validation stopped
-on Mic's instruction. No preview replacement before this is resolved. Portable
+session. The prior zero-Keychain-prompts gate was cleared by Mic; ordinary
+first-run authorization is allowed during the attended trial. No unattended native
+credential probes or repeated retries; leave the installed preview unchanged. Portable
 native paths compile but are not Windows/Linux product verification; Windows
 runtime isolation remains gated. No accessibility/keyboard/QR/Finder-registration
 or share-completion-cleanup success claimed.

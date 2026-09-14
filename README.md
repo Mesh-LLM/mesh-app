@@ -1,8 +1,9 @@
-# Mesh Tray — standalone private pooling development checkpoint
+# Mesh Tray — standalone private pooling human trial
 
 Native jellyfish tray using the unchanged official prebuilt Mesh **v0.76.1**.
-This checkpoint implements the invitation state machine; it is **not yet the
-ready-to-test replacement preview**. The existing preview and identity are untouched.
+This candidate is ready for an **attended manual trial**, not a replacement release.
+Start with [HUMAN_TESTING.md](HUMAN_TESTING.md). The installed preview and identity
+remain untouched.
 
 ## Using Members
 
@@ -41,10 +42,10 @@ On macOS `security default-keychain -d user` discovers the OS-selected keychain;
 only `<app-home>/Library/Keychains/login.keychain-db` is linked to that file. No
 secrets or keychain ACLs are copied/changed. Existing different routing fails
 without overwriting. This is storage separation, **not an OS security sandbox**.
-OS prompts are still possible with unsigned/changing developer executables: this
-was observed during probes and is an unresolved UX gate. Further interactive
-probes stopped on Mic's request. Missing/corrupt established identities are never
-silently regenerated. Windows remains launch-gated; Linux is not native-verified.
+OS prompts are still possible with unsigned/changing developer executables,
+including on first run. Mic cleared the prior zero-prompts blocker; unattended
+validation still avoids credential probes and repeated launch/retry loops.
+Missing/corrupt established identities are never silently regenerated. Windows remains launch-gated; Linux is not native-verified.
 
 Public now uses `<app>/public-home/.mesh-llm`; an established old development
 `public/key` blocks automatic migration rather than silently replacing that identity.
@@ -75,7 +76,7 @@ format was exercised with official 0.76.1.
 
 ## Verified / not verified
 
-- Full checks: 46 library + 15 executable + 2 compile-fail doctests passed; release
+- Full checks: 48 library + 15 executable + 2 compile-fail doctests passed; release
   build passed, no warning suppression added.
 - Fresh encrypted owner unlocked in official runtime under app HOME; `/api/status`
   reported version 0.76.1 and verified owner. No plaintext/env/argv secret handoff.
@@ -89,14 +90,14 @@ format was exercised with official 0.76.1.
 - No replacement preview, distribution, updater, public release or independent
   review completion claimed. Review requested; outcome pending.
 
-Keep the established preview unchanged until the no-interruption credential UX,
-corrected live journey, file activation/delivery, inference and independent review
-are complete. Temporary probe credentials/profile artifacts are retained for
-scoped cleanup without triggering further OS dialogs; do not remove user models
+Keep the established preview unchanged during this attended candidate trial.
+Corrected live journey, native delivery and inference are human acceptance checks,
+not prerequisites to trying it. Temporary probe credentials/profile artifacts
+are retained for scoped cleanup without triggering further OS dialogs; do not remove user models
 or established identities as part of build cleanup.
 
 ## Local candidate packaging
 
 See [HUMAN_TESTING.md](HUMAN_TESTING.md) for the reproducible checksum-verified
 macOS arm64 bundle and manual test procedure. The bundle is not launched during
-verification; native credential access remains an explicit unresolved gate.
+verification; ordinary first-run authorization is handled by the human tester.
