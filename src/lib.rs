@@ -6,4 +6,9 @@ pub mod share_file;
 pub mod admission;
 pub mod consent;
 pub mod identity;
+pub mod model_selection;
 pub mod settings;
+
+pub mod runtime_home;
+
+pub mod invitation;

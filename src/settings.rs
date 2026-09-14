@@ -18,6 +18,12 @@ pub struct Settings {
     pub connection: Connection,
     /// Owner identities explicitly approved on this node; never imported from an invite.
     pub admitted_owners: Vec<String>,
+    /// Additional accepted bootstrap seeds; existing private connections survive new joins.
+    pub seeds: Vec<String>,
+    pub membership_receipt: Option<Vec<u8>>,
+    pub pending_membership_acceptance: Option<String>,
+    pub issued_membership_invitations: Vec<String>,
+    pub applied_membership_receipts: Vec<String>,
     pub owner_names: std::collections::BTreeMap<String, String>,
     pub exchange: crate::exchange::ExchangeState,
     pub replies: Vec<crate::consent::Reply>,
@@ -30,6 +36,11 @@ impl Default for Settings {
         Self {
             connection: Connection::Automatic,
             admitted_owners: Vec::new(),
+            seeds: Vec::new(),
+            membership_receipt: None,
+            pending_membership_acceptance: None,
+            issued_membership_invitations: Vec::new(),
+            applied_membership_receipts: Vec::new(),
             owner_names: Default::default(),
             replies: Vec::new(),
             exchange: Default::default(),
@@ -68,6 +79,21 @@ impl Settings {
         {
             validate_invite(invite)?;
         }
+        if self
+            .membership_receipt
+            .as_ref()
+            .is_some_and(|bytes| bytes.len() > crate::exchange::MAX_FILE_BYTES)
+            || self.applied_membership_receipts.len() > 4096
+            || self.issued_membership_invitations.len() > 32
+        {
+            return Err("Too much saved membership data".into());
+        }
+        if self.seeds.len() > 32 {
+            return Err("Too many saved Mesh seeds".into());
+        }
+        for seed in &self.seeds {
+            validate_invite(seed)?;
+        }
         crate::admission::validate_owners(&self.admitted_owners)?;
         if self.replies.len() > 32 {
             return Err("Too many pending replies".into());
@@ -97,6 +123,38 @@ impl Settings {
         Ok(())
     }
 
+    pub fn runtime_home(&self, root: &Path) -> PathBuf {
+        match self.connection {
+            Connection::Automatic => root.join("public-home"),
+            Connection::Private { .. } => root.join("home"),
+        }
+    }
+
+    pub fn runtime_profile(&self, root: &Path) -> PathBuf {
+        self.runtime_home(root).join(".mesh-llm")
+    }
+
+    /// Accept another seed without discarding established serving participation.
+    pub fn accept_seed(&mut self, seed: &str) -> Result<(), String> {
+        validate_invite(seed)?;
+        match &self.connection {
+            Connection::Private {
+                invite: Some(current),
+            } if current != seed => {
+                if !self.seeds.iter().any(|saved| saved == seed) {
+                    self.seeds.push(seed.into());
+                }
+            }
+            Connection::Private { invite: Some(_) } => {}
+            _ => {
+                self.connection = Connection::Private {
+                    invite: Some(seed.into()),
+                }
+            }
+        }
+        self.validate()
+    }
+
     pub fn args(&self) -> Vec<String> {
         let mut args = vec![
             "serve".into(),
@@ -117,6 +175,11 @@ impl Settings {
                 ]);
                 if let Some(invite) = invite {
                     args.extend(["--join".into(), invite.clone()]);
+                }
+                for seed in &self.seeds {
+                    if Some(seed) != invite.as_ref() {
+                        args.extend(["--join".into(), seed.clone()]);
+                    }
                 }
             }
         }
@@ -178,6 +241,57 @@ pub fn validate_invite(invite: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     #[test]
+    fn accepting_more_members_preserves_seeds_serving_and_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = Settings {
+            connection: Connection::Private {
+                invite: Some("original".into()),
+            },
+            admitted_owners: vec!["ab".repeat(32)],
+            ..Default::default()
+        };
+        settings.accept_seed("second").unwrap();
+        settings.accept_seed("third").unwrap();
+        settings.accept_seed("second").unwrap();
+        settings.save(root.path()).unwrap();
+        let settings = Settings::load(root.path()).unwrap();
+        assert_eq!(
+            settings.connection,
+            Connection::Private {
+                invite: Some("original".into())
+            }
+        );
+        assert_eq!(settings.seeds, ["second", "third"]);
+        assert_eq!(settings.admitted_owners, ["ab".repeat(32)]);
+        let args = settings.args();
+        assert_eq!(args[0], "serve");
+        assert_eq!(
+            args.windows(2)
+                .filter(|p| p[0] == "--join")
+                .map(|p| p[1].as_str())
+                .collect::<Vec<_>>(),
+            ["original", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn switching_modes_keeps_private_identity_out_of_public_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let mut settings = Settings::default();
+        let public = settings.runtime_profile(root.path());
+        settings.connection = Connection::Private { invite: None };
+        let private = settings.runtime_profile(root.path());
+        assert_eq!(private, root.path().join("home/.mesh-llm"));
+        assert_ne!(public, private);
+        settings.connection = Connection::Automatic;
+        assert_eq!(settings.runtime_profile(root.path()), public);
+        settings.connection = Connection::Private {
+            invite: Some("invite".into()),
+        };
+        assert_eq!(settings.runtime_profile(root.path()), private);
+    }
+
+    #[test]
     fn saves_and_reloads_private_connection() {
         let root = tempfile::tempdir().unwrap();
         let settings = Settings {
@@ -234,6 +348,7 @@ mod tests {
             assert!(!args.contains(&"--auto".into()));
             assert!(!args.contains(&"--publish".into()));
             assert_eq!(args.contains(&"--join".into()), invite.is_some());
+            assert_eq!(args[0], "serve");
         }
     }
     #[test]

@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use mesh_tray::{admission, consent, identity, settings};
 mod lifecycle;
+mod membership_ui;
 #[cfg(target_os = "macos")]
 mod native;
 #[cfg(not(target_os = "macos"))]
@@ -115,21 +116,13 @@ impl App {
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
         let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
-        let request = MenuItem::with_id("share-request", "Request to join…", true, None);
-        let open = MenuItem::with_id("open-file", "Open Mesh file…", true, None);
-        let cancel = MenuItem::with_id("cancel-requests", "Cancel pending requests…", true, None);
-        let reply = MenuItem::with_id("share-reply", "Share approved reply…", true, None);
-        let people = muda::Submenu::new("People allowed", true);
+        let people = muda::Submenu::new("Members", true);
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         menu.append_items(&[
             &status,
             &PredefinedMenuItem::separator(),
             &public,
             &private,
-            &request,
-            &open,
-            &cancel,
-            &reply,
             &people,
             &PredefinedMenuItem::separator(),
             &chat,
@@ -200,10 +193,14 @@ impl App {
             std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))
                 .map_err(|e| e.to_string())?;
         }
-        // A separate home isolates identity, configuration, models and runtime GC
-        // from CLI/lab instances. It persists across launches of this app.
-        let home = self.root.join("home");
-        std::fs::create_dir_all(home.join(".mesh-llm")).map_err(|e| e.to_string())?;
+        if matches!(self.settings.connection, settings::Connection::Automatic)
+            && self.root.join("public/key").exists()
+            && !self.root.join("public-home/.mesh-llm/key").exists()
+        {
+            return Err("This profile has an established development-runtime public identity. It was preserved; use a fresh demo profile until its migration is reviewed.".into());
+        }
+        let home = self.settings.runtime_home(&self.root);
+        mesh_tray::runtime_home::prepare(&home)?;
         if matches!(
             self.settings.connection,
             settings::Connection::Private { .. }
@@ -216,18 +213,23 @@ impl App {
             .append(true)
             .open(self.root.join("mesh.log"))
             .map_err(|e| e.to_string())?;
+        let model = mesh_tray::model_selection::local_model(&self.settings.connection)?;
         let mut command = Command::new(binary);
+        if let Some(model) = model {
+            use std::io::Write;
+            writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
+        }
         command
             .args(self.settings.args())
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
             .stderr(Stdio::from(log))
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .env("MESH_LLM_CONFIG", home.join(".mesh-llm/config.toml"))
-            .env("MESH_LLM_RUNTIME_ROOT", self.root.join("runtime"))
             .env_remove("MESH_LLM_EPHEMERAL_KEY")
             .env_remove("MESH_LLM_OWNER_PASSPHRASE");
+        mesh_tray::runtime_home::configure(&mut command, &home);
+        if let Some(model) = model {
+            command.args(["--model", model]);
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -238,14 +240,38 @@ impl App {
             .map_err(|e| format!("Could not start Mesh: {e}"))
     }
 
+    fn restore_mode_checks(&self) {
+        let Some(ui) = &self.ui else { return };
+        let private = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        ui.public.set_checked(!private);
+        ui.private.set_checked(private);
+    }
+
     fn render(&mut self) {
+        self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
         if ui.people_ids != self.settings.admitted_owners || ui.people.items().is_empty() {
             while ui.people.remove_at(0).is_some() {}
+            let legacy = muda::Submenu::new("Legacy request exchange", true);
+            let _ = legacy.append_items(&[
+                &MenuItem::with_id("share-request", "Request to join…", true, None),
+                &MenuItem::with_id("share-reply", "Share approved reply…", true, None),
+                &MenuItem::with_id("cancel-requests", "Cancel pending exchanges…", true, None),
+            ]);
+            let _ = ui.people.append_items(&[
+                &MenuItem::with_id("invite-member", "Invite a member…", true, None),
+                &MenuItem::with_id("share-membership", "Share reply or approval…", true, None),
+                &MenuItem::with_id("open-file", "Open invitation or reply…", true, None),
+                &legacy,
+                &PredefinedMenuItem::separator(),
+            ]);
             if self.settings.admitted_owners.is_empty() {
                 let _ = ui
                     .people
-                    .append(&MenuItem::new("Nobody allowed yet", false, None));
+                    .append(&MenuItem::new("No other members yet", false, None));
             }
             for owner in &self.settings.admitted_owners {
                 let name = self
@@ -272,16 +298,12 @@ impl App {
             "Mesh · Getting ready…"
         } else if self.snapshot.models_available {
             "Mesh · Models available"
+        } else if self.snapshot.local_model_pending {
+            "Mesh · Preparing local model (first download may take a while)…"
         } else {
             "Mesh · Finding models…"
         };
         ui.status.set_text(text);
-        let private = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        ui.public.set_checked(!private);
-        ui.private.set_checked(private);
         ui.public.set_enabled(self.stopping.is_none());
         ui.private.set_enabled(self.stopping.is_none());
         let retry = self.error.is_some() && self.child.is_none();
@@ -342,6 +364,8 @@ impl App {
                 "settings" => self.open("/configuration/mesh"),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
+                "invite-member" => self.invite_member(),
+                "share-membership" => self.share_membership(),
                 "share-request" => self.share_request(),
                 "open-file" => {
                     if let Some(path) = native::choose_file() {
@@ -384,6 +408,8 @@ impl App {
             match child.try_wait() {
                 Ok(Some(code)) => {
                     self.child = None;
+                    // Clear this child's deadline before apply_pending can start a new one.
+                    self.started = None;
                     self.snapshot = status::Snapshot::default();
                     if self.stopping.take().is_some() {
                         if self.pending_settings.is_some() {
@@ -427,6 +453,9 @@ impl App {
         self.render();
     }
     fn change_mode(&mut self, connection: settings::Connection) {
+        // muda toggles the clicked item before dispatch. Keep the committed mode
+        // visible through confirmation, cancellation and busy/same-mode returns.
+        self.restore_mode_checks();
         if self.stopping.is_some()
             || self.pending_settings.is_some()
             || std::mem::discriminant(&self.settings.connection)
@@ -651,7 +680,7 @@ mod desktop {
                     list.add(&remove);
                 }
                 if state_ref.settings.admitted_owners.is_empty() {
-                    list.add(&gtk::Label::new(Some("Nobody allowed yet")));
+                    list.add(&gtk::Label::new(Some("No other members yet")));
                 }
                 list.show_all();
             });
@@ -790,6 +819,120 @@ mod transaction_tests {
         app.start();
         assert!(app.settings.admitted_owners.is_empty());
     }
+    #[cfg(unix)]
+    fn exited_child() -> Child {
+        let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
+        // try_wait returns the cached status too; no scheduling race in tick.
+        child.wait().unwrap();
+        child
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn child_exit_clears_startup_deadline_and_preserves_the_exit_error() {
+        for startup_age in [Duration::ZERO, Duration::from_secs(181)] {
+            let root = tempfile::tempdir().unwrap();
+            let mut app = app(root.path());
+            app.polling = true; // Exercise tick without issuing status requests.
+            app.child = Some(exited_child());
+            app.started = Some(Instant::now() - startup_age);
+            app.snapshot.running = true;
+
+            app.tick();
+
+            assert!(app.child.is_none());
+            assert!(app.started.is_none());
+            assert!(!app.snapshot.running);
+            let error = app.error.clone().unwrap();
+            assert!(error.starts_with("Mesh exited ("));
+            assert!(error.contains("Retry startup"));
+            app.tick();
+            assert_eq!(app.error.as_deref(), Some(error.as_str()));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expected_exit_does_not_report_an_expired_startup_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.polling = true;
+        app.child = Some(exited_child());
+        app.started = Some(Instant::now() - Duration::from_secs(181));
+        app.stopping = Some(Instant::now());
+
+        app.tick();
+
+        assert!(app.child.is_none());
+        assert!(app.started.is_none());
+        assert!(app.stopping.is_none());
+        assert!(app.exit);
+        assert!(app.error.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_save_after_exit_is_not_overwritten_by_the_old_startup_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.polling = true;
+        app.child = Some(exited_child());
+        app.started = Some(Instant::now() - Duration::from_secs(181));
+        app.stopping = Some(Instant::now());
+        app.pending_settings = Some(app.settings.clone());
+        // Fail before start() so this regression test cannot launch a Mesh engine.
+        std::fs::create_dir(root.path().join("launcher.json")).unwrap();
+
+        app.tick();
+
+        assert!(app.child.is_none());
+        assert!(app.started.is_none());
+        assert!(app.stopping.is_none());
+        assert!(app.pending_settings.is_none());
+        assert!(!app.exit);
+        assert!(app
+            .error
+            .as_deref()
+            .unwrap()
+            .starts_with("Could not save connection:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_child_still_times_out_without_being_stopped_or_forgotten() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.polling = true;
+        // Block on our open pipe, not a sleep or a real Mesh/status service.
+        let child = Command::new("sh")
+            .args(["-c", "read -r line"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        app.child = Some(child);
+        app.started = Some(Instant::now());
+
+        app.tick();
+        let fresh_start_pending = app.started.is_some() && app.error.is_none();
+        app.started = Some(Instant::now() - Duration::from_secs(181));
+        app.tick();
+        let retained_pid = app.child.as_ref().map(Child::id);
+        // Reap the fixture before assertions; wait closes stdin so read sees EOF.
+        let mut child = app.child.take().unwrap();
+        let still_alive = child.try_wait().unwrap().is_none();
+        child.wait().unwrap();
+
+        assert!(fresh_start_pending);
+        assert_eq!(retained_pid, Some(pid));
+        assert!(still_alive);
+        assert!(app.started.is_none());
+        let error = app.error.clone().unwrap();
+        assert!(error.starts_with("Mesh startup timed out."));
+        app.tick();
+        assert_eq!(app.error.as_deref(), Some(error.as_str()));
+    }
+
     #[cfg(unix)]
     #[test]
     fn consent_is_not_saved_until_owned_child_is_reaped_and_busy_actions_do_not_replace_it() {

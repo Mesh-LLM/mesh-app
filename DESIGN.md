@@ -1,33 +1,40 @@
 # Native Mesh tray
 
-The explicit Public/Private + native-share direction supersedes the companion
-webpage prototype. This is an extension of the existing native tray, not a new
-visual identity. Mode: Operate.
+OS-native jellyfish status menu: Public/Private, Members, optional Chat, existing
+console Settings, Quit. Members contains Invite, Open invitation/reply, Share reply
+or approval, legacy pending-exchange controls, and current member fingerprints.
+No extra settings website, wizard, Buzz UI/runtime, custom typography or webview.
 
-## Implemented composition
-- Existing jellyfish menu-bar icon and mutable status line.
-- Public/Private check items, then Request to join, Open Mesh file, Cancel pending
-  requests/replies, Share approved reply and People allowed submenu. Existing
-  Chat, Settings and owned-child Quit remain below.
-- macOS `NSSharingServicePicker` anchored to the status button; `NSOpenPanel` for
-  a local file; `NSAlert` for explicit confirmations and verification results.
-- OS fonts, colors, focus and light/dark behavior; no custom typography/chrome.
-- Cancel is the default macOS confirmation button; portable default-button and
-  keyboard behavior remain unverified. A verified self-claimed name is
-  labeled as claimed; the owner fingerprint is separate. Verification-only
-  dialogs request explicit Allow & reply / Join / Decline; merely opening grants
-  nothing. People entries show a claimed label and fingerprint, not a certified name.
+## Identity-bound consent
 
-## States and limitations
-No auto-chat. Private setup creates/reuses a stable app-only identity using OS
-credential storage. Unreadable/locked/missing-established identities fail with a
-recovery message, never replacement. Mode/consent mutations are refused while a
-restart candidate is pending. Share picker opens only after ready private runtime
-identity checks; a saved reply supports retry after cancellation/start failure.
-Portable native dialogs/file save replace a universal-share-sheet assumption.
-Windows runtime launch remains disabled pending safe known-folder isolation.
+Invite → Accept & reply → compare code → inviter Allow/Decline → deliver approval.
+Cancel is the first/default macOS button. Accept only persists the signed reply,
+not admission or a mode switch. Allow signs the exact recipient and consumes the
+local pending invitation; Decline consumes it without granting. Existing members
+trust a member's final approval transitively; no Mic↔Oli approval after Jo admits Oli.
 
-## Verification status
-Source/API compilation and unit checks only. No app launch, share-service delivery,
-screenshot, keyboard/accessibility, cold/warm Finder-open or visual verification in
-this checkpoint. These are draft acceptance gates, not passed design review.
+The matching code is 80 bits of the canonical signed acceptance transcript,
+displayed in five four-hex groups. Compare through an established conversation;
+identities and self-claimed names do not establish human identity on their own.
+
+A file-open operation verifies signatures, time, correlation and replay before
+changing settings. Runtime-changing decisions retain the stop/reap → save →
+project → start transaction. Final approval sharing waits for fresh owned private
+runtime readiness. Native sharing retains temporary files until app exit.
+
+## Honest intermediate states
+
+Acceptance: waiting for inviter verification; serving unchanged. Approved locally:
+restart then share final approval. Received approval: join while preserving original
+seeds/models/members. Existing members: import final grant without pairwise dialog.
+Transport is manual files, not automatic notification; only latest outgoing
+membership artifact retained. Expired replies require a fresh invitation.
+
+## Native verification still required
+
+No final screenshots or UI click/delivery proof. Screen capture failed in this
+session. macOS credential prompts were observed; interactive validation stopped
+on Mic's instruction. No preview replacement before this is resolved. Portable
+native paths compile but are not Windows/Linux product verification; Windows
+runtime isolation remains gated. No accessibility/keyboard/QR/Finder-registration
+or share-completion-cleanup success claimed.

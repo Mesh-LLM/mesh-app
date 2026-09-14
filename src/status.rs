@@ -5,6 +5,7 @@ use std::time::Duration;
 pub struct Snapshot {
     pub running: bool,
     pub models_available: bool,
+    pub local_model_pending: bool,
     pub pid: Option<u32>,
     pub private_owner: Option<String>,
 }
@@ -56,6 +57,7 @@ pub fn snapshot(port: u16) -> Snapshot {
         pid,
         running: true,
         models_available,
+        local_model_pending: local_model_pending(&value),
         private_owner: value["owner"]["owner_id"]
             .as_str()
             .filter(|_| {
@@ -68,6 +70,15 @@ pub fn snapshot(port: u16) -> Snapshot {
             })
             .map(String::from),
     }
+}
+
+// Daemon readiness is not model readiness: startup resolution/download happens
+// after the management listener binds. Do not send a duplicate load request.
+fn local_model_pending(value: &serde_json::Value) -> bool {
+    value["requested_models"]
+        .as_array()
+        .is_some_and(|models| !models.is_empty())
+        && value["llama_ready"].as_bool() != Some(true)
 }
 
 fn actual_models(value: &serde_json::Value) -> bool {
@@ -105,6 +116,19 @@ pub fn stop_owned(port: u16, pid: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_startup_model_is_pending_until_local_ready() {
+        let mut value = serde_json::json!({"requested_models":["selected/model"],
+            "llama_ready":false,"runtime":{"daemon_state":"ready_idle"}});
+        assert!(local_model_pending(&value));
+        value["llama_ready"] = true.into();
+        assert!(!local_model_pending(&value));
+        value["llama_ready"] = false.into();
+        value["requested_models"] = serde_json::json!([]);
+        assert!(!local_model_pending(&value));
+        assert!(!local_model_pending(&serde_json::json!({})));
+    }
+
     #[test]
     fn synthetic_routes_are_not_readiness() {
         assert!(!actual_models(

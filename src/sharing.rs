@@ -51,9 +51,12 @@ impl App {
             let bytes = share_file::read(path)?;
             let owner = self.owner()?;
             let time = now()?;
+            if self.review_membership_file(&bytes, &owner, time)? {
+                return Ok(());
+            }
             let generation = self.settings.exchange.generation();
             if let Ok(request) = exchange::verify_request(&bytes, &owner.owner_id(), time) {
-                let Some(approve)=native::decision("Allow this person on your private Mesh?",&format!("Claimed name: {}\nIdentity: {}\n\nCheck this identity through your known conversation. Allowing shares access to this node, not every friend's node. Once Mesh is ready, the share picker opens for your reply. If delivery fails, use Share approved reply to retry.",request.claimed_name(),request.owner_id()),"Allow & reply") else{return Ok(());};
+                let Some(approve)=native::decision("Allow this person on your private Mesh?",&format!("Claimed name: {}\nIdentity: {}\n\nCheck this identity through your known conversation. This is the legacy request/reply exchange. Use Members → Invite for transitive membership. Once Mesh is ready, the share picker opens for your reply. If delivery fails, use Share approved reply to retry.",request.claimed_name(),request.owner_id()),"Allow & reply") else{return Ok(());};
                 let next = consent::decide_request(
                     &self.settings,
                     &bytes,

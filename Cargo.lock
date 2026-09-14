@@ -1979,9 +1979,10 @@ dependencies = [
 
 [[package]]
 name = "mesh-llm-identity"
-version = "0.76.0-rc9"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=c025263e40bb7fe66b0bbc53bec80ef23f302bd2#c025263e40bb7fe66b0bbc53bec80ef23f302bd2"
+version = "0.76.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=d4ffbbacd9c8486e0b80c44452876ffa17785964#d4ffbbacd9c8486e0b80c44452876ffa17785964"
 dependencies = [
+ "apple-native-keyring-store",
  "argon2",
  "base64 0.23.1",
  "chacha20poly1305",

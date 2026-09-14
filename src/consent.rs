@@ -93,9 +93,7 @@ pub fn decide_response(
     next.exchange.consume(response, now)?;
     if approve {
         add(&mut next, response.owner_id());
-        next.connection = Connection::Private {
-            invite: Some(response.invite().into()),
-        };
+        next.accept_seed(response.invite())?;
         // Joining changes the profile's connection; invalidate other open dialogs/replies.
         next.exchange.invalidate()?;
         next.replies.clear();
@@ -121,6 +119,9 @@ pub fn cancel(current: &Settings) -> Result<Settings, String> {
     let mut next = current.clone();
     next.exchange.invalidate()?;
     next.replies.clear();
+    next.issued_membership_invitations.clear();
+    next.pending_membership_acceptance = None;
+    next.membership_receipt = None;
     Ok(next)
 }
 

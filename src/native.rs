@@ -3,7 +3,7 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::AnyThread;
-use objc2_app_kit::{NSAlert, NSOpenPanel, NSSharingServicePicker};
+use objc2_app_kit::{NSAlert, NSApplication, NSOpenPanel, NSSharingServicePicker};
 use objc2_foundation::{MainThreadMarker, NSArray, NSRectEdge, NSString, NSURL};
 use std::path::PathBuf;
 
@@ -40,13 +40,24 @@ impl Native {
     }
 }
 
+// Tray clicks do not necessarily activate an accessory app. Bring user-requested
+// dialogs forward without changing the tray-only activation policy.
+fn foreground_dialog(mtm: MainThreadMarker) {
+    // Match winit's activation path, including support for older macOS versions.
+    #[allow(deprecated)]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+}
+
 pub fn choose_file() -> Option<PathBuf> {
     let mtm = MainThreadMarker::new()?;
     let panel = NSOpenPanel::openPanel(mtm);
     panel.setCanChooseFiles(true);
     panel.setCanChooseDirectories(false);
     panel.setAllowsMultipleSelection(false);
-    panel.setTitle(Some(&NSString::from_str("Open Mesh request or response")));
+    panel.setTitle(Some(&NSString::from_str(
+        "Open Mesh invitation or membership receipt",
+    )));
+    foreground_dialog(mtm);
     if panel.runModal() != 1 {
         return None;
     }
@@ -65,6 +76,7 @@ pub fn notice(title: &str, detail: &str) {
     alert.setMessageText(&NSString::from_str(title));
     alert.setInformativeText(&NSString::from_str(detail));
     alert.addButtonWithTitle(&NSString::from_str("Close"));
+    foreground_dialog(mtm);
     alert.runModal();
 }
 
@@ -78,6 +90,7 @@ pub fn confirm(title: &str, detail: &str, action: &str) -> bool {
     // Cancel is the default; Return must never accidentally consent.
     alert.addButtonWithTitle(&NSString::from_str("Cancel"));
     alert.addButtonWithTitle(&NSString::from_str(action));
+    foreground_dialog(mtm);
     alert.runModal() == 1001
 }
 
@@ -89,6 +102,7 @@ pub fn decision(title: &str, detail: &str, action: &str) -> Option<bool> {
     alert.addButtonWithTitle(&NSString::from_str("Cancel"));
     alert.addButtonWithTitle(&NSString::from_str(action));
     alert.addButtonWithTitle(&NSString::from_str("Decline"));
+    foreground_dialog(mtm);
     match alert.runModal() {
         1001 => Some(true),
         1002 => Some(false),
