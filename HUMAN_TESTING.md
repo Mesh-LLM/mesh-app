@@ -11,8 +11,9 @@ change ACLs, export credentials, or delete identities.
 ## Launch one candidate, deliberately
 
 Use two Macs for A/B, and a third for C if available (8+ GiB RAM each; 24+ GiB
-selects a larger model). First start downloads weights into the candidate's own
-profile; allow disk space, network and download time. A separate profile does not
+selects a larger model). First start reuses the normal user Hugging Face
+cache (`~/Library/Caches/huggingface` on macOS) and downloads only missing
+weights there, so a model you already have costs no download. A separate profile does not
 isolate GPU/RAM: do not run three serving candidates on a busy Mac. Leave any
 existing preview/live Mesh instance alone. This app never automatically opens Chat.
 
@@ -128,3 +129,11 @@ destination. This handoff updates instructions only; the existing bundle and
 manifest remain at `41d4314`. Signing/notarization, installer/update distribution,
 Windows/Linux native validation and automatic file transport remain future work,
 not blockers to this attended macOS trial. Never publish this as a finished release.
+
+## Start over
+
+Tray menu > "Start Over (Forget This Mesh)…" stops the runtime, then forgets this
+tray's identity, trust store and remembered people, so the next start pairs from
+scratch. Downloaded models, your own `~/.mesh-llm` CLI identity, other Mesh nodes
+and Buzz data are left alone. Ordinary quit and restart keeps identity and
+pairings — resetting is always an explicit choice.

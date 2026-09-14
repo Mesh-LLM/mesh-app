@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+model-hf = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d4ffbbacd9c8486e0b80c44452876ffa17785964" }
 # Immutable upstream revision; no dependency on another local checkout.
 mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d4ffbbacd9c8486e0b80c44452876ffa17785964", features = ["host-io"] }
 ed25519-dalek = "=3.0.0"

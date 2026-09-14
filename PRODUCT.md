@@ -19,9 +19,16 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   invitation, self-claimed name or acceptance alone is not an admission grant.
 - Keep native jellyfish menu, optional Chat and existing console Settings. No
   automatic chat opening. Stop only this app's retained child.
-- App-owned subprocess HOME routes trust/node/cache/runtime state. On macOS a
+- App-owned subprocess HOME routes trust/node/runtime state. Model storage is the
+  user's, not the app's: weights use the original user Hugging Face cache (via
+  explicit `HF_HUB_CACHE`/`HF_XET_CACHE`), and the engine cache and model catalog
+  are linked to the user's real ones because they have no environment override.
+  A pre-existing per-tray copy is moved aside, never deleted. On macOS a
   narrow link to the OS-selected default keychain enables encrypted key unlock;
   no exported passphrases, ACL weakening, personal Mesh state or identity replacement.
+- Identity and pairings persist across ordinary runs. "Start Over" forgets this
+  tray's identity, trust and remembered people after stopping the child; it never
+  touches downloaded models, the user's own `~/.mesh-llm`, or another Mesh node.
 
 ## Current human trial
 

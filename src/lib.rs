@@ -9,6 +9,8 @@ pub mod identity;
 pub mod model_selection;
 pub mod settings;
 
+pub mod reset;
+
 pub mod runtime_home;
 
 pub mod invitation;

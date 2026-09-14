@@ -46,6 +46,7 @@ struct App {
     polling: bool,
     started: Option<Instant>,
     stopping: Option<Instant>,
+    pending_reset: bool,
     error: Option<String>,
     open_when_ready: Option<&'static str>,
     exit: bool,
@@ -101,6 +102,7 @@ impl App {
             polling: false,
             started: None,
             stopping: None,
+            pending_reset: false,
             error: None,
             open_when_ready: None,
             exit: false,
@@ -118,6 +120,7 @@ impl App {
         let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
         let people = muda::Submenu::new("Members", true);
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
+        let reset = MenuItem::with_id("reset", "Start Over (Forget This Mesh)…", true, None);
         menu.append_items(&[
             &status,
             &PredefinedMenuItem::separator(),
@@ -127,6 +130,7 @@ impl App {
             &PredefinedMenuItem::separator(),
             &chat,
             &settings,
+            &reset,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -197,7 +201,7 @@ impl App {
             && self.root.join("public/key").exists()
             && !self.root.join("public-home/.mesh-llm/key").exists()
         {
-            return Err("This profile has an established development-runtime public identity. It was preserved; use a fresh demo profile until its migration is reviewed.".into());
+            return Err("This profile has an established development-runtime public identity. It was preserved. Use \"Start Over\" to forget it, or a fresh demo profile, until its migration is reviewed.".into());
         }
         let home = self.settings.runtime_home(&self.root);
         mesh_tray::runtime_home::prepare(&home)?;
@@ -376,6 +380,7 @@ impl App {
                 "share-reply" => self.share_reply(),
 
                 "retry" => self.start(),
+                "reset" => self.reset(),
                 "quit" => self.quit(),
                 id if id.starts_with("remove:") => self.remove_person(&id[7..]),
                 _ => {}
@@ -498,7 +503,50 @@ impl App {
         }
     }
 
+    /// Forget this tray's identity and pairings, keeping downloaded models.
+    /// The runtime is stopped first so it cannot rewrite state we just cleared.
+    fn reset(&mut self) {
+        if self.stopping.is_some() || self.pending_settings.is_some() || self.pending_reset {
+            return;
+        }
+        if !native::confirm(
+            "Start over on this Mesh?",
+            "This tray forgets its own Mesh identity and every person it has paired with, so you will need to pair again. Downloaded models, your other Mesh nodes and your Buzz data are not touched.",
+            "Start Over",
+        ) {
+            return;
+        }
+        self.pending_reset = true;
+        self.open_when_ready = None;
+        if let Some(child) = &mut self.child {
+            match lifecycle::request_stop(child, self.settings.console_port) {
+                Ok(()) => self.stopping = Some(Instant::now()),
+                Err(e) => {
+                    self.error = Some(e);
+                    self.pending_reset = false;
+                }
+            }
+        } else {
+            self.apply_pending();
+        }
+    }
+
     fn apply_pending(&mut self) {
+        if std::mem::take(&mut self.pending_reset) {
+            match mesh_tray::reset::perform(&self.root) {
+                Ok(()) => match settings::Settings::load(&self.root) {
+                    Ok(settings) => {
+                        self.settings = settings;
+                        self.snapshot = status::Snapshot::default();
+                        self.error = None;
+                        self.start();
+                    }
+                    Err(e) => self.error = Some(format!("Could not reload settings: {e}")),
+                },
+                Err(e) => self.error = Some(format!("Could not start over: {e}")),
+            }
+            return;
+        }
         if let Some(next) = self.pending_settings.take() {
             match next.save(&self.root) {
                 Ok(()) => {
@@ -619,6 +667,7 @@ mod desktop {
                 ("Share approved reply", "reply"),
                 ("Cancel pending", "cancel"),
                 ("Retry startup", "retry"),
+                ("Start over", "reset"),
             ] {
                 let button = gtk::Button::with_label(label);
                 let app = app.clone();
@@ -640,6 +689,7 @@ mod desktop {
                         "reply" => app.share_reply(),
                         "cancel" => app.cancel_requests(),
                         "retry" => app.start(),
+                        "reset" => app.reset(),
                         _ => {}
                     }
                 });
