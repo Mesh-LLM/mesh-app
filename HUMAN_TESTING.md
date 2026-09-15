@@ -21,20 +21,16 @@ In Terminal, paste the following **once per test Mac**, adjusting `CANDIDATE` to
 the folder containing this guide and bundle. This creates a new named test profile
 and starts directly in Private, avoiding a temporary Public connection. No existing
 profile is overwritten. If a port is occupied, the tray reports it and leaves its
-service alone; choose different ports rather than stopping that service.
+service alone; ports 3232/9447 are fixed, so free them before starting.
 
 ```sh
 CANDIDATE="$HOME/.buzz/OUTBOX/MESH_TRAY_CANDIDATE_41D4314"
-PROFILE="$HOME/Library/Application Support/Mesh Candidate Trial A"
+PROFILE="$HOME/.mesh-app"
 (
   umask 077
-  mkdir -p "$(dirname "$PROFILE")"
   mkdir "$PROFILE" || exit 1
   printf '%s\n' '{"connection":{"mode":"private","invite":null}}' > "$PROFILE/launcher.json"
-  env MESH_APP_DATA_DIR="$PROFILE" \
-    MESH_LLM_CONSOLE_PORT=33232 MESH_LLM_API_PORT=39447 \
-    MESH_LLM_BIN="$CANDIDATE/Mesh Candidate.app/Contents/MacOS/mesh-llm" \
-    "$CANDIDATE/Mesh Candidate.app/Contents/MacOS/mesh-tray"
+  "$CANDIDATE/Mesh Candidate.app/Contents/MacOS/mesh-tray"
 )
 ```
 
@@ -42,15 +38,12 @@ Keep the terminal open. The jellyfish appears in the menu bar (no main window).
 If macOS blocks opening an unsigned downloaded app, use the normal macOS
 Privacy & Security review only if you trust this artifact; do not strip quarantine
 or re-sign binaries as a workaround. Bundle and profile paths must stay stable.
-Do not double-click for this trial: that omits overrides and uses `~/.mesh-app`.
 Do not move `native-runtimes` away from the bundled executables.
 
-For B/C on separate Macs use names `Trial B`/`Trial C` in `PROFILE`. If intentionally
-sharing a Mac, each needs different console/API ports as well as a different profile.
+One profile per Mac: `~/.mesh-app`. Two candidates cannot share a Mac, because
+the profile path and the ports are fixed.
 Stop only your candidate via its menu → Quit. To **restart the same identity**,
-set the same `CANDIDATE` and `PROFILE` variables and rerun just the `env ...`
-command above, with the same ports; do not repeat `mkdir`/`printf` and do not delete
-anything. Do not point this candidate at an established preview or CLI profile.
+launch the app again; do not repeat `mkdir`/`printf` and do not delete anything.
 
 ## Invite → reply → Allow → deliver approval
 

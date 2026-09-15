@@ -8,7 +8,7 @@ use mesh_llm_identity::{owner_id_from_verifying_key, OwnerKeypair};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DOMAIN: &[u8] = b"mesh-tray-pool-membership-v1\0";
+const DOMAIN: &[u8] = b"mesh-app-pool-membership-v1\0";
 const LIFETIME: u64 = 30 * 60 * 1000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -124,7 +124,7 @@ fn serialize(file: &File) -> Result<Vec<u8>, String> {
 }
 fn check(invitation: Signed, now: u64) -> Result<VerifiedInvitation, String> {
     let (inviter, offer): (_, Offer) = verify(&invitation)?;
-    if offer.purpose != "mesh-tray.pool-invite.v1"
+    if offer.purpose != "mesh-app.pool-invite.v1"
         || offer.issued > now
         || offer.expires <= now
         || offer.expires <= offer.issued
@@ -163,7 +163,7 @@ pub fn create(
         members.push(owner.owner_id());
     }
     let offer = Offer {
-        purpose: "mesh-tray.pool-invite.v1".into(),
+        purpose: "mesh-app.pool-invite.v1".into(),
         nonce: hex::encode(rand::random::<[u8; 32]>()),
         issued: now,
         expires: now.checked_add(LIFETIME).ok_or("Invalid clock")?,
@@ -201,7 +201,7 @@ pub fn accept(
     let acceptance = sign(
         owner,
         &Acceptance {
-            purpose: "mesh-tray.pool-accept.v1".into(),
+            purpose: "mesh-app.pool-accept.v1".into(),
             invitation_digest: hex::encode(Sha256::digest(invitation.signed.body.as_bytes())),
         },
     )?;
@@ -250,7 +250,7 @@ fn accepted(
 ) -> Result<(VerifiedInvitation, String), String> {
     let invitation = check(invitation, now)?;
     let (member, accepted): (_, Acceptance) = verify(acceptance)?;
-    if accepted.purpose != "mesh-tray.pool-accept.v1"
+    if accepted.purpose != "mesh-app.pool-accept.v1"
         || accepted.invitation_digest
             != hex::encode(Sha256::digest(invitation.signed.body.as_bytes()))
     {
@@ -317,7 +317,7 @@ pub fn decide_acceptance(
         let approval = sign(
             owner,
             &Approval {
-                purpose: "mesh-tray.pool-allow.v1".into(),
+                purpose: "mesh-app.pool-allow.v1".into(),
                 acceptance_digest: hex::encode(Sha256::digest(serialize(&File::Acceptance {
                     invitation: invitation.signed.clone(),
                     acceptance: acceptance.clone(),
@@ -359,7 +359,7 @@ pub fn apply_receipt(
     let (approver, approved): (_, Approval) = verify(&approval)?;
     let acceptance_digest = hex::encode(Sha256::digest(&acceptance_file));
     if approver != invitation.inviter
-        || approved.purpose != "mesh-tray.pool-allow.v1"
+        || approved.purpose != "mesh-app.pool-allow.v1"
         || approved.acceptance_digest != acceptance_digest
     {
         return Err("Approval does not bind this invitation and recipient".into());

@@ -8,8 +8,8 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const DOMAIN: &[u8] = b"mesh-tray-owner-request-v1\0";
-const RESPONSE: &str = "mesh-tray.join-response.v1";
+const DOMAIN: &[u8] = b"mesh-app-owner-request-v1\0";
+const RESPONSE: &str = "mesh-app.join-response.v1";
 const LIFETIME: u64 = 30 * 60 * 1000;
 pub const MAX_FILE_BYTES: usize = 512 * 1024;
 
@@ -152,7 +152,7 @@ pub fn create_request(
     let expires = now.checked_add(LIFETIME).ok_or("Invalid time")?;
     let body = RequestBody {
         version: 1,
-        purpose: "mesh-tray.join-request.v1".into(),
+        purpose: "mesh-app.join-request.v1".into(),
         id: hex::encode(nonce),
         issued: now,
         expires,
@@ -185,7 +185,7 @@ pub fn verify_request(
         return Err("Invalid request size".into());
     }
     let body: RequestBody = parse(file.body.as_bytes())?;
-    if body.version != 1 || body.purpose != "mesh-tray.join-request.v1" {
+    if body.version != 1 || body.purpose != "mesh-app.join-request.v1" {
         return Err("Unsupported Mesh request".into());
     }
     lifetime(body.issued, body.expires, now)?;

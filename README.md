@@ -34,12 +34,11 @@ phone, or with no network at all, and it needs no discovery service.
   you asked for it.
 - Invitations expire after 30 minutes and are single-decision: Confirm and
   Decline both consume the pending invitation.
-- Members you admit can be removed from the Members menu.
 
 ## Runtime and identity
 
-`MESH_LLM_BIN` points to the official executable, retaining its adjacent
-native-runtimes bundle. The child gets an app-owned HOME and XDG/runtime paths;
+The official `mesh-llm` executable sits next to the app executable, retaining
+its adjacent native-runtimes bundle. The child gets an app-owned HOME and XDG/runtime paths;
 inherited `MESH_LLM_*` overrides are stripped, while the GUI keeps the real OS
 HOME. The private identity lives at `<app>/home/.mesh-llm/owner-keystore.json`
 with a stable keychain account, and Hugging Face caches are shared with yours so
@@ -52,9 +51,10 @@ separation, **not** an OS security sandbox, and unsigned developer builds can
 still raise OS prompts. Missing or corrupt identities are never silently
 regenerated.
 
-Ports are overridable with `MESH_LLM_CONSOLE_PORT` / `MESH_LLM_API_PORT`.
-Occupied ports are not adopted or stopped, and only children this tray started
-are ever terminated. Tests and demos must use a fresh `MESH_APP_DATA_DIR`.
+Ports live in `~/.mesh-app/launcher.json`. Occupied ports are not adopted or
+stopped, and only children this app started are ever terminated. There are no
+environment overrides: the profile is always `~/.mesh-app`, and engine settings
+are the runtime's own `config.toml`.
 
 Private model selection follows the same ladder Buzz recommends, classified on
 the machine's rated memory rather than what is free at launch: Gemma 4 E4B below
