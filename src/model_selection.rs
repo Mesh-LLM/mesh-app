@@ -9,12 +9,16 @@ use crate::settings::Connection;
 // a model that does not fit is unrecoverable -- the user has no other model to
 // switch to. Erring small costs quality; erring large costs the product.
 //
-// Both are Qwen again. They were briefly replaced by Gemma because they spent
-// their whole token budget reasoning and often returned no answer; the tray now
-// turns thinking off for its own runtime child (`runtime_config`), which
-// removes that failure at its cause.
-const SMALL: &str = "unsloth/Qwen3.5-9B-GGUF@main:Q4_K_M";
-const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@main:Q4_K_M";
+// Gemma both sides: measured on the same prompt, the Qwen picks spent their
+// whole token budget reasoning and often returned no answer, while both Gemma
+// picks thought briefly and answered every time. The tray also turns thinking
+// off for its runtime child (`runtime_config`), but that is insurance, not the
+// reason these two are here.
+//
+// Quant names are the ones the repos actually publish: the 26B ships only
+// `UD-Q4_K_M`, with no plain `Q4_K_M` file.
+const SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF@main:Q4_K_M";
+const LARGE: &str = "unsloth/gemma-4-26B-A4B-it-GGUF@main:UD-Q4_K_M";
 
 pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     if !matches!(connection, Connection::Private { .. }) {
