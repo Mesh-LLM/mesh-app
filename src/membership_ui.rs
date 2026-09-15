@@ -87,7 +87,7 @@ impl App {
             } else {
                 native::notice(
                     "RSVP copied",
-                    "Paste it back to them. Once they confirm it, you are connected.",
+                    "Send it back to the friend who invited you — any chat, mail or note. Once they confirm it, you are connected.",
                 );
             }
             Ok::<(), String>(())
@@ -112,7 +112,7 @@ impl App {
                 if !native::confirm(
                     "RSVP to this invitation?",
                     &format!(
-                        "From: {}\n\nSend your RSVP back to them and they can connect you.",
+                        "From: {}\n\nYour RSVP is copied to your clipboard when you accept — send it back to them and they can connect you.",
                         invite.inviter()
                     ),
                     "RSVP",

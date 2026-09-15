@@ -28,8 +28,6 @@ struct Ui {
     retry_visible: bool,
     quit: MenuItem,
     people: muda::Submenu,
-    people_ids: Vec<String>,
-    people_offer: Option<Option<&'static str>>,
     _tray: TrayIcon,
 }
 
@@ -157,8 +155,6 @@ impl App {
             retry_visible: false,
             quit,
             people,
-            people_ids: Vec::new(),
-            people_offer: None,
             _tray: tray,
         });
         self.start();
@@ -281,57 +277,14 @@ impl App {
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
         // Two actions cover the whole journey: invite someone, or accept the
-        // card they sent back. Each card is copied the moment it is made, so
-        // the third entry is only a retry for a card that was lost before it
-        // reached them, and it is offered only when such a card exists.
-        // Who is already joined is the console's job, not a menu's.
-        let offer = self
-            .settings
-            .membership_receipt
-            .as_deref()
-            .and_then(mesh_tray::invitation::card_kind)
-            .map(|kind| match kind {
-                "confirmation" => "Copy your members card again",
-                "acceptance" => "Copy your RSVP again",
-                _ => "Copy your last card again",
-            });
-        if ui.people_ids != self.settings.admitted_owners
-            || ui.people_offer != Some(offer)
-            || ui.people.items().is_empty()
-        {
-            while ui.people.remove_at(0).is_some() {}
+        // card they sent back. Every card is copied to the clipboard the moment
+        // it exists, so there is no retry item and no roster: if a card never
+        // arrived, invite again, and who is joined is the console's job.
+        if ui.people.items().is_empty() {
             let _ = ui.people.append_items(&[
                 &MenuItem::with_id("invite-member", "Invite someone…", true, None),
                 &MenuItem::with_id("paste-card", "Accept an invitation or RSVP", true, None),
             ]);
-            if let Some(label) = offer {
-                let _ = ui
-                    .people
-                    .append(&MenuItem::with_id("share-membership", label, true, None));
-            }
-            // Removing a person has no other home -- the console lists members
-            // but cannot revoke one, and the CLI writes a different store --
-            // so the list stays, shown only when there is somebody to remove.
-            if !self.settings.admitted_owners.is_empty() {
-                let _ = ui.people.append(&PredefinedMenuItem::separator());
-            }
-            for owner in &self.settings.admitted_owners {
-                let name = self
-                    .settings
-                    .owner_names
-                    .get(owner)
-                    .map(String::as_str)
-                    .unwrap_or("Mesh person");
-                let label = format!("Remove {} · {}…", name, &owner[..12]);
-                let _ = ui.people.append(&MenuItem::with_id(
-                    format!("remove:{owner}"),
-                    label,
-                    true,
-                    None,
-                ));
-            }
-            ui.people_ids = self.settings.admitted_owners.clone();
-            ui.people_offer = Some(offer);
         }
         let text = if self.stopping.is_some() {
             "Mesh · Stopping…"
@@ -412,7 +365,6 @@ impl App {
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite-member" => self.invite_member(),
-                "share-membership" => self.share_membership(),
                 "paste-card" => self.paste_card(),
                 "share-request" => self.share_request(),
                 "cancel-requests" => self.cancel_requests(),
@@ -421,7 +373,6 @@ impl App {
                 "retry" => self.start(),
                 "reset" => self.reset(),
                 "quit" => self.quit(),
-                id if id.starts_with("remove:") => self.remove_person(&id[7..]),
                 _ => {}
             }
         }
@@ -742,46 +693,6 @@ mod desktop {
                 });
                 content.add(&button);
             }
-            let people = gtk::MenuButton::new();
-            people.set_label("People allowed");
-            let popover = gtk::Popover::new(Some(&people));
-            let list = gtk::Box::new(gtk::Orientation::Vertical, 6);
-            popover.add(&list);
-            people.set_popover(Some(&popover));
-            let state = app.clone();
-            people.connect_toggled(move |button| {
-                if !button.is_active() {
-                    return;
-                }
-                for child in list.children() {
-                    list.remove(&child);
-                }
-                let Ok(state_ref) = state.try_borrow() else {
-                    return;
-                };
-                for owner in &state_ref.settings.admitted_owners {
-                    let name = state_ref
-                        .settings
-                        .owner_names
-                        .get(owner)
-                        .map(String::as_str)
-                        .unwrap_or("Mesh person");
-                    let remove = gtk::Button::with_label(&format!("{name} · {}…", &owner[..12]));
-                    let owner = owner.clone();
-                    let state = state.clone();
-                    remove.connect_clicked(move |_| {
-                        if let Ok(mut app) = state.try_borrow_mut() {
-                            app.remove_person(&owner);
-                        }
-                    });
-                    list.add(&remove);
-                }
-                if state_ref.settings.admitted_owners.is_empty() {
-                    list.add(&gtk::Label::new(Some("No other members yet")));
-                }
-                list.show_all();
-            });
-            content.add(&people);
             window.add(&content);
             let closing = app.clone();
             window.connect_delete_event(move |_, _| {

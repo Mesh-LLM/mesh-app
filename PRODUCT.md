@@ -32,8 +32,11 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   explicit invite/share actions the user just clicked.
 - A missing OS file dialog is reported, never a panic: losing the tray also
   orphans the user's running Mesh.
-- Members menu offers inviting someone and opening what they sent back; sending
-  a reply appears only when there is one to send.
+- Members menu has exactly two items: invite someone, or accept an invitation or
+  RSVP that was pasted in. Every card is copied to the clipboard the moment it
+  exists, so there is no retry item; a card that never arrived is replaced by
+  inviting again. No roster and no per-person remove in the menu: the console
+  lists members, and "Start Over" is the only revoke on this build.
 - Identity and pairings persist across ordinary runs. "Start Over" forgets this
   tray's identity, trust and remembered people after stopping the child; it never
   touches downloaded models, the user's own `~/.mesh-llm`, or another Mesh node.

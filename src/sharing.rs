@@ -196,29 +196,4 @@ impl App {
             native::notice("Could not cancel", &e);
         }
     }
-    pub(crate) fn remove_person(&mut self, owner: &str) {
-        let result = (|| {
-            self.share_ready()?;
-            let generation = self.settings.exchange.generation();
-            let name = self
-                .settings
-                .owner_names
-                .get(owner)
-                .map(String::as_str)
-                .unwrap_or("Mesh person");
-            if !native::confirm(
-                "Remove this person?",
-                &format!("{name}\nIdentity: {owner}\n\nMesh restarts to drop their access."),
-                "Remove",
-            ) {
-                return Ok(());
-            }
-            let next = consent::remove(&self.settings, owner, generation)?;
-            self.queue_settings(next);
-            Ok::<(), String>(())
-        })();
-        if let Err(e) = result {
-            native::notice("Could not remove person", &e);
-        }
-    }
 }
