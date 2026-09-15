@@ -15,6 +15,14 @@ fn now() -> Result<u64, String> {
         .try_into()
         .map_err(|_| "Invalid clock".into())
 }
+/// Confirming an RSVP completes the connection on both sides, so the optional
+/// third card is only worth offering when somebody else is already on the list
+/// for the new member to be introduced to. Offered on a first connection it
+/// reads like a required step and makes a two-step exchange feel like three.
+fn should_introduce_other_members(admitted: &[String]) -> bool {
+    admitted.len() > 1
+}
+
 impl App {
     pub(crate) fn invite_member(&mut self) {
         let result = (|| {
@@ -23,9 +31,11 @@ impl App {
             }
             if !native::confirm(
                 "Invite someone to your Mesh",
-                "Like a party invitation:\n\n1. You send this invitation. It grants no access on its own.\n2. They RSVP, which sends you their identity.\n3. You confirm it is really them — and you are connected.\n\nSend the card however you like — Messages, Mail, AirDrop. The invitation expires in 30 minutes.",
+                "Send them the invitation, then open the RSVP they send back. Expires in 30 minutes.",
                 "Create invitation",
-            ) { return Ok(()); }
+            ) {
+                return Ok(());
+            }
             let owner = identity::ensure(&self.root)?;
             let pid = self
                 .child
@@ -68,13 +78,13 @@ impl App {
             }
             if invitation::card_kind(bytes) == Some("confirmation") {
                 native::notice(
-                    "They're on your list — you are connected",
-                    "Nothing else is needed from you. The card in the share sheet is optional: it introduces them to your other members, so send it if you want them to know each other. Closing the share sheet changes nothing.",
+                    "Connected",
+                    "Optional: send this card if you want them to know your other members.",
                 );
             } else {
                 native::notice(
-                    "RSVP ready to send — not connected yet",
-                    "You have joined their Mesh on your side. Send this RSVP back to them: once they confirm it, you are connected and there is nothing further to do.",
+                    "RSVP ready to send",
+                    "Send it back to them. Once they confirm it, you are connected.",
                 );
             }
             self.native.share(
@@ -101,9 +111,14 @@ impl App {
                 let invite = invitation::inspect(bytes, time)?;
                 if !native::confirm(
                     "RSVP to this invitation?",
-                    &format!("Invitation from: {}\n{} people already on their list.\n\nRSVP if you are expecting this — a name is not proof, and only you know whether you asked for it.\n\nIt adds this one person to your Mesh, nobody else, and sends them your identity. They still have to confirm you before anything connects. Your serving and your existing connections stay as they are.", invite.inviter(), invite.member_count()),
+                    &format!(
+                        "From: {}\n\nSend your RSVP back to them and they can connect you.",
+                        invite.inviter()
+                    ),
                     "RSVP",
-                ) { return Ok(true); }
+                ) {
+                    return Ok(true);
+                }
                 let next = invitation::accept(owner, &self.settings, bytes, now()?)?;
                 // Accepting joins this Mesh on our side, so the runtime has to
                 // restart with the inviter admitted before the reply is shared.
@@ -115,13 +130,22 @@ impl App {
                 let (member, _) = invitation::matching_code(bytes, time)?;
                 let Some(allow) = native::decision(
                     "Is this really them?",
-                    &format!("Someone has RSVP'd to your invitation.\n\nIdentity: {member}\n\nConfirm only if you are expecting this — a name is not proof, and only you know whether you asked them. Confirming puts this exact identity on your list and connects you; nothing further is needed from either of you. Mesh restarts itself, which takes a moment."),
+                    &format!(
+                        "Identity: {member}\n\nA name is not proof — confirm only if you asked this person to join. Confirming connects you."
+                    ),
                     "Confirm",
-                ) else { return Ok(true); };
+                ) else {
+                    return Ok(true);
+                };
                 let next =
                     invitation::decide_acceptance(owner, &self.settings, bytes, allow, now()?)?;
                 if allow {
-                    self.offer_membership_card = true;
+                    // Confirming completes the connection on both sides, so the
+                    // third card is only worth offering when there is somebody
+                    // else on the list for them to be introduced to. With one
+                    // other person it is noise that reads like a required step.
+                    self.offer_membership_card =
+                        should_introduce_other_members(&next.admitted_owners);
                     self.queue_settings(next);
                 } else {
                     next.save(&self.root)?;
@@ -133,12 +157,27 @@ impl App {
                     invitation::apply_receipt(&owner.owner_id(), &self.settings, bytes, now()?)?;
                 self.queue_settings(next);
                 native::notice(
-                    "Their members list has been added",
-                    "Their confirmation checked out. You were already connected to them; this adds the other people on their Mesh. Mesh is restarting to pick it up.",
+                    "Their members added",
+                    "You were already connected; this adds the other people on their Mesh.",
                 );
             }
             _ => return Err("Unsupported membership file".into()),
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_introduce_other_members;
+
+    #[test]
+    fn first_connection_is_two_steps_and_later_ones_can_introduce() {
+        assert!(!should_introduce_other_members(&[]));
+        assert!(!should_introduce_other_members(&["jo".to_string()]));
+        assert!(should_introduce_other_members(&[
+            "jo".to_string(),
+            "sam".to_string()
+        ]));
     }
 }

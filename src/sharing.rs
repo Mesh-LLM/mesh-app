@@ -23,7 +23,13 @@ impl App {
     pub(crate) fn share_request(&mut self) {
         let result = (|| {
             self.share_ready()?;
-            if !native::confirm("Request to join a private Mesh?", "Send this request to someone you know. Your private keys stay on this device. Their reply still needs your approval.", "Share request") { return Ok(()); }
+            if !native::confirm(
+                "Request to join a private Mesh?",
+                "Send this to someone you know. Their reply still needs your approval.",
+                "Share request",
+            ) {
+                return Ok(());
+            }
             let owner = self.owner()?;
             let now = now()?;
             let mut next = self.settings.clone();
@@ -56,7 +62,17 @@ impl App {
             }
             let generation = self.settings.exchange.generation();
             if let Ok(request) = exchange::verify_request(&bytes, &owner.owner_id(), time) {
-                let Some(approve)=native::decision("Allow this person on your private Mesh?",&format!("Claimed name: {}\nIdentity: {}\n\nCheck this identity through your known conversation. This is the legacy request/reply exchange. Use Members → Invite for transitive membership. Once Mesh is ready, the share picker opens for your reply. If delivery fails, use Share approved reply to retry.",request.claimed_name(),request.owner_id()),"Allow & reply") else{return Ok(());};
+                let Some(approve) = native::decision(
+                    "Allow this person on your private Mesh?",
+                    &format!(
+                        "Claimed name: {}\nIdentity: {}\n\nCheck this identity through your known conversation. This is the legacy request/reply exchange. Use Members → Invite for transitive membership. Once Mesh is ready, the share picker opens for your reply. If delivery fails, use Share approved reply to retry.",
+                        request.claimed_name(),
+                        request.owner_id()
+                    ),
+                    "Allow & reply",
+                ) else {
+                    return Ok(());
+                };
                 let next = consent::decide_request(
                     &self.settings,
                     &bytes,
@@ -73,7 +89,16 @@ impl App {
                 }
             } else {
                 let response = self.settings.exchange.verify(&owner, &bytes, time)?;
-                let Some(approve)=native::decision("Join this private Mesh?",&format!("Identity: {}\n\nConfirm this is the person you requested. Join allows them on this node and switches this app to their private Mesh. Decline discards this reply permanently.",response.owner_id()),"Join") else{return Ok(());};
+                let Some(approve) = native::decision(
+                    "Join this private Mesh?",
+                    &format!(
+                        "Identity: {}\n\nConfirm this is the person you requested. Join allows them on this node and switches this app to their private Mesh. Decline discards this reply permanently.",
+                        response.owner_id()
+                    ),
+                    "Join",
+                ) else {
+                    return Ok(());
+                };
                 let next = consent::decide_response(&self.settings, &response, approve, now()?)?;
                 if approve {
                     self.queue_settings(next);
@@ -111,7 +136,18 @@ impl App {
             } else {
                 let mut selected = None;
                 for request in ready.into_iter().rev() {
-                    if native::confirm("Share this approved reply?", &format!("Claimed name: {}\nIdentity: {}\n\nCancel skips to the next pending reply. Previously approved people remain allowed.", request.claimed_name(), request.owner_id()), "Share reply") { selected = Some(request); break; }
+                    if native::confirm(
+                        "Share this approved reply?",
+                        &format!(
+                            "{}\nIdentity: {}\n\nCancel skips to the next pending reply.",
+                            request.claimed_name(),
+                            request.owner_id()
+                        ),
+                        "Share reply",
+                    ) {
+                        selected = Some(request);
+                        break;
+                    }
                 }
                 let Some(request) = selected else {
                     return Ok(());
@@ -138,7 +174,13 @@ impl App {
     pub(crate) fn cancel_requests(&mut self) {
         let result = (|| {
             self.share_ready()?;
-            if !native::confirm("Cancel pending requests and replies?","Files already sent cannot be recalled. Existing allowed people remain allowed; use People allowed to remove them.","Cancel pending"){return Ok(());}
+            if !native::confirm(
+                "Cancel pending requests and replies?",
+                "Files already sent cannot be recalled. People already on your list stay.",
+                "Cancel pending",
+            ) {
+                return Ok(());
+            }
             let next = consent::cancel(&self.settings)?;
             next.save(&self.root)?;
             self.settings = next;
@@ -158,7 +200,13 @@ impl App {
                 .get(owner)
                 .map(String::as_str)
                 .unwrap_or("Mesh person");
-            if !native::confirm("Remove this person?", &format!("{name}\nIdentity: {owner}\n\nThis stops this app's Mesh before removing access. Other nodes' allowed lists are unchanged."), "Remove") { return Ok(()); }
+            if !native::confirm(
+                "Remove this person?",
+                &format!("{name}\nIdentity: {owner}\n\nMesh restarts to drop their access."),
+                "Remove",
+            ) {
+                return Ok(());
+            }
             let next = consent::remove(&self.settings, owner, generation)?;
             self.queue_settings(next);
             Ok::<(), String>(())

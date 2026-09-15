@@ -291,7 +291,7 @@ impl App {
             .as_deref()
             .and_then(mesh_tray::invitation::card_kind)
             .map(|kind| match kind {
-                "confirmation" => "Send them your members list again…",
+                "confirmation" => "Introduce them to your other members…",
                 _ => "Send your RSVP again…",
             });
         if ui.people_ids != self.settings.admitted_owners
@@ -301,12 +301,7 @@ impl App {
             while ui.people.remove_at(0).is_some() {}
             let _ = ui.people.append_items(&[
                 &MenuItem::with_id("invite-member", "Invite someone…", true, None),
-                &MenuItem::with_id(
-                    "open-file",
-                    "Open an invitation, RSVP or confirmation…",
-                    true,
-                    None,
-                ),
+                &MenuItem::with_id("open-file", "Open what they sent…", true, None),
             ]);
             if let Some(label) = offer {
                 let _ = ui
@@ -373,7 +368,10 @@ impl App {
             // Native text viewer, not a second settings application. Works even
             // when startup failed before the management server could exist.
             let details = self.root.join("STARTUP_ERROR.txt");
-            let body = format!("Mesh needs attention\n\n{message}\n\nUse Retry startup after fixing the installation.\nRuntime log: {}\n", log.display());
+            let body = format!(
+                "Mesh needs attention\n\n{message}\n\nUse Retry startup after fixing the installation.\nRuntime log: {}\n",
+                log.display()
+            );
             if std::fs::write(&details, body).is_ok() {
                 let _ = open::that(details);
             }
@@ -471,7 +469,9 @@ impl App {
                             self.exit = true;
                         }
                     } else {
-                        self.error = Some(format!("Mesh exited ({code}). Open Settings for the startup log, then Retry startup."));
+                        self.error = Some(format!(
+                            "Mesh exited ({code}). Open Settings for the startup log, then Retry startup."
+                        ));
                     }
                 }
                 Err(e) => self.error = Some(format!("Cannot check Mesh process: {e}")),
@@ -516,7 +516,13 @@ impl App {
         {
             return;
         }
-        if !native::confirm("Change Mesh connection?", "Only this app’s Mesh restarts. Private sets up your identity securely and cancels outstanding requests. It never falls back to Public.", "Change connection") { return; }
+        if !native::confirm(
+            "Change Mesh connection?",
+            "Restarts this app’s Mesh and cancels anything outstanding.",
+            "Change connection",
+        ) {
+            return;
+        }
         if matches!(connection, settings::Connection::Private { .. }) {
             if let Err(e) = identity::establish(&self.root) {
                 native::notice("Could not set up Private", &e);
