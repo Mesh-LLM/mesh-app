@@ -128,13 +128,13 @@ impl App {
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         let reset = MenuItem::with_id("reset", "Start Over (Forget This Mesh)…", true, None);
         menu.append_items(&[
-            &status,
+            &chat,
             &PredefinedMenuItem::separator(),
+            &status,
             &public,
             &private,
             &people,
             &PredefinedMenuItem::separator(),
-            &chat,
             &settings,
             &reset,
             &PredefinedMenuItem::separator(),
@@ -280,19 +280,20 @@ impl App {
     fn render(&mut self) {
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
-        // Only two actions are ever useful here -- invite someone, or open what
-        // they sent back. Re-sending a card is offered only when one exists, so
-        // the menu never asks about a step the user has nothing to do for, and
-        // it is named after the card it would send. Each card is offered
-        // automatically when it is made; this entry is the retry.
+        // Two actions cover the whole journey: invite someone, or accept the
+        // card they sent back. Each card is copied the moment it is made, so
+        // the third entry is only a retry for a card that was lost before it
+        // reached them, and it is offered only when such a card exists.
+        // Who is already joined is the console's job, not a menu's.
         let offer = self
             .settings
             .membership_receipt
             .as_deref()
             .and_then(mesh_tray::invitation::card_kind)
             .map(|kind| match kind {
-                "confirmation" => "Introduce them to your other members…",
-                _ => "Send your RSVP again…",
+                "confirmation" => "Copy your members card again",
+                "acceptance" => "Copy your RSVP again",
+                _ => "Copy your last card again",
             });
         if ui.people_ids != self.settings.admitted_owners
             || ui.people_offer != Some(offer)
@@ -301,19 +302,18 @@ impl App {
             while ui.people.remove_at(0).is_some() {}
             let _ = ui.people.append_items(&[
                 &MenuItem::with_id("invite-member", "Invite someone…", true, None),
-                &MenuItem::with_id("paste-card", "Paste what they sent", true, None),
-                &MenuItem::with_id("open-file", "Open a file they sent…", true, None),
+                &MenuItem::with_id("paste-card", "Accept an invitation or RSVP", true, None),
             ]);
             if let Some(label) = offer {
                 let _ = ui
                     .people
                     .append(&MenuItem::with_id("share-membership", label, true, None));
             }
-            let _ = ui.people.append(&PredefinedMenuItem::separator());
-            if self.settings.admitted_owners.is_empty() {
-                let _ = ui
-                    .people
-                    .append(&MenuItem::new("No other members yet", false, None));
+            // Removing a person has no other home -- the console lists members
+            // but cannot revoke one, and the CLI writes a different store --
+            // so the list stays, shown only when there is somebody to remove.
+            if !self.settings.admitted_owners.is_empty() {
+                let _ = ui.people.append(&PredefinedMenuItem::separator());
             }
             for owner in &self.settings.admitted_owners {
                 let name = self
@@ -322,7 +322,7 @@ impl App {
                     .get(owner)
                     .map(String::as_str)
                     .unwrap_or("Mesh person");
-                let label = format!("{} · {}…", name, &owner[..12]);
+                let label = format!("Remove {} · {}…", name, &owner[..12]);
                 let _ = ui.people.append(&MenuItem::with_id(
                     format!("remove:{owner}"),
                     label,
@@ -415,11 +415,6 @@ impl App {
                 "share-membership" => self.share_membership(),
                 "paste-card" => self.paste_card(),
                 "share-request" => self.share_request(),
-                "open-file" => {
-                    if let Some(path) = native::choose_file() {
-                        self.review_file(&path);
-                    }
-                }
                 "cancel-requests" => self.cancel_requests(),
                 "share-reply" => self.share_reply(),
 
@@ -719,8 +714,7 @@ mod desktop {
                 ("Public", "public"),
                 ("Private", "private"),
                 ("Request to join", "request"),
-                ("Paste what they sent", "paste"),
-                ("Open Mesh file", "open"),
+                ("Accept an invitation or RSVP", "paste"),
                 ("Share approved reply", "reply"),
                 ("Cancel pending", "cancel"),
                 ("Retry startup", "retry"),
@@ -739,11 +733,6 @@ mod desktop {
                         }
                         "request" => app.share_request(),
                         "paste" => app.paste_card(),
-                        "open" => {
-                            if let Some(path) = native::choose_file() {
-                                app.review_file(&path);
-                            }
-                        }
                         "reply" => app.share_reply(),
                         "cancel" => app.cancel_requests(),
                         "retry" => app.start(),
@@ -875,7 +864,8 @@ mod transaction_tests {
         let mut adapter = portable::Native::default();
         let _ = &mut adapter;
         let _ = portable::Native::share;
-        let _ = portable::choose_file;
+        // Clipboard access is the one API that cannot be checked here: the
+        // portable adapter's implementation is GTK, gated to Linux.
         let _ = portable::notice;
         let _ = portable::confirm;
         let _ = portable::decision;

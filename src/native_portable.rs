@@ -1,5 +1,4 @@
 //! Native file and consent fallback; no networking or admission decisions here.
-use std::path::PathBuf;
 #[derive(Default)]
 pub struct Native {
     _private: (),
@@ -50,11 +49,6 @@ pub fn copy_text(_: &str) -> Result<(), String> {
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn paste_text() -> Result<String, String> {
     Err("Pasting is not available on this platform. Open the card as a file instead.".into())
-}
-pub fn choose_file() -> Option<PathBuf> {
-    rfd::FileDialog::new()
-        .set_title("Open Mesh request or reply")
-        .pick_file()
 }
 pub fn notice(title: &str, detail: &str) {
     rfd::MessageDialog::new()

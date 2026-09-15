@@ -1,7 +1,6 @@
 //! Native presentation delegates all consent changes to the common controller.
 use crate::{consent, identity, native, App};
 use mesh_tray::{exchange, share_file};
-use std::path::Path;
 fn now() -> Result<u64, String> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -49,12 +48,6 @@ impl App {
         })();
         if let Err(e) = result {
             native::notice("Could not share request", &e);
-        }
-    }
-    pub(crate) fn review_file(&mut self, path: &Path) {
-        match share_file::read(path) {
-            Ok(bytes) => self.review_card(bytes),
-            Err(e) => native::notice("Could not open that Mesh file", &e),
         }
     }
     /// Read whatever they sent from the clipboard. The card says which leg of

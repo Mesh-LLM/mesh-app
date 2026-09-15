@@ -4,11 +4,9 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::AnyThread;
 use objc2_app_kit::{
-    NSAlert, NSApplication, NSOpenPanel, NSPasteboard, NSPasteboardTypeString,
-    NSSharingServicePicker,
+    NSAlert, NSApplication, NSPasteboard, NSPasteboardTypeString, NSSharingServicePicker,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSRectEdge, NSString, NSURL};
-use std::path::PathBuf;
 
 #[derive(Default)]
 pub struct Native {
@@ -72,39 +70,6 @@ fn foreground_dialog(mtm: MainThreadMarker) {
     // Match winit's activation path, including support for older macOS versions.
     #[allow(deprecated)]
     NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
-}
-
-pub fn choose_file() -> Option<PathBuf> {
-    let mtm = MainThreadMarker::new()?;
-    // AppKit returns nil here when the open panel's service is unavailable -- an
-    // unbundled development build, or a ViewBridge connection that dropped. The
-    // generated binding panics on nil, which would take the whole tray (and the
-    // user's running Mesh) down over a cancelled file dialog. Ask for the
-    // optional form and report it as "no file chosen".
-    let panel: Option<Retained<NSOpenPanel>> =
-        unsafe { objc2::msg_send![<NSOpenPanel as objc2::ClassType>::class(), openPanel] };
-    let Some(panel) = panel else {
-        notice(
-            "Cannot open the file chooser",
-            "macOS did not provide a file dialog for this build of Mesh. Nothing was changed. Install the Mesh app bundle and try again.",
-        );
-        return None;
-    };
-    panel.setCanChooseFiles(true);
-    panel.setCanChooseDirectories(false);
-    panel.setAllowsMultipleSelection(false);
-    panel.setTitle(Some(&NSString::from_str(
-        "Open Mesh invitation or membership receipt",
-    )));
-    foreground_dialog(mtm);
-    if panel.runModal() != 1 {
-        return None;
-    }
-    let url = panel.URL()?;
-    if !url.isFileURL() {
-        return None;
-    }
-    Some(PathBuf::from(url.path()?.to_string()))
 }
 
 pub fn notice(title: &str, detail: &str) {
