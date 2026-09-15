@@ -47,6 +47,9 @@ struct App {
     stopping: Option<Instant>,
     pending_reset: bool,
     error: Option<String>,
+    /// Log length when the current run was started, so a fatal line from an
+    /// earlier run is never quoted as this run's reason.
+    log_mark: u64,
     open_when_ready: Option<&'static str>,
     exit: bool,
     offer_reply: bool,
@@ -107,6 +110,7 @@ impl App {
             stopping: None,
             pending_reset: false,
             error: None,
+            log_mark: 0,
             open_when_ready: None,
             exit: false,
             offer_reply: false,
@@ -166,6 +170,9 @@ impl App {
             return;
         }
         self.error = None;
+        self.log_mark = std::fs::metadata(self.root.join("mesh.log"))
+            .map(|m| m.len())
+            .unwrap_or(0);
         match self.spawn() {
             Ok(child) => {
                 self.child = Some(child);
@@ -335,8 +342,14 @@ impl App {
             // Native text viewer, not a second settings application. Works even
             // when startup failed before the management server could exist.
             let details = self.root.join("STARTUP_ERROR.txt");
+            // The runtime's own last words, so the reason is in front of the
+            // user instead of in a log they have to go and read.
+            let reason = match mesh_tray::startup_log::reason(&log, self.log_mark) {
+                Some(reason) => format!("Mesh said:\n\n{reason}\n\n"),
+                None => String::new(),
+            };
             let body = format!(
-                "Mesh needs attention\n\n{message}\n\nUse Retry startup after fixing the installation.\nRuntime log: {}\n",
+                "Mesh needs attention\n\n{message}\n\n{reason}Use Retry startup after fixing the installation.\nRuntime log: {}\n",
                 log.display()
             );
             if std::fs::write(&details, body).is_ok() {
@@ -431,7 +444,7 @@ impl App {
                         }
                     } else {
                         self.error = Some(format!(
-                            "Mesh exited ({code}). Open Settings for the startup log, then Retry startup."
+                            "Mesh exited ({code}). Open Settings to see why, then Retry startup."
                         ));
                     }
                 }
