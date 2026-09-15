@@ -228,7 +228,7 @@ impl App {
             .map_err(|e| e.to_string())?;
         let model = mesh_tray::model_selection::local_model(&self.settings.connection)?;
         let mut command = Command::new(binary);
-        if let Some(model) = model {
+        if let Some(model) = model.as_deref() {
             use std::io::Write;
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
@@ -241,7 +241,7 @@ impl App {
             .env_remove("MESH_LLM_OWNER_PASSPHRASE");
         mesh_tray::runtime_home::configure(&mut command, &home);
         if let Some(model) = model {
-            command.args(["--model", model]);
+            command.args(["--model", model.as_str()]);
         }
         #[cfg(windows)]
         {

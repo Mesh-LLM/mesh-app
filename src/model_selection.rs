@@ -2,18 +2,30 @@
 //! Joining preserves local serving participation.
 use crate::settings::Connection;
 
-// The same ladder Buzz recommends, so a machine gets the same model here as it
-// would there: `desktop/src-tauri/src/mesh_llm/catalog.rs`, whose boundaries are
-// 32 GB for the balanced pick and 80 GB for the large one.
+// Gemma on both tiers, deliberately diverging from Buzz's catalog ladder
+// (`desktop/src-tauri/src/mesh_llm/catalog.rs`). Measured on the same prompt,
+// the Qwen picks spend their whole token budget reasoning and often return no
+// answer at all, while both Gemma picks think briefly and then answer every
+// time. A tray chat window is the one place that failure is unrecoverable, so
+// the tray picks for answer-reliability rather than catalog parity. Boundary
+// stays at Buzz's 32 GB so the tier a machine lands in does not change.
 const SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF@main:Q4_K_M";
-const MEDIUM: &str = "unsloth/Qwen3.5-9B-GGUF@main:Q4_K_M";
-const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@main:Q4_K_M";
+const LARGE: &str = "unsloth/gemma-4-26B-A4B-it-GGUF@main:Q4_K_M";
 
-pub fn local_model(connection: &Connection) -> Result<Option<&'static str>, String> {
+pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     if !matches!(connection, Connection::Private { .. }) {
         return Ok(None);
     }
-    choose(memory_bytes()?).map(Some)
+    // An explicit choice is honoured as-is: trying a different model should not
+    // require a rebuild, and the ladder below is a default, not a policy.
+    if let Some(chosen) = std::env::var("MESH_TRAY_MODEL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(Some(chosen));
+    }
+    choose(memory_bytes()?).map(str::to_string).map(Some)
 }
 
 fn choose(bytes: u64) -> Result<&'static str, String> {
@@ -23,8 +35,7 @@ fn choose(bytes: u64) -> Result<&'static str, String> {
     // both boundaries for the sizes Macs ship, so this reads memory directly
     // rather than taking a dependency on the runtime's hardware crate.
     match bytes / (1024 * 1024 * 1024) {
-        80.. => Ok(LARGE),
-        32.. => Ok(MEDIUM),
+        32.. => Ok(LARGE),
         8.. => Ok(SMALL),
         _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically.".into()),
     }
@@ -72,7 +83,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiers_match_buzz_boundaries() {
+    fn tiers_are_gemma_either_side_of_the_boundary() {
         let gib = 1024 * 1024 * 1024;
         for size in [0, 4, 7] {
             assert!(choose(size * gib).is_err());
@@ -80,10 +91,7 @@ mod tests {
         for size in [8, 16, 24, 31] {
             assert_eq!(choose(size * gib).unwrap(), SMALL);
         }
-        for size in [32, 48, 64, 79] {
-            assert_eq!(choose(size * gib).unwrap(), MEDIUM);
-        }
-        for size in [80, 96, 128, 512] {
+        for size in [32, 48, 64, 79, 80, 96, 128, 512] {
             assert_eq!(choose(size * gib).unwrap(), LARGE);
         }
     }
