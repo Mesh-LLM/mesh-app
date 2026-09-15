@@ -5,8 +5,11 @@ use objc2::runtime::AnyObject;
 use objc2::AnyThread;
 use objc2_app_kit::{
     NSAlert, NSApplication, NSPasteboard, NSPasteboardTypeString, NSSharingServicePicker,
+    NSTextField,
 };
-use objc2_foundation::{MainThreadMarker, NSArray, NSRectEdge, NSString, NSURL};
+use objc2_foundation::{
+    MainThreadMarker, NSArray, NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSURL,
+};
 
 #[derive(Default)]
 pub struct Native {
@@ -82,6 +85,31 @@ pub fn notice(title: &str, detail: &str) {
     alert.addButtonWithTitle(&NSString::from_str("Close"));
     foreground_dialog(mtm);
     alert.runModal();
+}
+
+/// Ask for a card in a window with a field in it, prefilled from the clipboard
+/// when there is a card on it, so the usual case is paste-already-done.
+pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {
+    let mtm = MainThreadMarker::new()?;
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.addButtonWithTitle(&NSString::from_str(action));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(360.0, 24.0));
+    let field = NSTextField::initWithFrame(mtm.alloc::<NSTextField>(), frame);
+    if let Ok(text) = paste_text() {
+        if text.contains("MESH1") {
+            field.setStringValue(&NSString::from_str(&text));
+        }
+    }
+    alert.setAccessoryView(Some(&field));
+    alert.window().setInitialFirstResponder(Some(&field));
+    foreground_dialog(mtm);
+    if alert.runModal() != 1000 {
+        return None;
+    }
+    Some(field.stringValue().to_string())
 }
 
 pub fn confirm(title: &str, detail: &str, action: &str) -> bool {

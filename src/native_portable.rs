@@ -56,6 +56,46 @@ pub fn notice(title: &str, detail: &str) {
         .set_description(detail)
         .show();
 }
+/// Linux has a real field; elsewhere fall back to reading the clipboard, which
+/// is what the caller did before this dialog existed.
+#[cfg(target_os = "linux")]
+pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {
+    use gtk::prelude::*;
+    let dialog = gtk::Dialog::with_buttons(
+        Some(title),
+        None::<&gtk::Window>,
+        gtk::DialogFlags::MODAL,
+        &[
+            (action, gtk::ResponseType::Accept),
+            ("Cancel", gtk::ResponseType::Cancel),
+        ],
+    );
+    let entry = gtk::Entry::new();
+    if let Ok(text) = paste_text() {
+        if text.contains("MESH1") {
+            entry.set_text(&text);
+        }
+    }
+    let content = dialog.content_area();
+    content.set_spacing(8);
+    content.set_border_width(12);
+    content.add(&gtk::Label::new(Some(detail)));
+    content.add(&entry);
+    dialog.show_all();
+    let response = dialog.run();
+    let text = entry.text().to_string();
+    unsafe { dialog.destroy() };
+    (response == gtk::ResponseType::Accept).then_some(text)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {
+    if !confirm(title, detail, action) {
+        return None;
+    }
+    paste_text().ok()
+}
+
 pub fn confirm(title: &str, detail: &str, action: &str) -> bool {
     let result = rfd::MessageDialog::new()
         .set_title(title)

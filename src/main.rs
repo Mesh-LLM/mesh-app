@@ -22,6 +22,7 @@ const POLL: Duration = Duration::from_secs(3);
 struct Ui {
     menu: Menu,
     status: MenuItem,
+    status_text: &'static str,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
     retry: MenuItem,
@@ -52,9 +53,9 @@ struct App {
     open_when_ready: Option<&'static str>,
     exit: bool,
     offer_reply: bool,
-    /// A card was just produced -- an RSVP, or a confirmation -- and still has
-    /// to reach the other person. Offered once the restart that produced it is
-    /// finished, so nobody has to find a menu item for it.
+    /// A reply was just produced and still has to reach the person who invited
+    /// you. Offered once the restart that produced it is finished, so nobody
+    /// has to find a menu item for it.
     offer_membership_card: bool,
 }
 
@@ -118,7 +119,7 @@ impl App {
 
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
-        let status = MenuItem::new("Mesh · Getting ready…", false, None);
+        let status = MenuItem::new("Mesh · Starting…", false, None);
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
@@ -147,6 +148,7 @@ impl App {
         self.ui = Some(Ui {
             menu,
             status,
+            status_text: "Mesh · Starting…",
             public,
             private,
             retry,
@@ -298,23 +300,24 @@ impl App {
         if ui.people.items().is_empty() {
             let _ = ui.people.append_items(&[
                 &MenuItem::with_id("invite-member", "Invite someone…", true, None),
-                &MenuItem::with_id("paste-card", "Accept an invitation or RSVP", true, None),
+                &MenuItem::with_id("paste-card", "Paste what they sent", true, None),
             ]);
         }
+        // Three states, not six: a line that changes while the menu is open is
+        // worse than a line that says less. Written only when it differs.
         let text = if self.stopping.is_some() {
             "Mesh · Stopping…"
         } else if self.error.is_some() {
-            "Mesh · Needs attention — Settings for details"
-        } else if !self.snapshot.running {
-            "Mesh · Getting ready…"
-        } else if self.snapshot.models_available {
-            "Mesh · Models available"
-        } else if self.snapshot.local_model_pending {
-            "Mesh · Preparing local model (first download may take a while)…"
+            "Mesh · Needs attention"
+        } else if self.snapshot.running && self.snapshot.models_available {
+            "Mesh · Ready"
         } else {
-            "Mesh · Finding models…"
+            "Mesh · Starting…"
         };
-        ui.status.set_text(text);
+        if ui.status_text != text {
+            ui.status.set_text(text);
+            ui.status_text = text;
+        }
         ui.public.set_enabled(self.stopping.is_none());
         ui.private.set_enabled(self.stopping.is_none());
         let retry = self.error.is_some() && self.child.is_none();
@@ -639,10 +642,7 @@ mod desktop {
             let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
             content.set_border_width(24);
             content.add(&fallback_status);
-            for (label, route) in [
-                ("Open Chat", Some("/chat")),
-                ("Quit Mesh", None),
-            ] {
+            for (label, route) in [("Open Chat", Some("/chat")), ("Quit Mesh", None)] {
                 let button = gtk::Button::with_label(label);
                 let app = app.clone();
                 button.connect_clicked(move |_| {
@@ -661,7 +661,7 @@ mod desktop {
                 ("Public", "public"),
                 ("Private", "private"),
                 ("Request to join", "request"),
-                ("Accept an invitation or RSVP", "paste"),
+                ("Paste what they sent", "paste"),
                 ("Share approved reply", "reply"),
                 ("Cancel pending", "cancel"),
                 ("Retry startup", "retry"),

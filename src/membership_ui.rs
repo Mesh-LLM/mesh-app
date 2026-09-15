@@ -1,10 +1,8 @@
-//! Native Invitation → RSVP → connected journey, in party terms. Two cards:
-//! the inviter sends an invitation, and the guest RSVPs. Accepting the
-//! invitation joins the guest to the inviter alone; confirming the RSVP admits
-//! that exact identity on the inviter's side, which is what connects them. A
-//! third card exists and is now optional -- it introduces the inviter's other
-//! members. File delivery stays explicit: the share sheet works on any
-//! network, or none.
+//! Two cards and nothing else: the inviter sends an invitation, the guest
+//! replies. Accepting the invitation joins the guest to the inviter alone;
+//! confirming the reply admits that exact identity on the inviter's side,
+//! which is what connects them. File delivery stays explicit: the share sheet
+//! works on any network, or none.
 use crate::{native, App};
 use mesh_tray::{identity, invitation, settings, text_card};
 fn now() -> Result<u64, String> {
@@ -15,14 +13,6 @@ fn now() -> Result<u64, String> {
         .try_into()
         .map_err(|_| "Invalid clock".into())
 }
-/// Confirming an RSVP completes the connection on both sides, so the optional
-/// third card is only worth offering when somebody else is already on the list
-/// for the new member to be introduced to. Offered on a first connection it
-/// reads like a required step and makes a two-step exchange feel like three.
-fn should_introduce_other_members(admitted: &[String]) -> bool {
-    admitted.len() > 1
-}
-
 impl App {
     pub(crate) fn invite_member(&mut self) {
         let result = (|| {
@@ -31,7 +21,7 @@ impl App {
             }
             if !native::confirm(
                 "Invite someone to your Mesh",
-                "The invitation is copied to your clipboard — paste it to them however you like. Then paste the RSVP they send back. Expires in 30 minutes.",
+                "The invitation is copied to your clipboard. Paste it to them in any chat. They send a reply back; paste that in here to finish. Expires in 30 minutes.",
                 "Create invitation",
             ) {
                 return Ok(());
@@ -65,7 +55,7 @@ impl App {
                 return Err("Wait for the connection change to finish before sharing".into());
             }
             let bytes = self.settings.membership_receipt.as_ref().ok_or(
-                "Nothing to send yet. Invite someone, or open an invitation and RSVP to it first.",
+                "Nothing to send yet. Invite someone, or paste an invitation and join first.",
             )?;
             let value: serde_json::Value =
                 serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
@@ -79,17 +69,10 @@ impl App {
                 crate::status::private_invite(self.settings.console_port, pid, &owner.owner_id())?;
             }
             native::copy_text(&text_card::encode(bytes))?;
-            if invitation::card_kind(bytes) == Some("confirmation") {
-                native::notice(
-                    "Connected",
-                    "Optional: paste the copied card to them if you want them to know your other members.",
-                );
-            } else {
-                native::notice(
-                    "RSVP copied",
-                    "Send it back to the friend who invited you — any chat, mail or note. Once they confirm it, you are connected.",
-                );
-            }
+            native::notice(
+                "Reply copied",
+                "Paste it back to the person who invited you. Once they confirm it, you are connected.",
+            );
             Ok::<(), String>(())
         })();
         if let Err(e) = result {
@@ -110,12 +93,9 @@ impl App {
             Some("invitation") => {
                 let invite = invitation::inspect(bytes, time)?;
                 if !native::confirm(
-                    "RSVP to this invitation?",
-                    &format!(
-                        "From: {}\n\nYour RSVP is copied to your clipboard when you accept — send it back to them and they can connect you.",
-                        invite.inviter()
-                    ),
-                    "RSVP",
+                    &format!("Join {}'s Mesh?", invite.inviter()),
+                    "Your reply is copied to your clipboard when you join. Paste it back to them and they can connect you.",
+                    "Join",
                 ) {
                     return Ok(true);
                 }
@@ -129,9 +109,9 @@ impl App {
                 // Verifies the reply against the invitation; the code itself is not shown.
                 let (member, _) = invitation::matching_code(bytes, time)?;
                 let Some(allow) = native::decision(
-                    "Is this really them?",
+                    "Connect this person?",
                     &format!(
-                        "Identity: {member}\n\nA name is not proof — confirm only if you asked this person to join. Confirming connects you."
+                        "Identity: {member}\n\nConfirm only if you asked them to join. A name is not proof."
                     ),
                     "Confirm",
                 ) else {
@@ -140,13 +120,10 @@ impl App {
                 let next =
                     invitation::decide_acceptance(owner, &self.settings, bytes, allow, now()?)?;
                 if allow {
-                    // Confirming completes the connection on both sides, so the
-                    // third card is only worth offering when there is somebody
-                    // else on the list for them to be introduced to. With one
-                    // other person it is noise that reads like a required step.
-                    self.offer_membership_card =
-                        should_introduce_other_members(&next.admitted_owners);
+                    // Confirming completes the connection on both sides. There is
+                    // no third card to hand over and nothing else to do.
                     self.queue_settings(next);
+                    native::notice("Connected", "They are on your Mesh now.");
                 } else {
                     next.save(&self.root)?;
                     self.settings = next;
@@ -168,16 +145,4 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::should_introduce_other_members;
-
-    #[test]
-    fn first_connection_is_two_steps_and_later_ones_can_introduce() {
-        assert!(!should_introduce_other_members(&[]));
-        assert!(!should_introduce_other_members(&["jo".to_string()]));
-        assert!(should_introduce_other_members(&[
-            "jo".to_string(),
-            "sam".to_string()
-        ]));
-    }
-}
+mod tests {}
