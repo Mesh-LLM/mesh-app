@@ -3,7 +3,10 @@
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::AnyThread;
-use objc2_app_kit::{NSAlert, NSApplication, NSOpenPanel, NSSharingServicePicker};
+use objc2_app_kit::{
+    NSAlert, NSApplication, NSOpenPanel, NSPasteboard, NSPasteboardTypeString,
+    NSSharingServicePicker,
+};
 use objc2_foundation::{MainThreadMarker, NSArray, NSRectEdge, NSString, NSURL};
 use std::path::PathBuf;
 
@@ -38,6 +41,29 @@ impl Native {
         self.shares.push((picker, file));
         Ok(())
     }
+}
+
+/// Put a card on the clipboard so it can be pasted into any chat app. Replaces
+/// the clipboard's contents, which is what a "Copy" action is expected to do.
+pub fn copy_text(text: &str) -> Result<(), String> {
+    let _ = MainThreadMarker::new().ok_or("Copying must run on the main thread")?;
+    let pasteboard = NSPasteboard::generalPasteboard();
+    unsafe {
+        pasteboard.clearContents();
+        if !pasteboard.setString_forType(&NSString::from_str(text), NSPasteboardTypeString) {
+            return Err("macOS refused to put the card on the clipboard.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Read pasted text. Anything else on the clipboard reads as "no card".
+pub fn paste_text() -> Result<String, String> {
+    let _ = MainThreadMarker::new().ok_or("Pasting must run on the main thread")?;
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let text = unsafe { pasteboard.stringForType(NSPasteboardTypeString) }
+        .ok_or("The clipboard has no text on it. Copy the card they sent, then try again.")?;
+    Ok(text.to_string())
 }
 
 // Tray clicks do not necessarily activate an accessory app. Bring user-requested

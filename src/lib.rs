@@ -2,6 +2,7 @@
 pub mod exchange;
 
 pub mod share_file;
+pub mod text_card;
 
 pub mod admission;
 pub mod consent;

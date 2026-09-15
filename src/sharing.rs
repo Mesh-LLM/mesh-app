@@ -52,9 +52,22 @@ impl App {
         }
     }
     pub(crate) fn review_file(&mut self, path: &Path) {
+        match share_file::read(path) {
+            Ok(bytes) => self.review_card(bytes),
+            Err(e) => native::notice("Could not open that Mesh file", &e),
+        }
+    }
+    /// Read whatever they sent from the clipboard. The card says which leg of
+    /// the journey it is, so the user never has to.
+    pub(crate) fn paste_card(&mut self) {
+        match native::paste_text().and_then(|text| mesh_tray::text_card::decode(&text)) {
+            Ok(bytes) => self.review_card(bytes),
+            Err(e) => native::notice("Nothing to paste", &e),
+        }
+    }
+    pub(crate) fn review_card(&mut self, bytes: Vec<u8>) {
         let result = (|| {
             self.share_ready()?;
-            let bytes = share_file::read(path)?;
             let owner = self.owner()?;
             let time = now()?;
             if self.review_membership_file(&bytes, &owner, time)? {

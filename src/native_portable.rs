@@ -22,6 +22,35 @@ impl Native {
         std::fs::write(path, bytes).map_err(|e| e.to_string())
     }
 }
+/// GTK owns the clipboard on the platform this adapter actually ships on; the
+/// adapter is compiled on macOS only to keep the two APIs in step, and macOS
+/// uses `NSPasteboard` in `native.rs`.
+#[cfg(target_os = "linux")]
+pub fn copy_text(text: &str) -> Result<(), String> {
+    gtk::prelude::GtkClipboardExtManual::set_text(
+        &gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD),
+        text,
+    );
+    Ok(())
+}
+#[cfg(target_os = "linux")]
+pub fn paste_text() -> Result<String, String> {
+    gtk::prelude::GtkClipboardExtManual::wait_for_text(&gtk::Clipboard::get(
+        &gtk::gdk::SELECTION_CLIPBOARD,
+    ))
+    .map(|text| text.to_string())
+    .ok_or_else(|| {
+        "The clipboard has no text on it. Copy the card they sent, then try again.".into()
+    })
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn copy_text(_: &str) -> Result<(), String> {
+    Err("Copying is not available on this platform. Send the card as a file instead.".into())
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn paste_text() -> Result<String, String> {
+    Err("Pasting is not available on this platform. Open the card as a file instead.".into())
+}
 pub fn choose_file() -> Option<PathBuf> {
     rfd::FileDialog::new()
         .set_title("Open Mesh request or reply")

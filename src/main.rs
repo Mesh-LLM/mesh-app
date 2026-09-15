@@ -301,7 +301,8 @@ impl App {
             while ui.people.remove_at(0).is_some() {}
             let _ = ui.people.append_items(&[
                 &MenuItem::with_id("invite-member", "Invite someone…", true, None),
-                &MenuItem::with_id("open-file", "Open what they sent…", true, None),
+                &MenuItem::with_id("paste-card", "Paste what they sent", true, None),
+                &MenuItem::with_id("open-file", "Open a file they sent…", true, None),
             ]);
             if let Some(label) = offer {
                 let _ = ui
@@ -412,6 +413,7 @@ impl App {
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite-member" => self.invite_member(),
                 "share-membership" => self.share_membership(),
+                "paste-card" => self.paste_card(),
                 "share-request" => self.share_request(),
                 "open-file" => {
                     if let Some(path) = native::choose_file() {
@@ -717,6 +719,7 @@ mod desktop {
                 ("Public", "public"),
                 ("Private", "private"),
                 ("Request to join", "request"),
+                ("Paste what they sent", "paste"),
                 ("Open Mesh file", "open"),
                 ("Share approved reply", "reply"),
                 ("Cancel pending", "cancel"),
@@ -735,6 +738,7 @@ mod desktop {
                             app.change_mode(settings::Connection::Private { invite: None })
                         }
                         "request" => app.share_request(),
+                        "paste" => app.paste_card(),
                         "open" => {
                             if let Some(path) = native::choose_file() {
                                 app.review_file(&path);

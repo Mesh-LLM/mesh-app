@@ -6,7 +6,7 @@
 //! members. File delivery stays explicit: the share sheet works on any
 //! network, or none.
 use crate::{native, App};
-use mesh_tray::{identity, invitation, share_file};
+use mesh_tray::{identity, invitation, text_card};
 fn now() -> Result<u64, String> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -31,7 +31,7 @@ impl App {
             }
             if !native::confirm(
                 "Invite someone to your Mesh",
-                "Send them the invitation, then open the RSVP they send back. Expires in 30 minutes.",
+                "The invitation is copied to your clipboard — paste it to them however you like. Then paste the RSVP they send back. Expires in 30 minutes.",
                 "Create invitation",
             ) {
                 return Ok(());
@@ -48,10 +48,12 @@ impl App {
             let next = invitation::remember_invitation(&self.settings, &bytes, now()?)?;
             next.save(&self.root)?;
             self.settings = next;
-            self.native.share(
-                share_file::stage(&bytes)?,
-                &self.ui.as_ref().ok_or("Tray unavailable")?._tray,
-            )
+            native::copy_text(&text_card::encode(&bytes))?;
+            native::notice(
+                "Invitation copied",
+                "Paste it to them in any chat, mail or note.",
+            );
+            Ok::<(), String>(())
         })();
         if let Err(e) = result {
             native::notice("Could not invite member", &e);
@@ -76,21 +78,19 @@ impl App {
                     .id();
                 crate::status::private_invite(self.settings.console_port, pid, &owner.owner_id())?;
             }
+            native::copy_text(&text_card::encode(bytes))?;
             if invitation::card_kind(bytes) == Some("confirmation") {
                 native::notice(
                     "Connected",
-                    "Optional: send this card if you want them to know your other members.",
+                    "Optional: paste the copied card to them if you want them to know your other members.",
                 );
             } else {
                 native::notice(
-                    "RSVP ready to send",
-                    "Send it back to them. Once they confirm it, you are connected.",
+                    "RSVP copied",
+                    "Paste it back to them. Once they confirm it, you are connected.",
                 );
             }
-            self.native.share(
-                share_file::stage(bytes)?,
-                &self.ui.as_ref().ok_or("Tray unavailable")?._tray,
-            )
+            Ok::<(), String>(())
         })();
         if let Err(e) = result {
             native::notice("Could not share membership file", &e);
