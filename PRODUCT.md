@@ -37,6 +37,10 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   exists, so there is no retry item; a card that never arrived is replaced by
   inviting again. No roster and no per-person remove in the menu: the console
   lists members, and "Start Over" is the only revoke on this build.
+- A config.toml the user has taken over decides the model: when it declares
+  `[[models]]` the tray passes no `--model`, because the flag would beat the
+  file. Ports, connection mode and the allowlist stay flags -- the console port
+  has no config key and the mode is what the radio buttons mean.
 - Identity and pairings persist across ordinary runs. "Start Over" forgets this
   tray's identity, trust and remembered people after stopping the child; it never
   touches downloaded models, the user's own `~/.mesh-llm`, or another Mesh node.

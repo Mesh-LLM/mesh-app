@@ -53,6 +53,28 @@ fn write(path: &Path, contents: &str) -> Result<(), String> {
     std::fs::write(path, contents).map_err(|e| e.to_string())
 }
 
+/// True when the user's own config declares startup models.
+///
+/// `--model` on the command line beats `[[models]]` in the file, so a tray that
+/// always passes the flag would silently ignore a model the user configured.
+/// When the file is theirs and names models, the tray passes no `--model` and
+/// the file decides. The tray's own file never declares models, so this is
+/// false until someone takes the file over.
+pub fn config_declares_models(home: &Path) -> bool {
+    let path = home.join(".mesh-llm/config.toml");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return false;
+    };
+    if text.starts_with(MARKER) {
+        return false;
+    }
+    // A file we cannot parse is the engine's to complain about, not ours to
+    // interpret: fall back to the tray's pick rather than starting with none.
+    toml::from_str::<toml::Value>(&text)
+        .map(|value| value.get("models").is_some())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,6 +101,31 @@ mod tests {
         std::fs::write(&path, format!("{MARKER}\n[defaults.request_defaults]\n")).unwrap();
         assert_eq!(ensure_defaults(root.path()).unwrap(), Some(path.clone()));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), first);
+    }
+
+    #[test]
+    fn a_configured_model_is_obeyed_only_when_the_file_is_the_users() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path();
+        let path = home.join(".mesh-llm/config.toml");
+        // No file at all: nothing to obey.
+        assert!(!config_declares_models(home));
+        // The tray's own file declares no models.
+        ensure_defaults(home).unwrap();
+        assert!(!config_declares_models(home));
+        // Theirs, with models: the file decides and the tray adds no --model.
+        std::fs::write(&path, "version = 1\n[[models]]\nname = \"mine\"\n").unwrap();
+        assert!(config_declares_models(home));
+        // Theirs, without models: the tray still supplies its pick.
+        std::fs::write(
+            &path,
+            "version = 1\n[defaults.model_fit]\nctx_size = 4096\n",
+        )
+        .unwrap();
+        assert!(!config_declares_models(home));
+        // Unparsable: the engine reports it; the tray does not start modelless.
+        std::fs::write(&path, "this is not toml = = =\n").unwrap();
+        assert!(!config_declares_models(home));
     }
 
     #[test]

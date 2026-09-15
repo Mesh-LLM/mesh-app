@@ -2576,6 +2576,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "toml",
  "tray-icon",
  "ureq",
  "winit",

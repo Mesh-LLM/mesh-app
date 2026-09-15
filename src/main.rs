@@ -222,12 +222,7 @@ impl App {
             .append(true)
             .open(self.root.join("mesh.log"))
             .map_err(|e| e.to_string())?;
-        let model = mesh_tray::model_selection::local_model(&self.settings.connection)?;
         let mut command = Command::new(binary);
-        if let Some(model) = model.as_deref() {
-            use std::io::Write;
-            writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
-        }
         {
             use std::io::Write;
             // Thinking off for tray chat. A config the user has taken over is
@@ -241,6 +236,24 @@ impl App {
                 ),
             }
             .map_err(|e| e.to_string())?;
+        }
+        // Their `[[models]]` wins: a `--model` flag would beat the file, so when
+        // the file names models the tray passes none and stays out of the way.
+        let model = if mesh_tray::runtime_config::config_declares_models(&home) {
+            use std::io::Write;
+            writeln!(
+                &log,
+                "Tray model: none, {} declares its own models",
+                home.join(".mesh-llm/config.toml").display()
+            )
+            .map_err(|e| e.to_string())?;
+            None
+        } else {
+            mesh_tray::model_selection::local_model(&self.settings.connection)?
+        };
+        if let Some(model) = model.as_deref() {
+            use std::io::Write;
+            writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
         command
             .args(self.settings.args())
