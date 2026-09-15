@@ -118,7 +118,15 @@ just clean
 
 Packaging verifies pinned archive/host digests, preserves native runtime layout,
 records the source commit and file hashes in `SHA256.json`, and refuses an existing
-destination. This handoff updates instructions only; the existing bundle and
+destination.
+
+If the tray binary needs an ad-hoc signature for local running, sign
+`target/release/mesh-tray` **before** packaging. Never run `codesign` on the
+assembled `.app`: it rewrites the bundled native-runtime dylibs, and the runtime
+then refuses to start with `native runtime file checksum mismatch` against its own
+`manifest.json`.
+
+This handoff updates instructions only; the existing bundle and
 manifest remain at `41d4314`. Signing/notarization, installer/update distribution,
 Windows/Linux native validation and automatic file transport remain future work,
 not blockers to this attended macOS trial. Never publish this as a finished release.
