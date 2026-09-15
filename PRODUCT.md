@@ -1,6 +1,6 @@
 # Product
 
-Standalone native Mesh tray. Official prebuilt Mesh v0.76.1, unchanged; no Buzz
+Standalone native Mesh tray. Official prebuilt Mesh v0.76.2, unchanged; no Buzz
 runtime, SDK conversion, engine source patch or updater/distribution publication.
 
 - Public retains `serve --auto`. Private and invitation joins use `serve`, select

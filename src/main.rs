@@ -232,6 +232,20 @@ impl App {
             use std::io::Write;
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
+        {
+            use std::io::Write;
+            // Thinking off for tray chat. A config the user has taken over is
+            // reported and left alone, never replaced.
+            match mesh_tray::runtime_config::ensure_defaults(&home)? {
+                Some(path) => writeln!(&log, "Tray engine defaults: {}", path.display()),
+                None => writeln!(
+                    &log,
+                    "Tray engine defaults: skipped, {} is yours",
+                    home.join(".mesh-llm/config.toml").display()
+                ),
+            }
+            .map_err(|e| e.to_string())?;
+        }
         command
             .args(self.settings.args())
             .stdin(Stdio::null())

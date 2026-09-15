@@ -9,8 +9,8 @@ import subprocess
 import sys
 import tarfile
 
-ARCHIVE_SHA256 = "5bb00113682ba068862bfdf839f8519de8cde27bf0aaa6eb561727ec0392f7d6"
-HOST_SHA256 = "79842e58af6b4258e17110099964e7aac2a9fab10b05dcd3a06dad22c3059c23"
+ARCHIVE_SHA256 = "a2e3c57ab8af03ca0815fa19ef8649852fba12a314d4fe75b977478c8524f63e"
+HOST_SHA256 = "02c789bacf1360aed9b6024da11ece7b69acc81ca32e243c7a81bcea21bce12f"
 
 
 def sha(path):
@@ -22,7 +22,7 @@ def package(tray, archive, destination):
     if destination.exists():
         raise ValueError("Destination already exists; refusing replacement")
     if sha(archive) != ARCHIVE_SHA256:
-        raise ValueError("Expected official Mesh 0.76.1 macOS arm64 archive")
+        raise ValueError("Expected official Mesh 0.76.2 macOS arm64 archive")
     if not tray.is_file():
         raise ValueError("Build target/release/mesh-tray first")
     destination.mkdir(parents=True)
@@ -52,7 +52,7 @@ def package(tray, archive, destination):
         }, out)
     repo = pathlib.Path(__file__).resolve().parents[1]
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    manifest = {"tray_commit": head, "mesh_version": "0.76.1",
+    manifest = {"tray_commit": head, "mesh_version": "0.76.2",
                 "archive_sha256": ARCHIVE_SHA256, "files": {}}
     for path in sorted(app.rglob("*")):
         if path.is_file():

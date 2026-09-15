@@ -2,7 +2,7 @@
 
 **Ready to try on macOS arm64.** This is a local, unsigned/not-notarized candidate,
 not an installer or replacement for the installed preview. The bundled tray is
-built at `41d4314` and uses the unchanged official Mesh **0.76.1** and its adjacent
+built at `41d4314` and uses the unchanged official Mesh **0.76.2** and its adjacent
 native runtime. Mic has cleared the prior zero-Keychain-prompts blocker; no engine
 change is required. Ordinary first-run macOS authorization may appear. If prompts
 repeat or access fails, cancel and Quit this candidate; do not repeatedly Retry,
@@ -119,7 +119,7 @@ no additional state-machine code prerequisite for this manual journey.
 
 ```sh
 python3 scripts/package-preview.py target/release/mesh-tray \
-  /absolute/mesh-llm-v0.76.1-aarch64-apple-darwin.tar.gz /absolute/new-candidate
+  /absolute/mesh-llm-v0.76.2-aarch64-apple-darwin.tar.gz /absolute/new-candidate
 just clean
 ```
 

@@ -2,15 +2,19 @@
 //! Joining preserves local serving participation.
 use crate::settings::Connection;
 
-// Gemma on both tiers, deliberately diverging from Buzz's catalog ladder
-// (`desktop/src-tauri/src/mesh_llm/catalog.rs`). Measured on the same prompt,
-// the Qwen picks spend their whole token budget reasoning and often return no
-// answer at all, while both Gemma picks think briefly and then answer every
-// time. A tray chat window is the one place that failure is unrecoverable, so
-// the tray picks for answer-reliability rather than catalog parity. Boundary
-// stays at Buzz's 32 GB so the tier a machine lands in does not change.
-const SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF@main:Q4_K_M";
-const LARGE: &str = "unsloth/gemma-4-26B-A4B-it-GGUF@main:Q4_K_M";
+// Two picks, not a ladder: the small one is the default everywhere, and the
+// large one is chosen only where there is no doubt it fits. Buzz's catalog
+// (`desktop/src-tauri/src/mesh_llm/catalog.rs`) steps up at 32 GB; the tray
+// deliberately waits until 64 GiB, because a tray chat window is the one place
+// a model that does not fit is unrecoverable -- the user has no other model to
+// switch to. Erring small costs quality; erring large costs the product.
+//
+// Both are Qwen again. They were briefly replaced by Gemma because they spent
+// their whole token budget reasoning and often returned no answer; the tray now
+// turns thinking off for its own runtime child (`runtime_config`), which
+// removes that failure at its cause.
+const SMALL: &str = "unsloth/Qwen3.5-9B-GGUF@main:Q4_K_M";
+const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@main:Q4_K_M";
 
 pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     if !matches!(connection, Connection::Private { .. }) {
@@ -35,9 +39,9 @@ fn choose(bytes: u64) -> Result<&'static str, String> {
     // both boundaries for the sizes Macs ship, so this reads memory directly
     // rather than taking a dependency on the runtime's hardware crate.
     match bytes / (1024 * 1024 * 1024) {
-        32.. => Ok(LARGE),
-        8.. => Ok(SMALL),
-        _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically.".into()),
+        64.. => Ok(LARGE),
+        16.. => Ok(SMALL),
+        _ => Err("Private hosting needs at least 16 GiB memory. This device cannot select a local model automatically. Set MESH_TRAY_MODEL to choose one yourself.".into()),
     }
 }
 
@@ -83,15 +87,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tiers_are_gemma_either_side_of_the_boundary() {
+    fn small_is_the_default_and_large_needs_no_doubt() {
         let gib = 1024 * 1024 * 1024;
-        for size in [0, 4, 7] {
+        for size in [0, 4, 8, 15] {
             assert!(choose(size * gib).is_err());
         }
-        for size in [8, 16, 24, 31] {
+        for size in [16, 18, 24, 32, 36, 48, 63] {
             assert_eq!(choose(size * gib).unwrap(), SMALL);
         }
-        for size in [32, 48, 64, 79, 80, 96, 128, 512] {
+        for size in [64, 96, 128, 512] {
             assert_eq!(choose(size * gib).unwrap(), LARGE);
         }
     }

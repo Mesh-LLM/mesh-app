@@ -11,6 +11,7 @@ pub mod settings;
 
 pub mod reset;
 
+pub mod runtime_config;
 pub mod runtime_home;
 
 pub mod invitation;
