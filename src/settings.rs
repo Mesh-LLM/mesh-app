@@ -196,12 +196,36 @@ fn port_override(key: &str, default: u16) -> Result<u16, String> {
 }
 
 pub fn data_root() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("MESH_TRAY_DATA_DIR") {
-        return Ok(PathBuf::from(path));
+    for key in ["MESH_APP_DATA_DIR", "MESH_TRAY_DATA_DIR"] {
+        if let Some(path) = std::env::var_os(key) {
+            return Ok(PathBuf::from(path));
+        }
     }
     let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .ok_or("Cannot locate the Mesh app data directory")?;
-    Ok(PathBuf::from(home).join(".mesh-tray"))
+    let home = PathBuf::from(home);
+    let root = home.join(".mesh-app");
+    adopt_previous_profile(&home.join(".mesh-tray"), &root)?;
+    Ok(root)
+}
+
+/// Move an earlier release's `~/.mesh-tray` profile to the current name.
+///
+/// Renaming the directory would otherwise silently orphan an identity and every
+/// remembered friend. Only an untouched destination is filled, and only from a
+/// real directory: if both exist the current one is authoritative and the old
+/// one is left on disk for the user to inspect or delete.
+fn adopt_previous_profile(previous: &Path, root: &Path) -> Result<(), String> {
+    if root.exists() || !previous.is_dir() {
+        return Ok(());
+    }
+    std::fs::rename(previous, root).map_err(|e| {
+        format!(
+            "Cannot move {} to {}: {e}. The old profile was left unchanged.",
+            previous.display(),
+            root.display()
+        )
+    })
 }
 
 pub fn binary() -> Result<PathBuf, String> {
@@ -402,6 +426,31 @@ mod tests {
             ..Settings::default()
         };
         assert!(settings.validate().is_err());
+    }
+    #[test]
+    fn an_earlier_profile_directory_is_adopted_but_never_overwrites_the_current_one() {
+        let base = tempfile::tempdir().unwrap();
+        let previous = base.path().join(".mesh-tray");
+        let root = base.path().join(".mesh-app");
+        // Nothing to adopt: silent no-op.
+        adopt_previous_profile(&previous, &root).unwrap();
+        assert!(!root.exists());
+        // The old profile's identity and friends come across whole.
+        std::fs::create_dir_all(previous.join("home/.mesh-llm")).unwrap();
+        std::fs::write(previous.join("launcher.json"), "{}").unwrap();
+        adopt_previous_profile(&previous, &root).unwrap();
+        assert!(root.join("home/.mesh-llm").is_dir());
+        assert!(root.join("launcher.json").exists());
+        assert!(!previous.exists());
+        // Both present: the current profile wins and the old one is left alone.
+        std::fs::create_dir_all(&previous).unwrap();
+        std::fs::write(previous.join("launcher.json"), "old").unwrap();
+        adopt_previous_profile(&previous, &root).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join("launcher.json")).unwrap(),
+            "{}"
+        );
+        assert!(previous.join("launcher.json").exists());
     }
     #[test]
     fn roundtrips_private_choice_and_checks_ports() {

@@ -54,7 +54,7 @@ regenerated.
 
 Ports are overridable with `MESH_LLM_CONSOLE_PORT` / `MESH_LLM_API_PORT`.
 Occupied ports are not adopted or stopped, and only children this tray started
-are ever terminated. Tests and demos must use a fresh `MESH_TRAY_DATA_DIR`.
+are ever terminated. Tests and demos must use a fresh `MESH_APP_DATA_DIR`.
 
 Private model selection follows the same ladder Buzz recommends, classified on
 the machine's rated memory rather than what is free at launch: Gemma 4 E4B below

@@ -31,7 +31,8 @@ pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     }
     // An explicit choice is honoured as-is: trying a different model should not
     // require a rebuild, and the ladder below is a default, not a policy.
-    if let Some(chosen) = std::env::var("MESH_TRAY_MODEL")
+    if let Some(chosen) = std::env::var("MESH_APP_MODEL")
+        .or_else(|_| std::env::var("MESH_TRAY_MODEL"))
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -50,7 +51,7 @@ fn choose(bytes: u64) -> Result<&'static str, String> {
     match bytes / (1024 * 1024 * 1024) {
         128.. => Ok(LARGE),
         8.. => Ok(SMALL),
-        _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically. Set MESH_TRAY_MODEL to choose one yourself.".into()),
+        _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically. Set MESH_APP_MODEL to choose one yourself.".into()),
     }
 }
 

@@ -31,7 +31,7 @@ PROFILE="$HOME/Library/Application Support/Mesh Candidate Trial A"
   mkdir -p "$(dirname "$PROFILE")"
   mkdir "$PROFILE" || exit 1
   printf '%s\n' '{"connection":{"mode":"private","invite":null}}' > "$PROFILE/launcher.json"
-  env MESH_TRAY_DATA_DIR="$PROFILE" \
+  env MESH_APP_DATA_DIR="$PROFILE" \
     MESH_LLM_CONSOLE_PORT=33232 MESH_LLM_API_PORT=39447 \
     MESH_LLM_BIN="$CANDIDATE/Mesh Candidate.app/Contents/MacOS/mesh-llm" \
     "$CANDIDATE/Mesh Candidate.app/Contents/MacOS/mesh-tray"
@@ -42,7 +42,7 @@ Keep the terminal open. The jellyfish appears in the menu bar (no main window).
 If macOS blocks opening an unsigned downloaded app, use the normal macOS
 Privacy & Security review only if you trust this artifact; do not strip quarantine
 or re-sign binaries as a workaround. Bundle and profile paths must stay stable.
-Do not double-click for this trial: that omits overrides and uses `~/.mesh-tray`.
+Do not double-click for this trial: that omits overrides and uses `~/.mesh-app`.
 Do not move `native-runtimes` away from the bundled executables.
 
 For B/C on separate Macs use names `Trial B`/`Trial C` in `PROFILE`. If intentionally
