@@ -47,8 +47,8 @@ downloaded twice because there is only one cache.
 
 Public and Private are flags on the same node, not two identities: `--auto` for
 Public, and `--owner-required --trust-policy allowlist` plus one `--trust-owner`
-per admitted person for Private. Switching modes keeps your identity, so an
-invitation you sent still works afterwards. The roster is declared on the
+per admitted person for Private. Switching modes keeps your identity — it is the
+trusted list, not the identity, that going Public gives up. The roster is declared on the
 command line, exactly as Buzz declares its own through the SDK
 (`desktop/src-tauri/src/mesh_llm/mod.rs:399-406`), so the tray never edits your
 trust store. The engine merges those arguments with the store in memory and
@@ -72,10 +72,12 @@ instances per profile are supported — each takes its own
 `~/.mesh-llm/runtime/<pid>` with a lock — but that identity being on the mesh
 twice at once is not something we have tested. Run one at a time for now.
 
-**Start Over** deletes the launcher state, so the tray trusts nobody and holds
-no outstanding invitations. It does not touch your machine's Mesh identity,
-which the CLI and Buzz share: resetting that is `rm -rf ~/.mesh-llm`, and it
-resets them too.
+There is no separate "start over", because switching Mesh is starting over:
+going Public forgets everyone you trusted and every invitation outstanding, and
+starting a Private Mesh starts it with nobody in it. Public trusts nobody in
+particular, so there is nothing left to reset. Your machine's Mesh identity is
+not part of that and does not change — it is shared with the CLI and Buzz, and
+resetting it is `rm -rf ~/.mesh-llm`, which resets them too.
 
 Private model selection is two Gemma picks, classified on the machine's rated
 memory rather than what is free at launch: Gemma 4 E4B below 128 GiB, the 26B

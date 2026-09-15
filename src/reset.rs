@@ -1,41 +1,37 @@
-//! Start this tray over: forget the people and the invitations it remembers.
+//! Changing mode forgets this Mesh. There is one concept, not two.
 //!
-//! All of that state is launcher state, in `~/.mesh-app/launcher.json`: who was
-//! admitted, what they are called, which invitations are outstanding, which
-//! Mesh seeds were accepted, and the mode. The tray declares its roster to the
-//! engine on the command line, so clearing this file is the whole reset -- the
-//! next start declares nobody. Grants the user or Buzz made in their own
-//! `~/.mesh-llm/trusted-owners.json` are theirs and survive, because the engine
-//! merges that store with the tray's arguments; removing one is `mesh-llm auth`.
+//! Everything the tray remembers is one relationship: who is trusted, what they
+//! are called, which invitations are outstanding, which Mesh seeds were
+//! accepted. That set belongs to the private Mesh you were running, so leaving
+//! it — going Public, or starting a new Private one — forgets it. Public trusts
+//! nobody in particular, so there is nothing left over to reset separately.
 //!
-//! Deliberately untouched: your machine's Mesh identity in `~/.mesh-llm`, which
-//! the plain CLI and Buzz share (resetting that is `rm -rf ~/.mesh-llm`, and it
-//! resets them too), your engine `config.toml`, and downloaded models.
-use std::path::Path;
+//! The roster reaches the engine as `--trust-owner` arguments, so forgetting is
+//! complete: the next start declares nobody. Grants the user or Buzz made in
+//! their own `~/.mesh-llm/trusted-owners.json` are theirs and survive, because
+//! the engine merges that store with the tray's arguments; removing one is
+//! `mesh-llm auth`. The machine's Mesh identity, the engine config and
+//! downloaded models are never touched.
+use crate::settings::{Connection, Settings};
 
-/// Forget everyone this tray paired with. The caller must stop the child first;
-/// this does not signal or wait on a running runtime.
-pub fn perform(root: &Path) -> Result<(), String> {
-    // Keep the ports, because they describe this installation rather than any
-    // relationship, and a reset that moved the console would look like a fault.
-    let current = crate::settings::Settings::load(root)?;
-    crate::settings::Settings {
+/// The settings to start in `connection`, having forgotten the Mesh you were in.
+///
+/// Ports are kept, because they describe this installation rather than any
+/// relationship, and a switch that moved the console would look like a fault.
+pub fn switching_to(current: &Settings, connection: Connection) -> Settings {
+    Settings {
+        connection,
         console_port: current.console_port,
         api_port: current.api_port,
         ..Default::default()
     }
-    .save(root)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{Connection, Settings};
 
-    #[test]
-    fn forgets_people_invitations_and_mode_but_keeps_ports() {
-        let root = tempfile::tempdir().unwrap();
-        let root = root.path();
+    fn paired() -> Settings {
         let owner = "ab".repeat(32);
         let mut settings = Settings {
             connection: Connection::Private {
@@ -44,34 +40,38 @@ mod tests {
             admitted_owners: vec![owner.clone()],
             seeds: vec!["seed".into()],
             issued_membership_invitations: vec!["issued".into()],
+            membership_receipt: Some(b"card".to_vec()),
             console_port: 4242,
             api_port: 4243,
             ..Default::default()
         };
         settings.owner_names.insert(owner, "Someone".into());
-        settings.save(root).unwrap();
+        settings
+    }
 
-        perform(root).unwrap();
-
-        let after = Settings::load(root).unwrap();
+    #[test]
+    fn going_public_forgets_who_was_trusted_and_keeps_the_ports() {
+        let after = switching_to(&paired(), Connection::Automatic);
+        after.validate().unwrap();
+        assert_eq!(after.connection, Connection::Automatic);
         assert!(after.admitted_owners.is_empty());
         assert!(after.owner_names.is_empty());
         assert!(after.seeds.is_empty());
         assert!(after.issued_membership_invitations.is_empty());
-        assert_eq!(after.connection, Connection::Automatic);
+        assert!(after.membership_receipt.is_none());
         assert_eq!((after.console_port, after.api_port), (4242, 4243));
-        // Nothing the engine owns is reachable from a reset.
+        // Nothing is declared to the engine, so nobody is trusted on restart.
         assert!(!after.args().contains(&"--trust-owner".into()));
     }
 
     #[test]
-    fn is_idempotent_on_a_tray_that_never_paired() {
-        let root = tempfile::tempdir().unwrap();
-        perform(root.path()).unwrap();
-        perform(root.path()).unwrap();
-        assert!(Settings::load(root.path())
-            .unwrap()
-            .admitted_owners
-            .is_empty());
+    fn a_new_private_mesh_starts_with_nobody_in_it() {
+        let after = switching_to(&paired(), Connection::Private { invite: None });
+        after.validate().unwrap();
+        assert_eq!(after.connection, Connection::Private { invite: None });
+        assert!(after.admitted_owners.is_empty());
+        assert!(after.seeds.is_empty());
+        assert!(!after.args().contains(&"--trust-owner".into()));
+        assert!(after.args().contains(&"--owner-required".into()));
     }
 }

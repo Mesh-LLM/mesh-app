@@ -133,8 +133,8 @@ not blockers to this attended macOS trial. Never publish this as a finished rele
 
 ## Start over
 
-Tray menu > "Start Over (Forget This Mesh)…" stops the runtime, then forgets this
-tray's identity, trust store and remembered people, so the next start pairs from
-scratch. Downloaded models, your own `~/.mesh-llm` CLI identity, other Mesh nodes
-and Buzz data are left alone. Ordinary quit and restart keeps identity and
-pairings — resetting is always an explicit choice.
+There is no Start Over item: switching Mesh is starting over. Choosing Public
+stops the runtime and forgets everyone you trusted and any invitation
+outstanding; choosing Private starts a Mesh with nobody in it. Both ask first.
+Your machine identity, downloaded models, engine config, other Mesh nodes and
+Buzz data are left alone, and ordinary quit and restart keeps your pairings.

@@ -30,8 +30,10 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   forgetting someone in the tray does not revoke a grant the user or Buzz made
   in `~/.mesh-llm/trusted-owners.json`.
 - Launcher state is `~/.mesh-app/launcher.json` and `mesh.log`, and nothing else.
-  Start Over clears it; the machine identity, engine config and models are the
-  user's and are never touched.
+- One reset concept, not two: changing mode forgets the Mesh being left -- the
+  trusted list, outstanding invitations and seeds. No separate Start Over item.
+  The machine identity, engine config and models are the user's and are never
+  touched.
 - One credential prompt per launch, not two: startup verifies the profile's
   identity from public keystore metadata (owner id checked against the signing
   key) and never unlocks the secret. Only the runtime child unlocks it, plus the
@@ -42,14 +44,14 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   RSVP that was pasted in. Every card is copied to the clipboard the moment it
   exists, so there is no retry item; a card that never arrived is replaced by
   inviting again. No roster and no per-person remove in the menu: the console
-  lists members, and "Start Over" is the only revoke on this build.
+  lists members, and going Public is the only revoke on this build.
 - A config.toml the user has taken over decides the model: when it declares
   `[[models]]` the tray passes no `--model`, because the flag would beat the
   file. Ports, connection mode and the allowlist stay flags -- the console port
   has no config key and the mode is what the radio buttons mean.
-- Identity and pairings persist across ordinary runs. "Start Over" forgets this
-  tray's identity, trust and remembered people after stopping the child; it never
-  touches downloaded models, the user's own `~/.mesh-llm`, or another Mesh node.
+- Pairings persist across ordinary runs; changing mode forgets them after
+  stopping the child. Identity persists through both, and downloaded models, the
+  engine config and other Mesh nodes are never touched.
 
 ## Current human trial
 

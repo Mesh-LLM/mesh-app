@@ -2,7 +2,8 @@
 
 One identity per machine: the child runs as the user against `~/.mesh-llm`, and
 Public/Private are flags on that node. Launcher state is `~/.mesh-app`
-(`launcher.json`, `mesh.log`) and Start Over deletes it.
+(`launcher.json`, `mesh.log`). Changing mode forgets the Mesh being left, so
+there is no separate Start Over.
 
 OS-native jellyfish status menu: Public/Private, Members, optional Chat, existing
 console Settings, Quit. Members contains Invite, Open invitation/reply, Share reply

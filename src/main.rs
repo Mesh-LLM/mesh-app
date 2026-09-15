@@ -45,7 +45,6 @@ struct App {
     polling: bool,
     started: Option<Instant>,
     stopping: Option<Instant>,
-    pending_reset: bool,
     error: Option<String>,
     /// Log length when the current run was started, so a fatal line from an
     /// earlier run is never quoted as this run's reason.
@@ -108,7 +107,6 @@ impl App {
             polling: false,
             started: None,
             stopping: None,
-            pending_reset: false,
             error: None,
             log_mark: 0,
             open_when_ready: None,
@@ -128,7 +126,6 @@ impl App {
         let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
         let people = muda::Submenu::new("Members", true);
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
-        let reset = MenuItem::with_id("reset", "Start Over (Forget This Mesh)…", true, None);
         menu.append_items(&[
             &chat,
             &PredefinedMenuItem::separator(),
@@ -138,7 +135,6 @@ impl App {
             &people,
             &PredefinedMenuItem::separator(),
             &settings,
-            &reset,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -398,7 +394,6 @@ impl App {
                 "share-reply" => self.share_reply(),
 
                 "retry" => self.start(),
-                "reset" => self.reset(),
                 "quit" => self.quit(),
                 _ => {}
             }
@@ -491,11 +486,27 @@ impl App {
         {
             return;
         }
-        if !native::confirm(
-            "Change Mesh connection?",
-            "Restarts this app’s Mesh and cancels anything outstanding.",
-            "Change connection",
-        ) {
+        let leaving_private = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        ) && !self.settings.admitted_owners.is_empty();
+        let (title, body) = if leaving_private {
+            (
+                "Leave this private Mesh?",
+                "Going Public forgets everyone you trusted here and any invitation outstanding, and restarts Mesh. Your identity, your models and your settings stay as they are.",
+            )
+        } else if matches!(connection, settings::Connection::Private { .. }) {
+            (
+                "Start a private Mesh?",
+                "Restarts Mesh with nobody trusted yet — invite the people you want. Anything outstanding is cancelled.",
+            )
+        } else {
+            (
+                "Share with anyone?",
+                "Restarts Mesh in Public, where it serves whoever finds it. Anything outstanding is cancelled.",
+            )
+        };
+        if !native::confirm(title, body, "Change connection") {
             return;
         }
         if matches!(connection, settings::Connection::Private { .. }) {
@@ -511,13 +522,11 @@ impl App {
                 return;
             }
         }
-        match consent::cancel(&self.settings) {
-            Ok(mut next) => {
-                next.connection = connection;
-                self.queue_settings(next);
-            }
-            Err(e) => native::notice("Could not change connection", &e),
-        }
+        // Switching Mesh *is* forgetting this one: the people, the outstanding
+        // invitations and the seeds all belong to the Mesh being left, so there
+        // is no separate "start over" to find.
+        let next = mesh_tray::reset::switching_to(&self.settings, connection);
+        self.queue_settings(next);
     }
 
     fn queue_settings(&mut self, next: settings::Settings) {
@@ -539,50 +548,7 @@ impl App {
         }
     }
 
-    /// Forget the people and invitations this tray remembers.
-    /// The runtime is stopped first so it cannot rewrite state we just cleared.
-    fn reset(&mut self) {
-        if self.stopping.is_some() || self.pending_settings.is_some() || self.pending_reset {
-            return;
-        }
-        if !native::confirm(
-            "Start over on this Mesh?",
-            "This tray forgets every person it has paired with and every invitation outstanding, so you will need to pair again. Your machine\u{2019}s Mesh identity stays the same, and downloaded models, your Mesh settings and your Buzz data are not touched.",
-            "Start Over",
-        ) {
-            return;
-        }
-        self.pending_reset = true;
-        self.open_when_ready = None;
-        if let Some(child) = &mut self.child {
-            match lifecycle::request_stop(child, self.settings.console_port) {
-                Ok(()) => self.stopping = Some(Instant::now()),
-                Err(e) => {
-                    self.error = Some(e);
-                    self.pending_reset = false;
-                }
-            }
-        } else {
-            self.apply_pending();
-        }
-    }
-
     fn apply_pending(&mut self) {
-        if std::mem::take(&mut self.pending_reset) {
-            match mesh_tray::reset::perform(&self.root) {
-                Ok(()) => match settings::Settings::load(&self.root) {
-                    Ok(settings) => {
-                        self.settings = settings;
-                        self.snapshot = status::Snapshot::default();
-                        self.error = None;
-                        self.start();
-                    }
-                    Err(e) => self.error = Some(format!("Could not reload settings: {e}")),
-                },
-                Err(e) => self.error = Some(format!("Could not start over: {e}")),
-            }
-            return;
-        }
         if let Some(next) = self.pending_settings.take() {
             match next.save(&self.root) {
                 Ok(()) => {
@@ -703,7 +669,6 @@ mod desktop {
                 ("Share approved reply", "reply"),
                 ("Cancel pending", "cancel"),
                 ("Retry startup", "retry"),
-                ("Start over", "reset"),
             ] {
                 let button = gtk::Button::with_label(label);
                 let app = app.clone();
@@ -721,7 +686,6 @@ mod desktop {
                         "reply" => app.share_reply(),
                         "cancel" => app.cancel_requests(),
                         "retry" => app.start(),
-                        "reset" => app.reset(),
                         _ => {}
                     }
                 });
