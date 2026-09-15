@@ -120,7 +120,6 @@ impl App {
         let menu = Menu::new();
         let status = MenuItem::new("Mesh · Getting ready…", false, None);
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
-        let settings = MenuItem::with_id("settings", "Settings…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
         let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
@@ -134,7 +133,6 @@ impl App {
             &private,
             &people,
             &PredefinedMenuItem::separator(),
-            &settings,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -384,7 +382,6 @@ impl App {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
-                "settings" => self.open("/configuration/mesh"),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite-member" => self.invite_member(),
@@ -644,7 +641,6 @@ mod desktop {
             content.add(&fallback_status);
             for (label, route) in [
                 ("Open Chat", Some("/chat")),
-                ("Settings", Some("/configuration/mesh")),
                 ("Quit Mesh", None),
             ] {
                 let button = gtk::Button::with_label(label);
