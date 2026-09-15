@@ -2,8 +2,12 @@
 //! Joining preserves local serving participation.
 use crate::settings::Connection;
 
-const SMALL: &str = "Qwen/Qwen2.5-3B-Instruct-GGUF@main:q4_k_m";
+// The same ladder Buzz recommends, so a machine gets the same model here as it
+// would there: `desktop/src-tauri/src/mesh_llm/catalog.rs`, whose boundaries are
+// 32 GB for the balanced pick and 80 GB for the large one.
+const SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF@main:Q4_K_M";
 const MEDIUM: &str = "unsloth/Qwen3.5-9B-GGUF@main:Q4_K_M";
+const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@main:Q4_K_M";
 
 pub fn local_model(connection: &Connection) -> Result<Option<&'static str>, String> {
     if !matches!(connection, Connection::Private { .. }) {
@@ -13,11 +17,14 @@ pub fn local_model(connection: &Connection) -> Result<Option<&'static str>, Stri
 }
 
 fn choose(bytes: u64) -> Result<&'static str, String> {
-    // Catalog weights: 2.1 GB / 5.8 GB. Leave substantial headroom for the OS,
-    // other applications, KV cache and the vision projector. Cap at 9B even on
-    // large machines: this launcher favors a usable desktop over maximum size.
+    // Classified on the machine's rated memory, not on what is free right now:
+    // a busy desktop must not silently drop a tier. Buzz derives that rating by
+    // rounding to the nearest advertised capacity; whole GiB agrees with it at
+    // both boundaries for the sizes Macs ship, so this reads memory directly
+    // rather than taking a dependency on the runtime's hardware crate.
     match bytes / (1024 * 1024 * 1024) {
-        24.. => Ok(MEDIUM),
+        80.. => Ok(LARGE),
+        32.. => Ok(MEDIUM),
         8.. => Ok(SMALL),
         _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically.".into()),
     }
@@ -65,16 +72,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn conservative_memory_thresholds_and_cap() {
+    fn tiers_match_buzz_boundaries() {
         let gib = 1024 * 1024 * 1024;
         for size in [0, 4, 7] {
             assert!(choose(size * gib).is_err());
         }
-        for size in [8, 16, 23] {
+        for size in [8, 16, 24, 31] {
             assert_eq!(choose(size * gib).unwrap(), SMALL);
         }
-        for size in [24, 32, 128, 512] {
+        for size in [32, 48, 64, 79] {
             assert_eq!(choose(size * gib).unwrap(), MEDIUM);
+        }
+        for size in [80, 96, 128, 512] {
+            assert_eq!(choose(size * gib).unwrap(), LARGE);
         }
     }
 

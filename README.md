@@ -56,9 +56,11 @@ Ports are overridable with `MESH_LLM_CONSOLE_PORT` / `MESH_LLM_API_PORT`.
 Occupied ports are not adopted or stopped, and only children this tray started
 are ever terminated. Tests and demos must use a fresh `MESH_TRAY_DATA_DIR`.
 
-Private model selection is a total-memory heuristic, not a free-VRAM assurance:
-Qwen2.5 3B Q4_K_M for 8–23 GiB, Qwen3.5 9B Q4_K_M for 24+ GiB, and an error
-below 8 GiB. First start can download weights.
+Private model selection follows the same ladder Buzz recommends, classified on
+the machine's rated memory rather than what is free at launch: Gemma 4 E4B below
+32 GB, Qwen3.5 9B from 32 GB, Qwen3.8 27B from 80 GB, and an error below 8 GB.
+It is a total-memory heuristic, not a free-VRAM assurance, and first start can
+download weights.
 
 ## Developer checks
 
