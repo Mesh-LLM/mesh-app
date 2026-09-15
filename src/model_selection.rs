@@ -11,9 +11,9 @@ use crate::settings::Connection;
 //
 // Gemma both sides: measured on the same prompt, the Qwen picks spent their
 // whole token budget reasoning and often returned no answer, while both Gemma
-// picks thought briefly and answered every time. The tray also turns thinking
-// off for its runtime child (`runtime_config`), but that is insurance, not the
-// reason these two are here.
+// picks thought briefly and answered every time. That is the whole reason these
+// two are here: the tray owns no engine config, so the model's own default
+// behaviour is what the user gets.
 //
 // Small is the default; the large pick is for genuinely large machines only,
 // well above Buzz's 32 GB catalog step. A tray chat window is the one place a

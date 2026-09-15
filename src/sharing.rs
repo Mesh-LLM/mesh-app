@@ -17,7 +17,7 @@ impl App {
         Ok(())
     }
     fn owner(&self) -> Result<mesh_llm_identity::OwnerKeypair, String> {
-        identity::ensure(&self.root)
+        identity::ensure(&crate::settings::mesh_profile()?)
     }
     pub(crate) fn share_request(&mut self) {
         let result = (|| {

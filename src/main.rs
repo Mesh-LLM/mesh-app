@@ -1,5 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-use mesh_tray::{admission, consent, identity, settings};
+use mesh_tray::{consent, identity, settings};
 mod lifecycle;
 mod membership_ui;
 #[cfg(target_os = "macos")]
@@ -185,7 +185,7 @@ impl App {
 
     fn spawn(&self) -> Result<Child, String> {
         if cfg!(windows) {
-            return Err("Windows runtime launch is unavailable until Mesh supports isolated identity and trust paths. Your existing Mesh state was not touched.".into());
+            return Err("Windows is not supported by this tray yet. Your existing Mesh state was not touched.".into());
         }
         for port in [self.settings.console_port, self.settings.api_port] {
             if std::net::TcpStream::connect_timeout(
@@ -207,22 +207,15 @@ impl App {
             std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o700))
                 .map_err(|e| e.to_string())?;
         }
-        if matches!(self.settings.connection, settings::Connection::Automatic)
-            && self.root.join("public/key").exists()
-            && !self.root.join("public-home/.mesh-llm/key").exists()
-        {
-            return Err("This profile has an established development-runtime public identity. It was preserved. Use \"Start Over\" to forget it, or a fresh demo profile, until its migration is reviewed.".into());
-        }
-        let home = self.settings.runtime_home(&self.root);
-        mesh_tray::runtime_home::prepare(&home)?;
+        // One machine identity, shared with the CLI and Buzz. Private verifies
+        // it exists without unlocking it; the runtime child unlocks the key, so
+        // the user sees one credential prompt, not two.
+        let profile = settings::mesh_profile()?;
         if matches!(
             self.settings.connection,
             settings::Connection::Private { .. }
         ) {
-            // Startup verifies the identity without unlocking it; the runtime
-            // child unlocks the key, so the user sees one prompt, not two.
-            identity::establish(&self.root)?;
-            admission::prepare_store(&home, &self.settings.admitted_owners)?;
+            identity::establish(&profile)?;
         }
         let log = std::fs::OpenOptions::new()
             .create(true)
@@ -232,26 +225,35 @@ impl App {
         let mut command = Command::new(binary);
         {
             use std::io::Write;
-            // Thinking off for tray chat. A config the user has taken over is
-            // reported and left alone, never replaced.
-            match mesh_tray::runtime_config::ensure_defaults(&home)? {
-                Some(path) => writeln!(&log, "Tray engine defaults: {}", path.display()),
-                None => writeln!(
-                    &log,
-                    "Tray engine defaults: skipped, {} is yours",
-                    home.join(".mesh-llm/config.toml").display()
-                ),
+            // First run on a machine with no engine config gets one, with
+            // thinking off for tray chat. An existing config is the user's and
+            // is reported, never replaced.
+            match mesh_tray::runtime_config::ensure_first_run(&profile)? {
+                mesh_tray::runtime_config::Config::Created(path) => {
+                    writeln!(
+                        &log,
+                        "Tray wrote first-run engine config: {}",
+                        path.display()
+                    )
+                }
+                mesh_tray::runtime_config::Config::Existing(path) => {
+                    writeln!(
+                        &log,
+                        "Engine config is yours, left alone: {}",
+                        path.display()
+                    )
+                }
             }
             .map_err(|e| e.to_string())?;
         }
         // Their `[[models]]` wins: a `--model` flag would beat the file, so when
         // the file names models the tray passes none and stays out of the way.
-        let model = if mesh_tray::runtime_config::config_declares_models(&home) {
+        let model = if mesh_tray::runtime_config::config_declares_models(&profile) {
             use std::io::Write;
             writeln!(
                 &log,
                 "Tray model: none, {} declares its own models",
-                home.join(".mesh-llm/config.toml").display()
+                profile.join("config.toml").display()
             )
             .map_err(|e| e.to_string())?;
             None
@@ -269,7 +271,6 @@ impl App {
             .stderr(Stdio::from(log))
             .env_remove("MESH_LLM_EPHEMERAL_KEY")
             .env_remove("MESH_LLM_OWNER_PASSPHRASE");
-        mesh_tray::runtime_home::configure(&mut command, &home);
         if let Some(model) = model {
             command.args(["--model", model.as_str()]);
         }
@@ -498,7 +499,14 @@ impl App {
             return;
         }
         if matches!(connection, settings::Connection::Private { .. }) {
-            if let Err(e) = identity::establish(&self.root) {
+            let profile = match settings::mesh_profile() {
+                Ok(profile) => profile,
+                Err(e) => {
+                    native::notice("Could not set up Private", &e);
+                    return;
+                }
+            };
+            if let Err(e) = identity::establish(&profile) {
                 native::notice("Could not set up Private", &e);
                 return;
             }
@@ -531,7 +539,7 @@ impl App {
         }
     }
 
-    /// Forget this tray's identity and pairings, keeping downloaded models.
+    /// Forget the people and invitations this tray remembers.
     /// The runtime is stopped first so it cannot rewrite state we just cleared.
     fn reset(&mut self) {
         if self.stopping.is_some() || self.pending_settings.is_some() || self.pending_reset {
@@ -539,7 +547,7 @@ impl App {
         }
         if !native::confirm(
             "Start over on this Mesh?",
-            "This tray forgets its own Mesh identity and every person it has paired with, so you will need to pair again. Downloaded models, your other Mesh nodes and your Buzz data are not touched.",
+            "This tray forgets every person it has paired with and every invitation outstanding, so you will need to pair again. Your machine\u{2019}s Mesh identity stays the same, and downloaded models, your Mesh settings and your Buzz data are not touched.",
             "Start Over",
         ) {
             return;

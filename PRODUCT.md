@@ -19,13 +19,19 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   invitation, self-claimed name or acceptance alone is not an admission grant.
 - Keep native jellyfish menu, optional Chat and existing console Settings. No
   automatic chat opening. Stop only this app's retained child.
-- App-owned subprocess HOME routes trust/node/runtime state. Model storage is the
-  user's, not the app's: weights use the original user Hugging Face cache (via
-  explicit `HF_HUB_CACHE`/`HF_XET_CACHE`), and the engine cache and model catalog
-  are linked to the user's real ones because they have no environment override.
-  A pre-existing per-tray copy is moved aside, never deleted. On macOS a
-  narrow link to the OS-selected default keychain enables encrypted key unlock;
-  no exported passphrases, ACL weakening, personal Mesh state or identity replacement.
+- One machine identity: the child runs as the user against `~/.mesh-llm`, the
+  profile the CLI and Buzz already share. No app-owned HOME, no second keystore,
+  no trust-store writes and no symlinks. The engine `config.toml` is written
+  once, only when the machine has none, and never rewritten afterwards. Public
+  and Private are flags on that one node, so switching modes preserves identity
+  and outstanding invitations. The admitted roster is passed as `--trust-owner`
+  arguments and merged in memory with the machine's trust store, which the
+  serving runtime never writes. The effective allowlist is that union, so
+  forgetting someone in the tray does not revoke a grant the user or Buzz made
+  in `~/.mesh-llm/trusted-owners.json`.
+- Launcher state is `~/.mesh-app/launcher.json` and `mesh.log`, and nothing else.
+  Start Over clears it; the machine identity, engine config and models are the
+  user's and are never touched.
 - One credential prompt per launch, not two: startup verifies the profile's
   identity from public keystore metadata (owner id checked against the signing
   key) and never unlocks the secret. Only the runtime child unlocks it, plus the

@@ -38,29 +38,51 @@ phone, or with no network at all, and it needs no discovery service.
 ## Runtime and identity
 
 The official `mesh-llm` executable sits next to the app executable, retaining
-its adjacent native-runtimes bundle. The child gets an app-owned HOME and XDG/runtime paths;
-inherited `MESH_LLM_*` overrides are stripped, while the GUI keeps the real OS
-HOME. The private identity lives at `<app>/home/.mesh-llm/owner-keystore.json`
-with a stable keychain account, and Hugging Face caches are shared with yours so
-models are not downloaded twice.
+its adjacent native-runtimes bundle. It runs as you, against your own
+`~/.mesh-llm` — the same profile the plain `mesh-llm` CLI and Buzz use, because
+Buzz deliberately keeps one owner identity per machine however Mesh is started
+(`desktop/src-tauri/src/mesh_llm/identity.rs:1-8`). There is no app-owned HOME,
+no second keystore, no copied trust store and no symlinks. Models are not
+downloaded twice because there is only one cache.
 
-On macOS the OS-selected keychain is discovered with
-`security default-keychain -d user`, and only `login.keychain-db` is linked into
-the app home. No secrets or keychain ACLs are copied or changed. This is storage
-separation, **not** an OS security sandbox, and unsigned developer builds can
-still raise OS prompts. Missing or corrupt identities are never silently
-regenerated.
+Public and Private are flags on the same node, not two identities: `--auto` for
+Public, and `--owner-required --trust-policy allowlist` plus one `--trust-owner`
+per admitted person for Private. Switching modes keeps your identity, so an
+invitation you sent still works afterwards. The roster is declared on the
+command line, exactly as Buzz declares its own through the SDK
+(`desktop/src-tauri/src/mesh_llm/mod.rs:399-406`), so the tray never edits your
+trust store. The engine merges those arguments with the store in memory and
+writes nothing back (`mesh-llm-host-runtime/src/runtime/startup_models.rs:141`),
+so the allowlist is the union of your machine's trusted owners and the tray's
+roster. Forgetting someone in the tray drops the tray's grant at the next start;
+if you or Buzz also trusted them in `~/.mesh-llm/trusted-owners.json`, that
+machine-level decision stands and is yours to remove with `mesh-llm auth`.
 
-Ports live in `~/.mesh-app/launcher.json`. Occupied ports are not adopted or
-stopped, and only children this app started are ever terminated. There are no
-environment overrides: the profile is always `~/.mesh-app`, and engine settings
-are the runtime's own `config.toml`.
+The tray writes two files, ever: `~/.mesh-app/launcher.json` (ports, mode, who
+you admitted and what is outstanding) and `~/.mesh-app/mesh.log`. On a machine
+with no engine config at all it writes one `~/.mesh-llm/config.toml` on first
+run — thinking off, so tray chat answers instead of reasoning into its whole
+token budget — and then never touches that file again, whatever you put in it.
+If it names `[[models]]` the tray passes no `--model` and the file decides. Occupied ports are not adopted or
+stopped, and only children this app started are ever terminated.
 
-Private model selection follows the same ladder Buzz recommends, classified on
-the machine's rated memory rather than what is free at launch: Gemma 4 E4B below
-32 GB, Qwen3.5 9B from 32 GB, Qwen3.8 27B from 80 GB, and an error below 8 GB.
-It is a total-memory heuristic, not a free-VRAM assurance, and first start can
-download weights.
+Known limitation of one identity: if Buzz's embedded Mesh and this tray are both
+sharing at the same time, one node key is live in two processes. Multiple engine
+instances per profile are supported — each takes its own
+`~/.mesh-llm/runtime/<pid>` with a lock — but that identity being on the mesh
+twice at once is not something we have tested. Run one at a time for now.
+
+**Start Over** deletes the launcher state, so the tray trusts nobody and holds
+no outstanding invitations. It does not touch your machine's Mesh identity,
+which the CLI and Buzz share: resetting that is `rm -rf ~/.mesh-llm`, and it
+resets them too.
+
+Private model selection is two Gemma picks, classified on the machine's rated
+memory rather than what is free at launch: Gemma 4 E4B below 128 GiB, the 26B
+MoE above it, and an error below 8 GiB. Both answer without visible
+chain-of-thought, which is why they are the picks — the tray no longer writes
+engine defaults to say so. It is a total-memory heuristic, not a free-VRAM
+assurance, and first start can download weights.
 
 ## Developer checks
 
@@ -68,9 +90,9 @@ download weights.
 just verify # fmt, check, full tests/doctests, all-targets Clippy -D warnings
 just build  # release tray executable, no distribution/updater
 just clean
-# Interactive probes may prompt for keychain permission. Fresh roots only,
-# never an existing identity, and not while someone is working:
-just profile-probe /absolute/fresh/root
+# Prints the owner identity in a profile directory, creating one if that
+# directory is new. May prompt for keychain permission:
+just profile-probe /absolute/profile/root
 just released-pool-probe /absolute/official/mesh-llm /absolute/fresh/pool-root
 ```
 

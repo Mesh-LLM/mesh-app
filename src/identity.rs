@@ -3,7 +3,7 @@ use mesh_llm_identity::{
     keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
     save_keystore_with_keychain, OwnerKeypair,
 };
-use std::{fs::File, io::Write, path::Path};
+use std::{fs::File, path::Path};
 
 /// Hold for the entire app lifetime, including child shutdown and native dialogs.
 /// OS locks release on crash; a leftover lock file is harmless.
@@ -65,10 +65,13 @@ impl Store for NativeStore {
             .map_err(|_| "Could not securely set up Mesh. Unlock or enable your OS credential store and retry. No unprotected identity was created.".into())
     }
 }
+/// This machine's one owner keystore, the same file the plain CLI and Buzz use
+/// (`desktop/src-tauri/src/mesh_llm/identity.rs:1-8`). The tray never keeps a
+/// second identity, so your friends see one node from this machine whichever
+/// way Mesh was started.
 fn keystore_path(root: &Path) -> Result<std::path::PathBuf, String> {
-    let directory = root.join("home/.mesh-llm");
-    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-    Ok(directory.join("owner-keystore.json"))
+    std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
+    Ok(root.join("owner-keystore.json"))
 }
 
 fn establish_with(root: &Path, store: &impl Store) -> Result<String, String> {
@@ -80,11 +83,11 @@ fn establish_with(root: &Path, store: &impl Store) -> Result<String, String> {
                 "Mesh identity cannot be read. Restore this profile; it was not replaced."
                     .to_string()
             })?;
-            confirm_owner(root, info.owner_id)
+            Ok(info.owner_id)
         }
         Ok(_) => Err("Mesh identity must be a regular file, not a link.".into()),
         // Not established yet: creating one is the only path that touches the
-        // credential store, and it happens once per profile.
+        // credential store, and it happens once per machine.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Ok(ensure_with(root, store)?.owner_id())
         }
@@ -92,70 +95,29 @@ fn establish_with(root: &Path, store: &impl Store) -> Result<String, String> {
     }
 }
 
-/// Bind an owner id to this profile, or refuse if the profile already belongs to
-/// a different one.
-fn confirm_owner(root: &Path, id: String) -> Result<String, String> {
-    let marker = root.join("owner-id");
-    match std::fs::read_to_string(&marker) {
-        Ok(expected) if expected == id => Ok(id),
-        Ok(_) => Err(
-            "Mesh identity changed unexpectedly. Restore this profile before continuing.".into(),
-        ),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let mut file = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
-            file.write_all(id.as_bytes()).map_err(|e| e.to_string())?;
-            file.as_file().sync_all().map_err(|e| e.to_string())?;
-            file.persist_noclobber(marker).map_err(|e| e.to_string())?;
-            Ok(id)
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 fn ensure_with(root: &Path, store: &impl Store) -> Result<OwnerKeypair, String> {
-    let directory = root.join("home/.mesh-llm");
-    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
-    let path = directory.join("owner-keystore.json");
-    let marker = root.join("owner-id");
-    let expected = match std::fs::read_to_string(&marker) {
-        Ok(id) => Some(id),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e.to_string()),
-    };
-    let owner = match std::fs::symlink_metadata(&path) {
-        Ok(meta) if meta.is_file() => store.load(&path)?,
-        Ok(_) => return Err("Mesh identity must be a regular file, not a link.".into()),
+    let path = keystore_path(root)?;
+    match std::fs::symlink_metadata(&path) {
+        Ok(meta) if meta.is_file() => store.load(&path),
+        Ok(_) => Err("Mesh identity must be a regular file, not a link.".into()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Existing attestations also distinguish legacy established profiles.
-            if expected.is_some() || directory.join("node-ownership.json").exists() {
-                return Err("This profile's identity is missing. Restore it; Mesh will not silently create a different identity.".into());
+            // A node that has served under an identity must never be handed a
+            // different one behind the user's back. Only a profile with no
+            // history at all gets a fresh key.
+            if root.join("node-ownership.json").exists() {
+                return Err("This machine's Mesh identity is missing. Restore it; Mesh will not silently create a different identity.".into());
             }
             let owner = OwnerKeypair::generate();
             store.create(&path, &owner)?;
-            // Verify storage round trip before recording a stable identity.
+            // Verify storage round trip before relying on the identity.
             let loaded = store.load(&path)?;
             if loaded.owner_id() != owner.owner_id() {
                 return Err("Stored Mesh identity did not match setup.".into());
             }
-            loaded
+            Ok(loaded)
         }
-        Err(e) => return Err(e.to_string()),
-    };
-    let id = owner.owner_id();
-    if let Some(expected) = expected {
-        if expected != id {
-            return Err(
-                "Mesh identity changed unexpectedly. Restore this profile before continuing."
-                    .into(),
-            );
-        }
-    } else {
-        let mut file = tempfile::NamedTempFile::new_in(root).map_err(|e| e.to_string())?;
-        file.write_all(id.as_bytes()).map_err(|e| e.to_string())?;
-        file.as_file().sync_all().map_err(|e| e.to_string())?;
-        file.persist_noclobber(marker).map_err(|e| e.to_string())?;
+        Err(e) => Err(e.to_string()),
     }
-    Ok(owner)
 }
 
 #[cfg(test)]
@@ -188,49 +150,51 @@ mod tests {
         // Established profile: no load, so no Keychain prompt on launch.
         assert_eq!(establish_with(root, &CreateOnly).unwrap(), owner);
         assert_eq!(establish_with(root, &CreateOnly).unwrap(), owner);
-        // A different identity in an established profile is still refused.
-        mesh_llm_identity::save_keystore(
-            &root.join("home/.mesh-llm/owner-keystore.json"),
-            &OwnerKeypair::generate(),
-            None,
-            true,
-        )
-        .unwrap();
-        assert!(establish_with(root, &CreateOnly).is_err());
     }
 
     #[test]
-    fn first_run_still_establishes_an_identity_through_the_store() {
+    fn the_identity_is_the_machine_profile_the_cli_already_uses() {
         let root = tempfile::tempdir().unwrap();
         let id = establish_with(root.path(), &TestStore).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("owner-id")).unwrap(),
-            id
-        );
+        // One file, in the profile root -- no app-owned second keystore.
+        let path = root.path().join("owner-keystore.json");
+        assert!(path.is_file());
         assert_eq!(ensure_with(root.path(), &TestStore).unwrap().owner_id(), id);
+        // Whatever identity the profile holds is the one the tray uses, so a
+        // profile the user reset with the CLI is adopted rather than refused.
+        let replacement = OwnerKeypair::generate();
+        mesh_llm_identity::save_keystore(&path, &replacement, None, true).unwrap();
+        assert_eq!(
+            establish_with(root.path(), &TestStore).unwrap(),
+            replacement.owner_id()
+        );
     }
 
     #[test]
-    fn creates_once_and_missing_established_identity_fails_closed() {
+    fn creates_once_and_a_served_profile_missing_its_key_fails_closed() {
         let root = tempfile::tempdir().unwrap();
         let owner = ensure_with(root.path(), &TestStore).unwrap().owner_id();
         assert_eq!(
             ensure_with(root.path(), &TestStore).unwrap().owner_id(),
             owner
         );
-        std::fs::remove_file(root.path().join("home/.mesh-llm/owner-keystore.json")).unwrap();
+        let path = root.path().join("owner-keystore.json");
+        std::fs::remove_file(&path).unwrap();
+        // No history: a fresh key is correct, which is what "start over" needs.
+        assert!(ensure_with(root.path(), &TestStore).is_ok());
+        std::fs::remove_file(&path).unwrap();
+        // History: refuse, never hand this node a different identity silently.
+        std::fs::write(root.path().join("node-ownership.json"), "{}").unwrap();
         assert!(ensure_with(root.path(), &TestStore).is_err());
     }
     #[test]
-    fn corruption_and_replacement_never_generate_another_owner() {
+    fn corruption_is_reported_and_never_replaced() {
         let root = tempfile::tempdir().unwrap();
         ensure_with(root.path(), &TestStore).unwrap();
-        let p = root.path().join("home/.mesh-llm/owner-keystore.json");
+        let p = root.path().join("owner-keystore.json");
         std::fs::write(&p, "broken").unwrap();
         assert!(ensure_with(root.path(), &TestStore).is_err());
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "broken");
-        mesh_llm_identity::save_keystore(&p, &OwnerKeypair::generate(), None, true).unwrap();
-        assert!(ensure_with(root.path(), &TestStore).is_err());
     }
     #[test]
     fn profile_lock_is_exclusive_and_releases() {
@@ -253,7 +217,7 @@ mod tests {
         }
         let root = tempfile::tempdir().unwrap();
         assert!(ensure_with(root.path(), &Denied).is_err());
-        assert!(!root.path().join("owner-id").exists());
+        assert!(!root.path().join("owner-keystore.json").exists());
         assert!(ensure_with(root.path(), &TestStore).is_ok());
     }
 }

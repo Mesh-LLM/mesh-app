@@ -121,17 +121,6 @@ impl Settings {
         Ok(())
     }
 
-    pub fn runtime_home(&self, root: &Path) -> PathBuf {
-        match self.connection {
-            Connection::Automatic => root.join("public-home"),
-            Connection::Private { .. } => root.join("home"),
-        }
-    }
-
-    pub fn runtime_profile(&self, root: &Path) -> PathBuf {
-        self.runtime_home(root).join(".mesh-llm")
-    }
-
     /// Accept another seed without discarding established serving participation.
     pub fn accept_seed(&mut self, seed: &str) -> Result<(), String> {
         validate_invite(seed)?;
@@ -171,6 +160,14 @@ impl Settings {
                     "--trust-policy".into(),
                     "allowlist".into(),
                 ]);
+                // The people this tray admitted are declared on the command
+                // line, exactly as Buzz declares its roster through the SDK.
+                // The engine merges these with the machine's trust store in
+                // memory and writes nothing back, so the tray never edits the
+                // user's trusted owners; the effective allowlist is the union.
+                for owner in &self.admitted_owners {
+                    args.extend(["--trust-owner".into(), owner.clone()]);
+                }
                 if let Some(invite) = invite {
                     args.extend(["--join".into(), invite.clone()]);
                 }
@@ -185,10 +182,22 @@ impl Settings {
     }
 }
 
+pub fn home() -> Result<PathBuf, String> {
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(PathBuf::from)
+        .ok_or_else(|| "Cannot locate your home directory".into())
+}
+
+/// Launcher-owned state: `launcher.json` and `mesh.log`, and nothing else.
 pub fn data_root() -> Result<PathBuf, String> {
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .ok_or("Cannot locate the Mesh app data directory")?;
-    Ok(PathBuf::from(home).join(".mesh-app"))
+    Ok(home()?.join(".mesh-app"))
+}
+
+/// The one Mesh profile on this machine. The tray runs the engine as the user,
+/// against the same `~/.mesh-llm` the plain CLI and Buzz use, so there is one
+/// node identity per machine however Mesh is started.
+pub fn mesh_profile() -> Result<PathBuf, String> {
+    Ok(home()?.join(".mesh-llm"))
 }
 
 pub fn binary() -> Result<PathBuf, String> {
@@ -259,20 +268,37 @@ mod tests {
     }
 
     #[test]
-    fn switching_modes_keeps_private_identity_out_of_public_profile() {
-        let root = tempfile::tempdir().unwrap();
-        let mut settings = Settings::default();
-        let public = settings.runtime_profile(root.path());
-        settings.connection = Connection::Private { invite: None };
-        let private = settings.runtime_profile(root.path());
-        assert_eq!(private, root.path().join("home/.mesh-llm"));
-        assert_ne!(public, private);
-        settings.connection = Connection::Automatic;
-        assert_eq!(settings.runtime_profile(root.path()), public);
-        settings.connection = Connection::Private {
-            invite: Some("invite".into()),
+    fn the_machine_keeps_one_identity_in_both_modes() {
+        // Switching Public/Private must not change which node you are: the
+        // profile is the user's, and mode is only a set of flags.
+        assert_eq!(mesh_profile().unwrap(), home().unwrap().join(".mesh-llm"));
+        assert_eq!(data_root().unwrap(), home().unwrap().join(".mesh-app"));
+        assert_ne!(mesh_profile().unwrap(), data_root().unwrap());
+    }
+
+    #[test]
+    fn admitted_people_are_declared_on_the_command_line_in_private_only() {
+        let owner = "ab".repeat(32);
+        let second = "cd".repeat(32);
+        let settings = Settings {
+            connection: Connection::Private { invite: None },
+            admitted_owners: vec![owner.clone(), second.clone()],
+            ..Default::default()
         };
-        assert_eq!(settings.runtime_profile(root.path()), private);
+        let args = settings.args();
+        assert_eq!(
+            args.windows(2)
+                .filter(|pair| pair[0] == "--trust-owner")
+                .map(|pair| pair[1].as_str())
+                .collect::<Vec<_>>(),
+            [owner.as_str(), second.as_str()]
+        );
+        // Public shares the machine with anyone, so it declares nobody.
+        let public = Settings {
+            admitted_owners: vec![owner],
+            ..Default::default()
+        };
+        assert!(!public.args().contains(&"--trust-owner".into()));
     }
 
     #[test]

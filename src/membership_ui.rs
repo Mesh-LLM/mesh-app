@@ -6,7 +6,7 @@
 //! members. File delivery stays explicit: the share sheet works on any
 //! network, or none.
 use crate::{native, App};
-use mesh_tray::{identity, invitation, text_card};
+use mesh_tray::{identity, invitation, settings, text_card};
 fn now() -> Result<u64, String> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -36,7 +36,7 @@ impl App {
             ) {
                 return Ok(());
             }
-            let owner = identity::ensure(&self.root)?;
+            let owner = identity::ensure(&settings::mesh_profile()?)?;
             let pid = self
                 .child
                 .as_ref()
@@ -70,7 +70,7 @@ impl App {
             let value: serde_json::Value =
                 serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
             if value["mesh_pool_file"] == "approval" {
-                let owner = identity::ensure(&self.root)?;
+                let owner = identity::ensure(&settings::mesh_profile()?)?;
                 let pid = self
                     .child
                     .as_ref()

@@ -1,5 +1,9 @@
 # Native Mesh tray
 
+One identity per machine: the child runs as the user against `~/.mesh-llm`, and
+Public/Private are flags on that node. Launcher state is `~/.mesh-app`
+(`launcher.json`, `mesh.log`) and Start Over deletes it.
+
 OS-native jellyfish status menu: Public/Private, Members, optional Chat, existing
 console Settings, Quit. Members contains Invite, Open invitation/reply, Share reply
 or approval, legacy pending-exchange controls, and current member fingerprints.
@@ -20,7 +24,8 @@ identities and self-claimed names do not establish human identity on their own.
 
 A file-open operation verifies signatures, time, correlation and replay before
 changing settings. Runtime-changing decisions retain the stop/reap → save →
-project → start transaction. Final approval sharing waits for fresh owned private
+start transaction; the roster reaches the engine as `--trust-owner` arguments,
+so there is no trust-store projection step. Final approval sharing waits for fresh owned private
 runtime readiness. Native sharing retains temporary files until app exit.
 
 ## Honest intermediate states
