@@ -1,50 +1,9 @@
 //! AppKit transport only: no networking and no admission side effects.
 //! Inherit native menus, sheets and dialogs; preserve Mesh's jellyfish identity.
-use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::AnyThread;
-use objc2_app_kit::{
-    NSAlert, NSApplication, NSPasteboard, NSPasteboardTypeString, NSSharingServicePicker,
-    NSTextField,
-};
-use objc2_foundation::{
-    MainThreadMarker, NSArray, NSPoint, NSRect, NSRectEdge, NSSize, NSString, NSURL,
-};
+use objc2_app_kit::{NSAlert, NSApplication, NSPasteboard, NSPasteboardTypeString, NSTextField};
+use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize, NSString};
 
-#[derive(Default)]
-pub struct Native {
-    // Keep picker and file alive until app exit; service completion cleanup is a draft gate.
-    shares: Vec<(Retained<NSSharingServicePicker>, tempfile::NamedTempFile)>,
-}
-impl Native {
-    pub fn share(
-        &mut self,
-        file: tempfile::NamedTempFile,
-        tray: &tray_icon::TrayIcon,
-    ) -> Result<(), String> {
-        if self.shares.len() >= 32 {
-            return Err("Sharing limit reached for this draft session. Cancel pending requests before quitting and reopening.".into());
-        }
-        let mtm = MainThreadMarker::new().ok_or("Sharing must run on the main thread")?;
-        let status = tray.ns_status_item().ok_or("Tray item is unavailable")?;
-        let button = status.button(mtm).ok_or("Tray button is unavailable")?;
-        let path = file
-            .path()
-            .to_str()
-            .ok_or("Share file path is not valid Unicode")?;
-        let url = NSURL::fileURLWithPath(&NSString::from_str(path));
-        let items = NSArray::<AnyObject>::from_slice(&[url.as_ref()]);
-        // SAFETY: File NSURL objects conform to the sharing item contract.
-        let picker = unsafe {
-            NSSharingServicePicker::initWithItems(NSSharingServicePicker::alloc(), &items)
-        };
-        picker.showRelativeToRect_ofView_preferredEdge(button.bounds(), &button, NSRectEdge::MinY);
-        self.shares.push((picker, file));
-        Ok(())
-    }
-}
-
-/// Put a card on the clipboard so it can be pasted into any chat app. Replaces
+/// Put an invite on the clipboard so it can be pasted into any chat app. Replaces
 /// the clipboard's contents, which is what a "Copy" action is expected to do.
 pub fn copy_text(text: &str) -> Result<(), String> {
     let _ = MainThreadMarker::new().ok_or("Copying must run on the main thread")?;
@@ -52,18 +11,18 @@ pub fn copy_text(text: &str) -> Result<(), String> {
     unsafe {
         pasteboard.clearContents();
         if !pasteboard.setString_forType(&NSString::from_str(text), NSPasteboardTypeString) {
-            return Err("macOS refused to put the card on the clipboard.".into());
+            return Err("macOS refused to put the invite on the clipboard.".into());
         }
     }
     Ok(())
 }
 
-/// Read pasted text. Anything else on the clipboard reads as "no card".
+/// Read pasted text. Anything else on the clipboard reads as "nothing pasted".
 pub fn paste_text() -> Result<String, String> {
     let _ = MainThreadMarker::new().ok_or("Pasting must run on the main thread")?;
     let pasteboard = NSPasteboard::generalPasteboard();
     let text = unsafe { pasteboard.stringForType(NSPasteboardTypeString) }
-        .ok_or("The clipboard has no text on it. Copy the card they sent, then try again.")?;
+        .ok_or("The clipboard has no text on it. Copy the invite they sent, then try again.")?;
     Ok(text.to_string())
 }
 
@@ -87,8 +46,8 @@ pub fn notice(title: &str, detail: &str) {
     alert.runModal();
 }
 
-/// Ask for a card in a window with a field in it, prefilled from the clipboard
-/// when there is a card on it, so the usual case is paste-already-done.
+/// Ask for an invite in a window with a field in it, prefilled from the
+/// clipboard when there is one on it, so the usual case is paste-already-done.
 pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {
     let mtm = MainThreadMarker::new()?;
     let alert = NSAlert::new(mtm);
@@ -99,8 +58,8 @@ pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {
     let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(360.0, 24.0));
     let field = NSTextField::initWithFrame(mtm.alloc::<NSTextField>(), frame);
     if let Ok(text) = paste_text() {
-        if text.contains("MESH1") {
-            field.setStringValue(&NSString::from_str(&text));
+        if mesh_tray::settings::looks_like_invite(&text) {
+            field.setStringValue(&NSString::from_str(text.trim()));
         }
     }
     alert.setAccessoryView(Some(&field));
@@ -124,20 +83,4 @@ pub fn confirm(title: &str, detail: &str, action: &str) -> bool {
     alert.addButtonWithTitle(&NSString::from_str(action));
     foreground_dialog(mtm);
     alert.runModal() == 1001
-}
-
-pub fn decision(title: &str, detail: &str, action: &str) -> Option<bool> {
-    let mtm = MainThreadMarker::new()?;
-    let alert = NSAlert::new(mtm);
-    alert.setMessageText(&NSString::from_str(title));
-    alert.setInformativeText(&NSString::from_str(detail));
-    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
-    alert.addButtonWithTitle(&NSString::from_str(action));
-    alert.addButtonWithTitle(&NSString::from_str("Decline"));
-    foreground_dialog(mtm);
-    match alert.runModal() {
-        1001 => Some(true),
-        1002 => Some(false),
-        _ => None,
-    }
 }

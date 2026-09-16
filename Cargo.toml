@@ -4,11 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-model-hf = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d4ffbbacd9c8486e0b80c44452876ffa17785964" }
 # Immutable upstream revision; no dependency on another local checkout.
 mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d4ffbbacd9c8486e0b80c44452876ffa17785964", features = ["host-io"] }
-ed25519-dalek = "=3.0.0"
-crypto_box = "0.9"
 tray-icon = "0.21"
 muda = "0.17"
 open = "5"
@@ -16,9 +13,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 ureq = { version = "2", default-features = false }
-sha2 = "0.10"
-rand = "0.8"
-hex = "0.4"
 tempfile = "3"
 fs2 = "0.4"
 rfd = "0.16"

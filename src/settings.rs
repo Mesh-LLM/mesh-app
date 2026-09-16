@@ -2,6 +2,24 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The node version floor Private declares when it creates a Mesh.
+///
+/// This is the one requirement the tray sets, and it is not really about
+/// versions: a Mesh created with *any* requirement is requirement-aware, which
+/// is what makes its invite a signed 24-hour bearer token that only the
+/// originator can mint (`mesh-llm-host-runtime/src/mesh/node_identity.rs:106-185`).
+/// Without a requirement the Mesh is unrestricted and the invite degrades to an
+/// unsigned address token with no expiry.
+///
+/// It is a deliberate constant, not the bundled version, because the Mesh ID is
+/// the hash of the policy: changing this value creates a *different* Mesh, and
+/// the engine refuses to start Private against a genesis policy whose
+/// requirements no longer match the flags
+/// (`mesh/node_requirements.rs:129-135`). So bumping it means everybody
+/// re-pastes a new invite, and that has to be a decision rather than a
+/// side-effect of shipping a new runtime.
+pub const MIN_NODE_VERSION: &str = "0.76.2";
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Connection {
@@ -12,21 +30,18 @@ pub enum Connection {
     },
 }
 
+/// Unknown keys are ignored on purpose: a `launcher.json` written by an earlier
+/// tray carries allowlist-era grants and exchange state that this build has no
+/// concept of, and refusing to open it would leave the user with an app that
+/// cannot start. Those keys describe a Mesh whose membership model is gone, so
+/// forgetting them is the correct migration, not a lossy one.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Settings {
     pub connection: Connection,
-    /// Owner identities explicitly approved on this node; never imported from an invite.
-    pub admitted_owners: Vec<String>,
-    /// Additional accepted bootstrap seeds; existing private connections survive new joins.
+    /// Additional accepted bootstrap invites; joining again does not discard an
+    /// established connection.
     pub seeds: Vec<String>,
-    pub membership_receipt: Option<Vec<u8>>,
-    pub pending_membership_acceptance: Option<String>,
-    pub issued_membership_invitations: Vec<String>,
-    pub applied_membership_receipts: Vec<String>,
-    pub owner_names: std::collections::BTreeMap<String, String>,
-    pub exchange: crate::exchange::ExchangeState,
-    pub replies: Vec<crate::consent::Reply>,
     pub console_port: u16,
     pub api_port: u16,
 }
@@ -35,15 +50,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             connection: Connection::Automatic,
-            admitted_owners: Vec::new(),
             seeds: Vec::new(),
-            membership_receipt: None,
-            pending_membership_acceptance: None,
-            issued_membership_invitations: Vec::new(),
-            applied_membership_receipts: Vec::new(),
-            owner_names: Default::default(),
-            replies: Vec::new(),
-            exchange: Default::default(),
             console_port: 3232,
             api_port: 9447,
         }
@@ -77,33 +84,11 @@ impl Settings {
         {
             validate_invite(invite)?;
         }
-        if self
-            .membership_receipt
-            .as_ref()
-            .is_some_and(|bytes| bytes.len() > crate::exchange::MAX_FILE_BYTES)
-            || self.applied_membership_receipts.len() > 4096
-            || self.issued_membership_invitations.len() > 32
-        {
-            return Err("Too much saved membership data".into());
-        }
         if self.seeds.len() > 32 {
-            return Err("Too many saved Mesh seeds".into());
+            return Err("Too many saved Mesh invites".into());
         }
         for seed in &self.seeds {
             validate_invite(seed)?;
-        }
-        crate::admission::validate_owners(&self.admitted_owners)?;
-        if self.replies.len() > 32 {
-            return Err("Too many pending replies".into());
-        }
-        if self.owner_names.len() > 1024
-            || self.owner_names.iter().any(|(id, name)| {
-                !self.admitted_owners.contains(id)
-                    || name.len() > 128
-                    || name.chars().any(char::is_control)
-            })
-        {
-            return Err("Invalid allowed-person labels".into());
         }
         Ok(())
     }
@@ -121,7 +106,7 @@ impl Settings {
         Ok(())
     }
 
-    /// Accept another seed without discarding established serving participation.
+    /// Accept another invite without discarding established participation.
     pub fn accept_seed(&mut self, seed: &str) -> Result<(), String> {
         validate_invite(seed)?;
         match &self.connection {
@@ -142,6 +127,21 @@ impl Settings {
         self.validate()
     }
 
+    /// Every invite this node holds, in the order it accepted them.
+    pub fn joins(&self) -> Vec<&String> {
+        let Connection::Private { invite } = &self.connection else {
+            return Vec::new();
+        };
+        invite
+            .iter()
+            .chain(
+                self.seeds
+                    .iter()
+                    .filter(|seed| Some(*seed) != invite.as_ref()),
+            )
+            .collect()
+    }
+
     pub fn args(&self) -> Vec<String> {
         let mut args = vec![
             "serve".into(),
@@ -154,26 +154,27 @@ impl Settings {
         ];
         match &self.connection {
             Connection::Automatic => args.push("--auto".into()),
-            Connection::Private { invite } => {
+            Connection::Private { .. } => {
+                // `require-owned` is what makes this a Mesh rather than a star:
+                // every peer carrying a valid owner attestation and the same
+                // signed Mesh policy is trusted, with no per-person list
+                // (`mesh/ownership.rs:355-416`). Membership is therefore the
+                // Mesh itself, and the invite is the membership.
                 args.extend([
                     "--owner-required".into(),
                     "--trust-policy".into(),
-                    "allowlist".into(),
+                    "require-owned".into(),
                 ]);
-                // The people this tray admitted are declared on the command
-                // line, exactly as Buzz declares its roster through the SDK.
-                // The engine merges these with the machine's trust store in
-                // memory and writes nothing back, so the tray never edits the
-                // user's trusted owners; the effective allowlist is the union.
-                for owner in &self.admitted_owners {
-                    args.extend(["--trust-owner".into(), owner.clone()]);
-                }
-                if let Some(invite) = invite {
-                    args.extend(["--join".into(), invite.clone()]);
-                }
-                for seed in &self.seeds {
-                    if Some(seed) != invite.as_ref() {
-                        args.extend(["--join".into(), seed.clone()]);
+                let joins = self.joins();
+                if joins.is_empty() {
+                    // Creating: declare the requirement, which is what buys the
+                    // signed bearer invite. A joiner must not declare it — it
+                    // inherits the policy from the token it pastes, and its own
+                    // requirements would describe a different Mesh.
+                    args.extend(["--min-node-version".into(), MIN_NODE_VERSION.into()]);
+                } else {
+                    for join in joins {
+                        args.extend(["--join".into(), join.clone()]);
                     }
                 }
             }
@@ -230,17 +231,25 @@ pub fn validate_invite(invite: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether pasted text is worth prefilling a join field with. A signed invite is
+/// a long base64url token — around 2,200 characters — so this is deliberately
+/// not the same thing as valid: a short word from the clipboard is not an
+/// invite, and putting it in the field would look like Mesh had found one.
+pub fn looks_like_invite(text: &str) -> bool {
+    let text = text.trim();
+    text.len() > 256 && validate_invite(text).is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn accepting_more_members_preserves_seeds_serving_and_grants() {
+    fn accepting_more_invites_preserves_established_participation() {
         let root = tempfile::tempdir().unwrap();
         let mut settings = Settings {
             connection: Connection::Private {
                 invite: Some("original".into()),
             },
-            admitted_owners: vec!["ab".repeat(32)],
             ..Default::default()
         };
         settings.accept_seed("second").unwrap();
@@ -255,7 +264,6 @@ mod tests {
             }
         );
         assert_eq!(settings.seeds, ["second", "third"]);
-        assert_eq!(settings.admitted_owners, ["ab".repeat(32)]);
         let args = settings.args();
         assert_eq!(args[0], "serve");
         assert_eq!(
@@ -276,29 +284,37 @@ mod tests {
         assert_ne!(mesh_profile().unwrap(), data_root().unwrap());
     }
 
+    /// The version floor is not a version preference: it is what makes the Mesh
+    /// requirement-aware, so only the node that *creates* the Mesh may declare
+    /// it. A joiner that also declared it would be describing a second Mesh.
     #[test]
-    fn admitted_people_are_declared_on_the_command_line_in_private_only() {
-        let owner = "ab".repeat(32);
-        let second = "cd".repeat(32);
-        let settings = Settings {
+    fn only_the_creator_declares_the_requirement_and_a_joiner_only_joins() {
+        let creating = Settings {
             connection: Connection::Private { invite: None },
-            admitted_owners: vec![owner.clone(), second.clone()],
             ..Default::default()
         };
-        let args = settings.args();
-        assert_eq!(
-            args.windows(2)
-                .filter(|pair| pair[0] == "--trust-owner")
-                .map(|pair| pair[1].as_str())
-                .collect::<Vec<_>>(),
-            [owner.as_str(), second.as_str()]
-        );
-        // Public shares the machine with anyone, so it declares nobody.
-        let public = Settings {
-            admitted_owners: vec![owner],
+        let args = creating.args();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--min-node-version", MIN_NODE_VERSION]));
+        assert!(!args.contains(&"--join".into()));
+
+        let joining = Settings {
+            connection: Connection::Private {
+                invite: Some("their-token".into()),
+            },
             ..Default::default()
         };
-        assert!(!public.args().contains(&"--trust-owner".into()));
+        let args = joining.args();
+        assert!(!args.contains(&"--min-node-version".into()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--join", "their-token"]));
+
+        // Public declares neither: it is not a Mesh of ours to create or join.
+        let public = Settings::default().args();
+        assert!(!public.contains(&"--min-node-version".into()));
+        assert!(!public.contains(&"--join".into()));
     }
 
     #[test]
@@ -336,6 +352,16 @@ mod tests {
         ] {
             assert!(validate_invite(value).is_err());
         }
+        validate_invite("A-token_of-the_right-shape").unwrap();
+    }
+    #[test]
+    fn only_a_token_sized_clipboard_prefills_the_join_field() {
+        assert!(!looks_like_invite(""));
+        assert!(!looks_like_invite("join my mesh"));
+        assert!(!looks_like_invite(&"a".repeat(256)));
+        assert!(looks_like_invite(&format!("  {}  ", "a".repeat(2187))));
+        // Long, but not an invite: spaces and punctuation are not base64url.
+        assert!(!looks_like_invite(&"word ".repeat(200)));
     }
     #[test]
     fn default_is_real_auto_not_a_fallback_ladder() {
@@ -361,46 +387,50 @@ mod tests {
             assert_eq!(args[0], "serve");
         }
     }
+    /// Mutual trust is the whole point of the pivot: a Private node must never
+    /// launch with a per-person allowlist, in either the creating or the
+    /// joining shape.
     #[test]
-    fn private_requires_identity_and_allowlist_even_when_empty() {
-        let settings = Settings {
-            connection: Connection::Private { invite: None },
-            ..Default::default()
-        };
-        let args = settings.args();
-        assert!(args.contains(&"--owner-required".into()));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--trust-policy", "allowlist"]));
+    fn private_is_owner_required_and_mutually_trusting_never_an_allowlist() {
+        for invite in [None, Some("their-token".to_string())] {
+            let settings = Settings {
+                connection: Connection::Private { invite },
+                ..Default::default()
+            };
+            let args = settings.args();
+            assert!(args.contains(&"--owner-required".into()));
+            assert!(args
+                .windows(2)
+                .any(|pair| pair == ["--trust-policy", "require-owned"]));
+            assert!(!args.contains(&"allowlist".into()));
+            assert!(!args.contains(&"--trust-owner".into()));
+        }
         assert!(!Settings::default()
             .args()
             .contains(&"--trust-policy".into()));
     }
     #[test]
-    fn roster_survives_restart_and_removal() {
-        let root = tempfile::tempdir().unwrap();
-        let mut settings = Settings {
-            connection: Connection::Private { invite: None },
-            admitted_owners: vec!["ab".repeat(32)],
-            ..Default::default()
-        };
-        settings.save(root.path()).unwrap();
-        let loaded = Settings::load(root.path()).unwrap();
-        assert_eq!(loaded.admitted_owners, settings.admitted_owners);
-        settings.admitted_owners.clear();
-        settings.save(root.path()).unwrap();
-        assert!(Settings::load(root.path())
-            .unwrap()
-            .admitted_owners
-            .is_empty());
-    }
-    #[test]
-    fn legacy_settings_have_no_implicit_grants() {
-        let settings: Settings =
-            serde_json::from_str(r#"{"connection":{"mode":"private","invite":"old-invite"}}"#)
-                .unwrap();
-        assert!(settings.admitted_owners.is_empty());
-        assert!(settings.args().contains(&"--owner-required".into()));
+    fn a_launcher_file_from_the_allowlist_tray_still_opens_and_forgets_its_grants() {
+        // The old fields describe a membership model that no longer exists.
+        // Opening must succeed; the grants must not come back in any form.
+        let settings: Settings = serde_json::from_str(
+            r#"{"connection":{"mode":"private","invite":"old-invite"},
+                "admitted_owners":["abababababababababababababababababababababababababababababababab"],
+                "owner_names":{"abababababababababababababababababababababababababababababababab":"Jo"},
+                "exchange":{"generation":3},"replies":[],"membership_receipt":null,
+                "issued_membership_invitations":["x"],"applied_membership_receipts":[]}"#,
+        )
+        .unwrap();
+        settings.validate().unwrap();
+        let args = settings.args();
+        assert!(!args.contains(&"--trust-owner".into()));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--trust-policy", "require-owned"]));
+        assert!(args.windows(2).any(|pair| pair == ["--join", "old-invite"]));
+        let written = serde_json::to_string(&settings).unwrap();
+        assert!(!written.contains("admitted_owners"));
+        assert!(!written.contains("exchange"));
     }
     #[test]
     fn malformed_saved_choice_is_not_reinterpreted_as_auto() {

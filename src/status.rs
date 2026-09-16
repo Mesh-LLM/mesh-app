@@ -167,7 +167,17 @@ fn checked_private_invite(
     }
     let token = value["token"]
         .as_str()
-        .ok_or("Mesh has not supplied an invitation yet.")?;
+        .ok_or("Mesh has not supplied an invite yet.")?;
+    // A requirement-aware Mesh returns an empty token rather than a bad one
+    // when it can neither mint nor re-share: the engine logs "refusing to emit
+    // legacy invite token" and hands back "" (`node_identity.rs:181-185`). That
+    // is the one case the user can act on, so it says what to do.
+    if token.is_empty() {
+        return Err(
+            "This invite has expired. Ask the person who invited you for a new one — only the node that started this Mesh can make one."
+                .into(),
+        );
+    }
     crate::settings::validate_invite(token)?;
     Ok(token.into())
 }
@@ -193,6 +203,13 @@ mod private_tests {
             v[field] = bad;
             assert!(checked_private_invite(&v, 42, "owner", 100).is_err());
         }
+        // An expired requirement-aware Mesh returns "", and the user is told
+        // what to do about it rather than shown a validation complaint.
+        let mut expired = v.clone();
+        expired["token"] = "".into();
+        let message = checked_private_invite(&expired, 42, "owner", 100).unwrap_err();
+        assert!(message.contains("expired"), "{message}");
+        assert!(message.contains("new one"), "{message}");
         let mut not_ready = v.clone();
         not_ready["runtime"]["daemon_state"] = "starting".into();
         assert!(checked_private_invite(&not_ready, 42, "owner", 100).is_err());

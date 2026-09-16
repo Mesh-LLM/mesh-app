@@ -2,39 +2,36 @@
 
 A native menu-bar tray that runs a private Mesh for you and the people you invite.
 No webview. It launches the official prebuilt Mesh executable unchanged — the tray
-owns the menus, the pairing journey and the child process, not the runtime.
+owns the menus, the invite and the child process, not the runtime.
 
 ## Inviting someone
 
-Two cards, like a party invitation.
+One code. You mint it, they paste it, they are in.
 
-1. **Members → Invite someone.** The invitation lands in the share sheet; send it
-   however you like — Messages, Mail, AirDrop, a USB stick. It grants no access.
-2. **They open it and RSVP.** That joins them to you on their side and puts their
-   RSVP in their share sheet to send back. Nothing of yours has changed yet.
-3. **You open the RSVP and confirm it is really them.** That admits that exact
-   identity and connects you. Nothing further is needed from either of you.
+1. **Invites → Copy an invite.** The code is on your clipboard; send it however
+   you like — Messages, Mail, a note read out loud.
+2. **They choose Invites → Join with an invite** and paste it. Mesh restarts and
+   they are in.
+3. **Nothing comes back.** No reply to open, nothing to confirm, no list to keep.
 
-A third card is produced when you confirm, and it is optional: it introduces the
-new person to the other members of your Mesh. Ignore it and the two of you are
-still connected.
+Everyone in the Mesh can use everyone's machines, including people you never
+handed a code to yourself: they can forward yours on, and whoever joins is
+trusted by everybody already in. The unit of trust is the Mesh, not the person.
 
-Delivery is by file on purpose. It works for family on another network, on a
-phone, or with no network at all, and it needs no discovery service.
+### What the code is and what it costs
 
-### What each step does and does not do
-
-- An invitation is a signed offer with your identity and how to reach you. It is
-  a file, so it can be forwarded: opening one adds **the inviter only**, never
-  the inviter's other members.
-- An RSVP proves the sender holds their key and binds their reply to your exact
-  invitation. It admits nobody on your side.
-- Confirming is the only thing that admits an identity to your Mesh, and only
-  the one identity in front of you. A name is not proof; only you know whether
-  you asked for it.
-- Invitations expire after 30 minutes and are single-decision: Confirm and
-  Decline both consume the pending invitation.
-
+- It is a signed bearer token: your node's address plus the signed Mesh policy,
+  good for 24 hours. Holding it within the day is membership.
+- **It is not bound to anybody.** Forward it to five people and all five can
+  join. That is what makes the Mesh grow without you in the middle.
+- **Only the node that created the Mesh can mint one.** Someone who joined can
+  pass on the code they were given, and when it lapses their Invite says to ask
+  you for a new one. So you have to be running for anyone new to arrive.
+- **You cannot take it back.** There is no Mesh-wide eviction: each person can
+  refuse someone on their own machine with `mesh-llm auth`, and the clean kick is
+  re-forming the Mesh, which changes its ID and means everyone re-pastes.
+- Asking again gives a fresh 24 hours for the **same** Mesh, because the Mesh ID
+  is the hash of the policy and the policy has not changed.
 ## Runtime and identity
 
 The official `mesh-llm` executable sits next to the app executable, retaining
@@ -46,20 +43,26 @@ no second keystore, no copied trust store and no symlinks. Models are not
 downloaded twice because there is only one cache.
 
 Public and Private are flags on the same node, not two identities: `--auto` for
-Public, and `--owner-required --trust-policy allowlist` plus one `--trust-owner`
-per admitted person for Private. Switching modes keeps your identity — it is the
-trusted list, not the identity, that going Public gives up. The roster is declared on the
-command line, exactly as Buzz declares its own through the SDK
-(`desktop/src-tauri/src/mesh_llm/mod.rs:399-406`), so the tray never edits your
-trust store. The engine merges those arguments with the store in memory and
-writes nothing back (`mesh-llm-host-runtime/src/runtime/startup_models.rs:141`),
-so the allowlist is the union of your machine's trusted owners and the tray's
-roster. Forgetting someone in the tray drops the tray's grant at the next start;
-if you or Buzz also trusted them in `~/.mesh-llm/trusted-owners.json`, that
-machine-level decision stands and is yours to remove with `mesh-llm auth`.
+Public, and `--owner-required --trust-policy require-owned` for Private, plus
+either `--min-node-version` when this node creates the Mesh or `--join <code>`
+when it joins one. Switching modes keeps your identity — it is the Mesh, not the
+identity, that going Public gives up.
 
-The tray writes two files, ever: `~/.mesh-app/launcher.json` (ports, mode, who
-you admitted and what is outstanding) and `~/.mesh-app/mesh.log`. On a machine
+`require-owned` is what makes it a Mesh rather than a star: the tray keeps no
+allowlist and passes no `--trust-owner`, so every peer with a valid owner
+attestation and the same signed Mesh policy is trusted mutually
+(`mesh-llm-host-runtime/src/mesh/ownership.rs:355-416`). The version floor is the
+one requirement the tray sets, and it is not really about versions: any
+requirement makes the Mesh requirement-aware, which is what turns its invite
+into the signed 24-hour bearer token only the originator can mint
+(`mesh/node_identity.rs:106-185`). Without it the Mesh is unrestricted and the
+code degrades to an unsigned address token with no expiry. The floor is a
+deliberate constant in `settings.rs`, not the bundled version, because the Mesh
+ID is the hash of the policy: changing it forms a different Mesh and everyone
+re-pastes.
+
+The tray writes two files, ever: `~/.mesh-app/launcher.json` (ports, mode and
+the invites this node joined with) and `~/.mesh-app/mesh.log`. On a machine
 with no engine config at all it writes one `~/.mesh-llm/config.toml` on first
 run — thinking off, so tray chat answers instead of reasoning into its whole
 token budget — and then never touches that file again, whatever you put in it.
@@ -73,9 +76,9 @@ instances per profile are supported — each takes its own
 twice at once is not something we have tested. Run one at a time for now.
 
 There is no separate "start over", because switching Mesh is starting over:
-going Public forgets everyone you trusted and every invitation outstanding, and
-starting a Private Mesh starts it with nobody in it. Public trusts nobody in
-particular, so there is nothing left to reset. Your machine's Mesh identity is
+going Public forgets the invite that put you in the Mesh, and starting a Private
+Mesh starts your own with nobody in it. It is forgetting, not revoking — people
+holding a valid code to a Mesh you created can still use it. Your machine's Mesh identity is
 not part of that and does not change — it is shared with the CLI and Buzz, and
 resetting it is `rm -rf ~/.mesh-llm`, which resets them too.
 
@@ -103,13 +106,17 @@ sibling checkout, and no Mesh SDK or runtime is built here.
 
 ## State of it
 
-The pairing logic — accept, confirm, decline, replay, tamper, expiry and seed
-preservation — is covered by unit tests. Live multi-node connectivity has been
-exercised with official `serve` nodes.
+The trust model itself is proven on the unmodified 0.76.2 runtime: four
+identities across two Macs, all joined with one originator's code, every peer
+mutually verified, and cross-host inference served both ways
+(`RESEARCH/MESH_BEARER_INVITE_REQUIRE_OWNED_TEST_20260915.md` in the Buzz nest).
+That was a LAN test, so it proves trust and routing, not NAT traversal between
+houses. The flags the tray launches, the invite copy and the join restart are
+covered by unit tests.
 
-Not verified: the journey clicked end to end on two machines by a human. The
-dialog wording, the share-sheet timing and Finder file association want an
-attended trial. Windows is launch-gated; Linux is not natively verified.
+Not verified: the journey clicked end to end in the menu bar by a human, and
+what happens on restart when a code has since expired. Windows is launch-gated;
+Linux is not natively verified.
 
 [HUMAN_TESTING.md](HUMAN_TESTING.md) has the reproducible checksum-verified
 macOS arm64 bundle and the manual test procedure.

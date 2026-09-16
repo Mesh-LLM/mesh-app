@@ -1,13 +1,12 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
-use mesh_tray::{consent, identity, settings};
+use mesh_tray::{identity, settings};
+mod invites;
 mod lifecycle;
-mod membership_ui;
 #[cfg(target_os = "macos")]
 mod native;
 #[cfg(not(target_os = "macos"))]
 #[path = "native_portable.rs"]
 mod native;
-mod sharing;
 mod status;
 
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -34,7 +33,6 @@ struct Ui {
 
 struct App {
     settings: settings::Settings,
-    native: native::Native,
     pending_settings: Option<settings::Settings>,
     root: PathBuf,
     ui: Option<Ui>,
@@ -52,11 +50,6 @@ struct App {
     log_mark: u64,
     open_when_ready: Option<&'static str>,
     exit: bool,
-    offer_reply: bool,
-    /// A reply was just produced and still has to reach the person who invited
-    /// you. Offered once the restart that produced it is finished, so nobody
-    /// has to find a menu item for it.
-    offer_membership_card: bool,
 }
 
 fn icon() -> Icon {
@@ -97,7 +90,6 @@ impl App {
         Self {
             root,
             settings,
-            native: native::Native::default(),
             pending_settings: None,
             ui: None,
             child: None,
@@ -112,8 +104,6 @@ impl App {
             log_mark: 0,
             open_when_ready: None,
             exit: false,
-            offer_reply: false,
-            offer_membership_card: false,
         }
     }
 
@@ -124,7 +114,7 @@ impl App {
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
         let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
-        let people = muda::Submenu::new("Members", true);
+        let people = muda::Submenu::new("Invites", true);
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         menu.append_items(&[
             &chat,
@@ -293,14 +283,14 @@ impl App {
     fn render(&mut self) {
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
-        // Two actions cover the whole journey: invite someone, or accept the
-        // card they sent back. Every card is copied to the clipboard the moment
-        // it exists, so there is no retry item and no roster: if a card never
-        // arrived, invite again, and who is joined is the console's job.
+        // Two actions, and they are the whole model: hand out this Mesh's
+        // invite, or paste one you were given. Nothing comes back, so there is
+        // no reply to chase, no approval to remember and no roster to keep --
+        // who is joined is the console's job.
         if ui.people.items().is_empty() {
             let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite-member", "Invite someone…", true, None),
-                &MenuItem::with_id("paste-card", "Paste what they sent", true, None),
+                &MenuItem::with_id("invite", "Copy an invite…", true, None),
+                &MenuItem::with_id("join", "Join with an invite…", true, None),
             ]);
         }
         // Three states, not six: a line that changes while the menu is open is
@@ -369,8 +359,6 @@ impl App {
 
     fn quit(&mut self) {
         self.pending_settings = None;
-        self.offer_reply = false;
-        self.offer_membership_card = false;
         let Some(child) = &mut self.child else {
             self.exit = true;
             return;
@@ -387,12 +375,8 @@ impl App {
                 "chat" => self.open("/chat"),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
-                "invite-member" => self.invite_member(),
-                "paste-card" => self.paste_card(),
-                "share-request" => self.share_request(),
-                "cancel-requests" => self.cancel_requests(),
-                "share-reply" => self.share_reply(),
-
+                "invite" => self.invite(),
+                "join" => self.join(),
                 "retry" => self.start(),
                 "quit" => self.quit(),
                 _ => {}
@@ -412,14 +396,6 @@ impl App {
             };
             if self.snapshot.running {
                 self.started = None;
-                if self.offer_reply && self.snapshot.private_owner.is_some() {
-                    self.offer_reply = false;
-                    self.share_reply();
-                }
-                if self.offer_membership_card && self.snapshot.private_owner.is_some() {
-                    self.offer_membership_card = false;
-                    self.share_membership();
-                }
                 if let Some(path) = self.open_when_ready.take() {
                     self.open(path);
                 }
@@ -486,19 +462,19 @@ impl App {
         {
             return;
         }
-        let leaving_private = matches!(
+        let leaving_joined_mesh = matches!(
             self.settings.connection,
             settings::Connection::Private { .. }
-        ) && !self.settings.admitted_owners.is_empty();
-        let (title, body) = if leaving_private {
+        ) && !self.settings.joins().is_empty();
+        let (title, body) = if leaving_joined_mesh {
             (
                 "Leave this private Mesh?",
-                "Going Public forgets everyone you trusted here and any invitation outstanding, and restarts Mesh. Your identity, your models and your settings stay as they are.",
+                "Going Public forgets the invite that put you in it, and restarts Mesh. It does not remove you for anyone else: rejoining means pasting an invite again. Your identity, your models and your settings stay as they are.",
             )
         } else if matches!(connection, settings::Connection::Private { .. }) {
             (
                 "Start a private Mesh?",
-                "Restarts Mesh with nobody trusted yet — invite the people you want. Anything outstanding is cancelled.",
+                "Restarts Mesh as its own private Mesh, with nobody in it yet — copy an invite and send it to the people you want. Anyone who has it can join and pass it on.",
             )
         } else {
             (
@@ -552,7 +528,6 @@ impl App {
         if let Some(next) = self.pending_settings.take() {
             match next.save(&self.root) {
                 Ok(()) => {
-                    self.offer_reply = !next.replies.is_empty();
                     self.settings = next;
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
@@ -660,10 +635,8 @@ mod desktop {
             for (label, action) in [
                 ("Public", "public"),
                 ("Private", "private"),
-                ("Request to join", "request"),
-                ("Paste what they sent", "paste"),
-                ("Share approved reply", "reply"),
-                ("Cancel pending", "cancel"),
+                ("Copy an invite", "invite"),
+                ("Join with an invite", "join"),
                 ("Retry startup", "retry"),
             ] {
                 let button = gtk::Button::with_label(label);
@@ -677,10 +650,8 @@ mod desktop {
                         "private" => {
                             app.change_mode(settings::Connection::Private { invite: None })
                         }
-                        "request" => app.share_request(),
-                        "paste" => app.paste_card(),
-                        "reply" => app.share_reply(),
-                        "cancel" => app.cancel_requests(),
+                        "invite" => app.invite(),
+                        "join" => app.join(),
                         "retry" => app.start(),
                         _ => {}
                     }
@@ -766,14 +737,12 @@ mod transaction_tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn portable_adapter_api_compiles_without_launching_dialogs() {
-        let mut adapter = portable::Native::default();
-        let _ = &mut adapter;
-        let _ = portable::Native::share;
         // Clipboard access is the one API that cannot be checked here: the
         // portable adapter's implementation is GTK, gated to Linux.
         let _ = portable::notice;
         let _ = portable::confirm;
-        let _ = portable::decision;
+        // prompt_card is GTK on the platform this adapter ships on, so it is
+        // gated out here; notice and confirm are the portable pair.
     }
     use super::*;
     fn app(root: &std::path::Path) -> App {
@@ -785,20 +754,19 @@ mod transaction_tests {
         let mut app = app(root.path());
         std::fs::create_dir(root.path().join("launcher.json")).unwrap();
         let mut candidate = app.settings.clone();
-        candidate.admitted_owners.push("ab".repeat(32));
+        candidate.accept_seed("a-pasted-invite").unwrap();
         app.pending_settings = Some(candidate);
         app.apply_pending();
-        assert!(app.settings.admitted_owners.is_empty());
+        assert!(app.settings.joins().is_empty());
         assert!(app.child.is_none());
         assert!(app.error.as_ref().unwrap().contains("save"));
         assert!(app.pending_settings.is_none());
     }
     #[test]
-    fn startup_failure_keeps_committed_removal_never_restores_old_grants() {
+    fn startup_failure_keeps_the_committed_choice_and_never_rejoins_the_old_mesh() {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(root.path());
-        let owner = "ab".repeat(32);
-        app.settings.admitted_owners.push(owner.clone());
+        app.settings.accept_seed("their-invite").unwrap();
         app.settings.save(root.path()).unwrap();
         // Deterministic occupied-port failure, never start a Mesh process.
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -808,19 +776,20 @@ mod transaction_tests {
         } else {
             9447
         };
-        let next = consent::remove(&app.settings, &owner, 0).unwrap();
+        // Leaving for Public is committed before the runtime is asked to
+        // start; a failed start must not put the old Mesh back.
+        let next = mesh_tray::reset::switching_to(&app.settings, settings::Connection::Automatic);
         app.pending_settings = Some(next);
         app.apply_pending();
         assert!(app.child.is_none());
         assert!(app.error.is_some());
-        assert!(app.settings.admitted_owners.is_empty());
+        assert!(app.settings.joins().is_empty());
         assert!(settings::Settings::load(root.path())
             .unwrap()
-            .admitted_owners
+            .joins()
             .is_empty());
-        assert_eq!(app.settings.exchange.generation(), 1);
         app.start();
-        assert!(app.settings.admitted_owners.is_empty());
+        assert!(app.settings.joins().is_empty());
     }
     #[cfg(unix)]
     fn exited_child() -> Child {
@@ -938,24 +907,21 @@ mod transaction_tests {
 
     #[cfg(unix)]
     #[test]
-    fn consent_is_not_saved_until_owned_child_is_reaped_and_busy_actions_do_not_replace_it() {
+    fn a_choice_is_not_saved_until_the_owned_child_is_reaped_and_busy_actions_do_not_replace_it() {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(root.path());
         app.settings.save(root.path()).unwrap();
         let mut other = Command::new("sleep").arg("30").spawn().unwrap();
         app.child = Some(Command::new("sleep").arg("30").spawn().unwrap());
         let mut next = app.settings.clone();
-        next.admitted_owners.push("ab".repeat(32));
+        next.accept_seed("their-invite").unwrap();
         app.queue_settings(next);
         assert!(settings::Settings::load(root.path())
             .unwrap()
-            .admitted_owners
+            .joins()
             .is_empty());
         app.queue_settings(settings::Settings::default());
-        assert_eq!(
-            app.pending_settings.as_ref().unwrap().admitted_owners.len(),
-            1
-        );
+        assert_eq!(app.pending_settings.as_ref().unwrap().joins().len(), 1);
         let deadline = Instant::now() + Duration::from_secs(3);
         while app.child.as_mut().unwrap().try_wait().unwrap().is_none() && Instant::now() < deadline
         {
@@ -969,7 +935,7 @@ mod transaction_tests {
         std::fs::remove_file(root.path().join("launcher.json")).unwrap();
         std::fs::create_dir(root.path().join("launcher.json")).unwrap();
         app.apply_pending();
-        assert!(app.settings.admitted_owners.is_empty());
+        assert!(app.settings.joins().is_empty());
         assert!(app.child.is_none());
         let alive = other.try_wait().unwrap().is_none();
         other.kill().unwrap();

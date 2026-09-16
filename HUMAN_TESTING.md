@@ -2,7 +2,7 @@
 
 **Ready to try on macOS arm64.** This is a local, unsigned/not-notarized candidate,
 not an installer or replacement for the installed preview. The bundled tray is
-built at `41d4314` and uses the unchanged official Mesh **0.76.2** and its adjacent
+built on `tray/bearer-invite` and uses the unchanged official Mesh **0.76.2** and its adjacent
 native runtime. Mic has cleared the prior zero-Keychain-prompts blocker; no engine
 change is required. Ordinary first-run macOS authorization may appear. If prompts
 repeat or access fails, cancel and Quit this candidate; do not repeatedly Retry,
@@ -45,66 +45,56 @@ the profile path and the ports are fixed.
 Stop only your candidate via its menu → Quit. To **restart the same identity**,
 launch the app again; do not repeat `mkdir`/`printf` and do not delete anything.
 
-## Invite → reply → Allow → deliver approval
+## Invite → paste → in
 
-Complete each full exchange, including delivery to existing members, **within
-30 minutes of creating its invitation**. Even final approval imports currently
-expire at that deadline. Only the latest outgoing reply/approval is retained.
+There is one code and it travels one way. Nothing comes back, nothing is
+confirmed, and there is no list to inspect afterwards — the console shows peers.
 
-1. A/B: wait for Private startup. Members → Invite a member requires a verified
-   owned private runtime; model download may still be pending. Settings opens the
-   existing console. `ready_idle` is not inference readiness; wait for a real model
-   before testing Chat. Inspect `$PROFILE/mesh.log` if the console is unavailable.
-2. A: Members → **Invite a member** → Create invitation. Choose an available native
-   share service and send the file to B. Save received files locally. No automatic
-   messaging, notification, link/QR or Finder file association is implemented.
-3. B: Members → **Open invitation or reply** → select A's file → **Accept & reply**.
-   Send the reply to A using the share picker. Acceptance alone must not change B's
-   serving connection, seeds or grants. If delivery was cancelled, Members →
-   **Share reply or approval** reopens the picker; do not create another exchange.
-4. A: open B's reply through that same menu. Optionally check with B outside Mesh
-   (call, existing chat or in person), best efforts. The reference code is optional,
-   not a ceremony. Choose **Allow** for the displayed exact device identity, or
-   Decline. A claimed human name is not proof. Cancel is the default and decides
-   nothing; Decline consumes the invitation and grants nothing.
-5. Allow restarts only A's runtime to apply its new grant. Once ready, A must
-   explicitly use **Share reply or approval** and send the final file to B. B opens
-   it through Members to join, restarting only B's runtime. Until it arrives, B has
-   not joined. Confirm both list each other's identity under Members and still serve.
-6. B invites C by repeating steps 2–5. B sends that final approval to **both C and A**.
-   A imports it without a second pairwise Allow dialog. C learns the signed existing
-   roster, and A admits C via trusted B. There is no automatic roster propagation;
-   deliver each new approval to all existing members. All retain serving.
-7. Restart owned candidates using their same profiles. Confirm identities, earlier
-   seeds and member grants survive. Open **Chat** explicitly, select a real available
-   model, and send “Reply with a short greeting.” Record model, response and peer
-   state in Settings. A local response alone does not prove remote inference; record
-   which node served it if the console exposes that information.
-8. Try negative cases using separate fresh invitations: Decline grants nothing;
-   a forwarded invitation alone grants nothing; an unapproved identity cannot use
-   B's final approval; duplicate imports are rejected; expired files require a new
-   complete exchange. Finish delivering the positive trial before negative cases.
+1. A/B: wait for Private startup. Copy an invite needs a verified owned private
+   runtime, so it is refused until the menu says Ready; model download may still
+   be pending. Settings opens the existing console. `ready_idle` is not inference
+   readiness; wait for a real model before testing Chat. Inspect
+   `$PROFILE/mesh.log` if the console is unavailable.
+2. A: **Invites → Copy an invite.** Send the clipboard text to B any way you
+   like. It should be a long single-line token (~2,200 characters) with no
+   spaces. Report anything shorter, and do not paste it into this report.
+3. B: **Invites → Join with an invite**, paste, Join. B restarts. Once ready,
+   confirm in B's console that A is a peer and `owner.status` is verified — and
+   that A's console shows B the same way, with neither of you having approved
+   anything.
+4. C (third Mac, or a third identity): join with **the same code A sent B**, not
+   a new one. Confirm C and B see each other, having never exchanged anything.
+   This is the claim that matters; report it if it fails.
+5. B: **Invites → Copy an invite.** It should be byte-identical to A's code —
+   B is forwarding, not issuing. Confirm B's dialog says so.
+6. Use each other: on B, open **Chat**, select a model that only C is serving,
+   and send "Reply with a short greeting." Record which node served it if the
+   console exposes that. A local answer alone proves nothing.
+7. Restart every candidate on its same profile. Confirm identities and Mesh
+   membership survive, and that nobody had to paste anything again.
+8. Negative cases, last: going Public on B and back to Private should leave B in
+   its **own** Mesh with nobody in it, not back in A's. After 24 hours, A's old
+   code should be refused for a new joiner while existing members keep working,
+   and B's Copy an invite should say to ask A for a new one. Both of these are
+   untested by us — report exactly what you see.
 
-Native share-service availability/delivery is part of this trial, not already
-verified. If no suitable service appears or delivery fails, report that exact step;
-do not assume Mesh sent it. Shares remain until app exit (32 per session). Quit and
-restart to reset the share limit; saved replies/approvals survive. Cancel pending
-exchanges discards pending work, not established member grants.
-
+**Do not paste an invite code into a report, a log excerpt or a chat channel.**
+Within its 24 hours it is membership: anyone holding it can join and can then use
+every machine in the Mesh.
 ## What to report / what is already checked
 
 Report A/B/C hardware, macOS, step reached, exact error, model readiness and response,
-member/peer state before and after restart, and whether authorization repeated.
+peer state before and after restart, and whether authorization repeated.
 Review/redact logs before sharing: do not send keystores, private profile contents,
-credentials or invitation tokens. Preserve profiles for restart testing; no wiping
+credentials or invite codes. Preserve profiles for restart testing; no wiping
 or automated cleanup of identities/models is part of this guide.
 
-Noninteractive verification: full Rust tests with fake identity stores, signed
-membership/persistence/lifecycle fixtures, fmt/check/Clippy `-D warnings`; package
-failure tests and all 33 bundle hashes. Packaging never runs either executable.
-The corrected live three-node flow, native share delivery and actual inference are
-**human acceptance checks still to do**, not claimed successes. This review found
-no additional state-machine code prerequisite for this manual journey.
+Noninteractive verification: full Rust tests with fake identity stores, launch-flag
+and persistence fixtures, fmt/check/Clippy `-D warnings`; package failure tests and
+the bundle hashes. Packaging never runs either executable. The trust model is
+separately proven on four identities across two Macs with this same unmodified
+runtime, on a LAN. **Still to do, not claimed:** the menu-bar journey clicked end
+to end, restarting with an expired code, and NAT traversal between networks.
 
 ## Rebuild / packaging
 
@@ -134,7 +124,9 @@ not blockers to this attended macOS trial. Never publish this as a finished rele
 ## Start over
 
 There is no Start Over item: switching Mesh is starting over. Choosing Public
-stops the runtime and forgets everyone you trusted and any invitation
-outstanding; choosing Private starts a Mesh with nobody in it. Both ask first.
+stops the runtime and forgets the code that put you in the Mesh; choosing Private
+starts your own Mesh with nobody in it. Both ask first. Neither removes you for
+anyone else — there is no Mesh-wide eviction — so rejoining means pasting a code
+again.
 Your machine identity, downloaded models, engine config, other Mesh nodes and
 Buzz data are left alone, and ordinary quit and restart keeps your pairings.
