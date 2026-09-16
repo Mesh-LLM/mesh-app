@@ -64,9 +64,34 @@ fn fatal_message(line: &str) -> Option<String> {
     Some(message.trim().to_string())
 }
 
+/// Plain English for a runtime message the user cannot act on as written.
+///
+/// Only one qualifies today, and it is the cost of the version floor: the Mesh
+/// ID is the hash of the policy, so a floor that differs from the one already
+/// persisted describes a different Mesh and the engine refuses to start
+/// (`mesh/node_requirements.rs:129-135`). Verified verbatim against the bundled
+/// 0.76.2 runtime by changing the floor on an existing profile.
+pub fn advice(reason: &str) -> Option<&'static str> {
+    reason
+        .contains("persisted mesh genesis policy does not match local owner or requirements")
+        .then_some(
+            "This machine already created a private Mesh under different settings, so Mesh will not reuse it.              A new Mesh means everyone needs a new invite. To start one, remove              ~/.mesh-llm/mesh-genesis-policy.json and choose Private again; your identity, models and              config are not part of that file.",
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_policy_mismatch_is_explained_and_nothing_else_is_guessed_at() {
+        let fatal = "persisted mesh genesis policy does not match local owner or requirements";
+        let said = advice(fatal).unwrap();
+        assert!(said.contains("new invite"));
+        assert!(said.contains("mesh-genesis-policy.json"));
+        assert!(advice("Owner identity is required but no keystore was found.").is_none());
+        assert!(advice("").is_none());
+    }
 
     const FATAL: &str = r#"{"event":"fatal","level":"fatal","fatal":"Owner identity is required but no keystore was found.","message":"Owner identity is required but no keystore was found."}"#;
 

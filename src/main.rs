@@ -333,7 +333,12 @@ impl App {
             // The runtime's own last words, so the reason is in front of the
             // user instead of in a log they have to go and read.
             let reason = match mesh_tray::startup_log::reason(&log, self.log_mark) {
-                Some(reason) => format!("Mesh said:\n\n{reason}\n\n"),
+                Some(reason) => match mesh_tray::startup_log::advice(&reason) {
+                    Some(advice) => {
+                        format!("Mesh said:\n\n{reason}\n\nWhat that means:\n\n{advice}\n\n")
+                    }
+                    None => format!("Mesh said:\n\n{reason}\n\n"),
+                },
                 None => String::new(),
             };
             let body = format!(
