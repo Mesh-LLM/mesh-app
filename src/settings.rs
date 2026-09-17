@@ -39,8 +39,8 @@ pub enum Connection {
 #[serde(default)]
 pub struct Settings {
     pub connection: Connection,
-    /// Additional accepted bootstrap invites; joining again does not discard an
-    /// established connection.
+    /// Legacy bootstrap addresses retained on ordinary restart. Explicit joining
+    /// replaces this set rather than accumulating mesh selections.
     pub seeds: Vec<String>,
     pub console_port: u16,
     pub api_port: u16,
@@ -106,25 +106,20 @@ impl Settings {
         Ok(())
     }
 
-    /// Accept another invite without discarding established participation.
+    /// Select this private mesh, replacing all previously saved invites.
     pub fn accept_seed(&mut self, seed: &str) -> Result<(), String> {
         validate_invite(seed)?;
-        match &self.connection {
-            Connection::Private {
-                invite: Some(current),
-            } if current != seed => {
-                if !self.seeds.iter().any(|saved| saved == seed) {
-                    self.seeds.push(seed.into());
-                }
-            }
-            Connection::Private { invite: Some(_) } => {}
-            _ => {
-                self.connection = Connection::Private {
-                    invite: Some(seed.into()),
-                }
-            }
-        }
-        self.validate()
+        let next = Self {
+            connection: Connection::Private {
+                invite: Some(seed.into()),
+            },
+            seeds: Vec::new(),
+            console_port: self.console_port,
+            api_port: self.api_port,
+        };
+        next.validate()?;
+        *self = next;
+        Ok(())
     }
 
     /// Every invite this node holds, in the order it accepted them.
@@ -244,35 +239,62 @@ pub fn looks_like_invite(text: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn accepting_more_invites_preserves_established_participation() {
+    fn joining_replaces_old_invites_and_survives_restart() {
         let root = tempfile::tempdir().unwrap();
         let mut settings = Settings {
             connection: Connection::Private {
                 invite: Some("original".into()),
             },
-            ..Default::default()
+            seeds: vec!["old-seed".into()],
+            console_port: 4242,
+            api_port: 4243,
         };
-        settings.accept_seed("second").unwrap();
-        settings.accept_seed("third").unwrap();
-        settings.accept_seed("second").unwrap();
+        settings.accept_seed("new-mesh").unwrap();
         settings.save(root.path()).unwrap();
         let settings = Settings::load(root.path()).unwrap();
-        assert_eq!(
-            settings.connection,
-            Connection::Private {
-                invite: Some("original".into())
-            }
-        );
-        assert_eq!(settings.seeds, ["second", "third"]);
+        assert!(settings.seeds.is_empty());
+        assert_eq!((settings.console_port, settings.api_port), (4242, 4243));
         let args = settings.args();
-        assert_eq!(args[0], "serve");
         assert_eq!(
             args.windows(2)
                 .filter(|p| p[0] == "--join")
                 .map(|p| p[1].as_str())
                 .collect::<Vec<_>>(),
-            ["original", "second", "third"]
+            ["new-mesh"]
         );
+        assert!(!args.contains(&"--min-node-version".into()));
+    }
+
+    #[test]
+    fn joining_from_public_selects_only_the_supplied_invite() {
+        let mut settings = Settings {
+            seeds: vec!["legacy-seed".into()],
+            ..Default::default()
+        };
+        settings.accept_seed("new-mesh").unwrap();
+        settings.accept_seed("new-mesh").unwrap();
+        assert_eq!(
+            settings.connection,
+            Connection::Private {
+                invite: Some("new-mesh".into()),
+            }
+        );
+        assert!(settings.seeds.is_empty());
+        assert_eq!(settings.joins(), vec![&"new-mesh".to_string()]);
+    }
+
+    #[test]
+    fn invalid_join_preserves_the_existing_selection() {
+        let mut settings = Settings {
+            connection: Connection::Private {
+                invite: Some("original".into()),
+            },
+            seeds: vec!["old-seed".into()],
+            ..Default::default()
+        };
+        let before = serde_json::to_value(&settings).unwrap();
+        assert!(settings.accept_seed("").is_err());
+        assert_eq!(serde_json::to_value(&settings).unwrap(), before);
     }
 
     #[test]

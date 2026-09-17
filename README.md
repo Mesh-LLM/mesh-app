@@ -14,6 +14,10 @@ One code. You mint it, they paste it, they are in.
    they are in.
 3. **Nothing comes back.** No reply to open, nothing to confirm, no list to keep.
 
+Joining with another invite replaces the saved invite set; it does not add a
+second mesh. Ordinary Quit → reopen retains the selected mesh. Ports, engine
+settings and downloaded models are preserved when selecting another invite.
+
 Everyone in the Mesh can use everyone's machines, including people you never
 handed a code to yourself: they can forward yours on, and whoever joins is
 trusted by everybody already in. The unit of trust is the Mesh, not the person.
@@ -120,3 +124,31 @@ Linux is not natively verified.
 
 [HUMAN_TESTING.md](HUMAN_TESTING.md) has the reproducible checksum-verified
 macOS arm64 bundle and the manual test procedure.
+
+### Testing an unreleased engine fix
+
+The official preview packager still defaults to the pinned 0.76.2 archive.
+For a locally composed source product, explicitly record the full engine commit
+and both input checksums instead (Python 3.12+):
+
+```sh
+python3 scripts/package-preview.py target/release/mesh-tray \
+  /absolute/source-product.tar.gz /absolute/new-source-candidate \
+  --source-commit FULL_40_CHARACTER_ENGINE_COMMIT \
+  --archive-sha256 ARCHIVE_SHA256 --host-sha256 HOST_SHA256
+```
+
+Build the host and matching native runtime from that same engine checkout using
+its documented `just` product-build commands. Hash the archive and its contained
+`mesh-bundle/mesh-llm`, not a different host or an installed app. The pins are
+caller-supplied provenance, not release authentication. Packaging executes neither
+binary, preserves the adjacent runtime, and labels the handoff as a source trial.
+Do not change `MIN_NODE_VERSION` to match a newer binary: it defines the Mesh ID.
+
+Engine PR [#1896](https://github.com/Mesh-LLM/mesh-llm/pull/1896) supplies durable
+joiner membership after invite expiry. Until tested with that fix, do not promise
+that the pinned 0.76.2 preview survives an expired invite on restart. For a source
+candidate, verify joiner restart after expiry, owner restart, two joiners restarting
+with the owner offline, and rejection of a fresh node with the expired code.
+The tray must retain the original invite as the engine's mesh-selection hint;
+it must not discard it merely because its admission window has elapsed.
