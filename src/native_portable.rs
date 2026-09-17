@@ -20,11 +20,25 @@ pub fn paste_text() -> Result<String, String> {
         "The clipboard has no text on it. Copy the invite they sent, then try again.".into()
     })
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+// Windows: the clipboard is a shared, single-owner resource opened per call.
+// clipboard-win handles the OpenClipboard/EmptyClipboard/GlobalAlloc dance and
+// the UTF-16 CF_UNICODETEXT round-trip, keeping this adapter free of raw Win32.
+#[cfg(target_os = "windows")]
+pub fn copy_text(text: &str) -> Result<(), String> {
+    clipboard_win::set_clipboard_string(text)
+        .map_err(|e| format!("Could not put the invite on the clipboard: {e}"))
+}
+#[cfg(target_os = "windows")]
+pub fn paste_text() -> Result<String, String> {
+    clipboard_win::get_clipboard_string().map_err(|_| {
+        "The clipboard has no text on it. Copy the invite they sent, then try again.".into()
+    })
+}
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub fn copy_text(_: &str) -> Result<(), String> {
     Err("Copying is not available on this platform.".into())
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub fn paste_text() -> Result<String, String> {
     Err("Pasting is not available on this platform.".into())
 }

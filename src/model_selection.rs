@@ -77,7 +77,24 @@ fn memory_bytes() -> Result<u64, String> {
         .ok_or_else(|| "Cannot read local memory for private model selection".into())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+fn memory_bytes() -> Result<u64, String> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: MEMORYSTATUSEX is a plain-old-data struct with no invalid bit
+    // patterns, so a zeroed value is valid; dwLength must be the struct size
+    // before the call, which the next line sets.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: the pointer refers to a live, correctly sized, writable buffer
+    // with dwLength initialised as the API requires.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return Err("Cannot read local memory for private model selection".into());
+    }
+    Ok(status.ullTotalPhys)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn memory_bytes() -> Result<u64, String> {
     Err("Private model selection is not supported on this platform yet".into())
 }
