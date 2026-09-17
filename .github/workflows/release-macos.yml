@@ -1,0 +1,247 @@
+name: Release macOS
+
+# Builds a downloadable, signed, notarized Mesh.app for macOS arm64.
+#
+# The engine inside the bundle is selectable:
+#   - "latest" (default) or a release tag like "v0.76.2": the official
+#     Mesh-LLM/mesh-llm release archive, verified against its .sha256 sidecar.
+#   - "main" or a full 40-char commit SHA: mesh-llm built from source at that
+#     ref on this runner via its own `just release-build` + `release-bundle`.
+#
+# Publishing:
+#   - Pushing a tray tag `v*` builds with the latest engine release and
+#     publishes a GitHub release on this repository.
+#   - Manual dispatch uploads a workflow artifact, and publishes a prerelease
+#     when `publish` is true.
+#
+# Required secrets for signing/notarization (build stays unsigned without
+# the certificate, and is then only suitable for local testing):
+#   APPLE_CERTIFICATE_P12        base64 of a Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD   password for the .p12
+#   APPLE_NOTARY_KEY             App Store Connect API private key (.p8 text)
+#   APPLE_NOTARY_KEY_ID          API key ID
+#   APPLE_NOTARY_ISSUER_ID       API issuer ID
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      engine:
+        description: "mesh-llm engine: latest, vX.Y.Z, main, or a 40-char commit SHA"
+        default: latest
+      publish:
+        description: "Publish a prerelease on this repository"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    env:
+      ENGINE_REPO: Mesh-LLM/mesh-llm
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve versions
+        id: meta
+        env:
+          ENGINE_INPUT: ${{ inputs.engine || 'latest' }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            app_version="${GITHUB_REF_NAME#v}"
+          else
+            app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)-dev.${GITHUB_SHA:0:9}"
+          fi
+          case "$ENGINE_INPUT" in
+            latest)
+              tag="$(gh release view --repo "$ENGINE_REPO" --json tagName -q .tagName)"
+              echo "engine_kind=release" >> "$GITHUB_OUTPUT"
+              echo "engine_tag=$tag" >> "$GITHUB_OUTPUT" ;;
+            v[0-9]*)
+              echo "engine_kind=release" >> "$GITHUB_OUTPUT"
+              echo "engine_tag=$ENGINE_INPUT" >> "$GITHUB_OUTPUT" ;;
+            *)
+              sha="$(gh api "repos/$ENGINE_REPO/commits/$ENGINE_INPUT" -q .sha)"
+              echo "engine_kind=source" >> "$GITHUB_OUTPUT"
+              echo "engine_commit=$sha" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "signed=${{ secrets.APPLE_CERTIFICATE_P12 != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Download official engine release
+        if: steps.meta.outputs.engine_kind == 'release'
+        env:
+          TAG: ${{ steps.meta.outputs.engine_tag }}
+        run: |
+          set -euo pipefail
+          mkdir engine && cd engine
+          gh release download "$TAG" --repo "$ENGINE_REPO" \
+            --pattern "mesh-llm-${TAG}-aarch64-apple-darwin.tar.gz*"
+          shasum -a 256 -c "mesh-llm-${TAG}-aarch64-apple-darwin.tar.gz.sha256"
+          {
+            echo "ENGINE_ARCHIVE=$PWD/mesh-llm-${TAG}-aarch64-apple-darwin.tar.gz"
+            echo "ENGINE_SHA256=$(awk '{print $1}' ./*.sha256)"
+            echo "ENGINE_PROVENANCE=--engine-version ${TAG#v}"
+          } >> "$GITHUB_ENV"
+
+      - name: Check out engine source
+        if: steps.meta.outputs.engine_kind == 'source'
+        uses: actions/checkout@v4
+        with:
+          repository: Mesh-LLM/mesh-llm
+          ref: ${{ steps.meta.outputs.engine_commit }}
+          path: engine-src
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        if: steps.meta.outputs.engine_kind == 'source'
+        with:
+          node-version: 24
+
+      - name: Build engine from source
+        if: steps.meta.outputs.engine_kind == 'source'
+        env:
+          ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
+        run: |
+          set -euo pipefail
+          brew install cmake ninja just
+          cd engine-src
+          engine_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          just release-build
+          just release-bundle "v${engine_version}" dist
+          archive="$PWD/dist/mesh-llm-v${engine_version}-aarch64-apple-darwin.tar.gz"
+          test -f "$archive"
+          {
+            echo "ENGINE_ARCHIVE=$archive"
+            echo "ENGINE_SHA256=$(shasum -a 256 "$archive" | awk '{print $1}')"
+            echo "ENGINE_PROVENANCE=--engine-commit $ENGINE_COMMIT"
+          } >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build tray
+        run: cargo build --release
+
+      - name: Package Mesh.app
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          python3 scripts/package-app.py target/release/mesh-tray "$ENGINE_ARCHIVE" out \
+            --version "$APP_VERSION" --archive-sha256 "$ENGINE_SHA256" $ENGINE_PROVENANCE
+
+      - name: Sign
+        if: steps.meta.outputs.signed == 'true'
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/build.keychain-db"
+          keychain_pw="$(uuidgen)"
+          security create-keychain -p "$keychain_pw" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_pw" "$keychain"
+          printf '%s' "$APPLE_CERTIFICATE_P12" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_pw" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" login.keychain-db
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          test -n "$identity"
+          app="out/Mesh.app"
+          # Inside out: runtime payload first, then the engine host, then the app.
+          find "$app/Contents/MacOS/native-runtimes" -type f \
+            \( -name '*.dylib' -o -perm -u+x \) -print0 2>/dev/null \
+            | xargs -0 -n1 codesign --force --timestamp --options runtime --sign "$identity"
+          codesign --force --timestamp --options runtime \
+            --entitlements scripts/entitlements.plist --sign "$identity" \
+            "$app/Contents/MacOS/mesh-llm"
+          codesign --force --timestamp --options runtime \
+            --entitlements scripts/entitlements.plist --sign "$identity" "$app"
+          codesign --verify --strict --deep "$app"
+
+      - name: Notarize and staple
+        if: steps.meta.outputs.signed == 'true'
+        env:
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$APPLE_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          ditto -c -k --keepParent out/Mesh.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$APPLE_NOTARY_KEY_ID" \
+            --issuer "$APPLE_NOTARY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple out/Mesh.app
+          rm "$RUNNER_TEMP/notary.p8"
+
+      - name: Create distributables
+        id: dist
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+          SIGNED: ${{ steps.meta.outputs.signed }}
+        run: |
+          set -euo pipefail
+          suffix=""
+          [[ "$SIGNED" == "true" ]] || suffix="-UNSIGNED"
+          base="Mesh-${APP_VERSION}-macos-arm64${suffix}"
+          mkdir artifacts
+          ditto -c -k --keepParent out/Mesh.app "artifacts/${base}.zip"
+          hdiutil create -volname "Mesh" -srcfolder out/Mesh.app -ov -format UDZO \
+            "artifacts/${base}.dmg"
+          cp out/SHA256.json "artifacts/${base}.manifest.json"
+          cd artifacts
+          for f in "${base}.zip" "${base}.dmg"; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+
+      - name: Sign disk image
+        if: steps.meta.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          identity="$(security find-identity -v -p codesigning \
+            | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
+          codesign --force --timestamp --sign "$identity" \
+            "artifacts/${{ steps.dist.outputs.base }}.dmg"
+          shasum -a 256 "artifacts/${{ steps.dist.outputs.base }}.dmg" \
+            > "artifacts/${{ steps.dist.outputs.base }}.dmg.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.dist.outputs.base }}
+          path: artifacts/*
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prerelease=""
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            tag="build-${APP_VERSION}"
+            git tag "$tag" "$GITHUB_SHA" || true
+            git push origin "$tag" || true
+            prerelease="--prerelease"
+          fi
+          engine_note="engine: ${{ steps.meta.outputs.engine_tag || steps.meta.outputs.engine_commit }}"
+          gh release create "$tag" $prerelease \
+            --title "Mesh $APP_VERSION (macOS arm64)" \
+            --notes "Signed, notarized macOS arm64 build. $engine_note. Verify downloads with the .sha256 sidecars; SHA256.json in the manifest lists every file inside the app." \
+            artifacts/*
