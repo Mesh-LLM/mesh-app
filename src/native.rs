@@ -84,3 +84,11 @@ pub fn confirm(title: &str, detail: &str, action: &str) -> bool {
     foreground_dialog(mtm);
     alert.runModal() == 1001
 }
+
+/// AppKit tracks open menus in this run-loop mode. Defer live menu writes
+/// until tracking ends; polling and process supervision can keep running.
+pub fn menu_is_tracking() -> bool {
+    objc2_foundation::NSRunLoop::mainRunLoop()
+        .currentMode()
+        .is_some_and(|mode| *mode == *unsafe { objc2_app_kit::NSEventTrackingRunLoopMode })
+}

@@ -44,19 +44,11 @@ impl App {
                 .id();
             let token = status::private_invite(self.settings.console_port, pid, &owner)?;
             native::copy_text(&token)?;
-            let held_by_someone_else = !self.settings.joins().is_empty();
-            native::notice(
-                "Invite copied",
-                if held_by_someone_else {
-                    "Paste it to them in any chat, mail or note.\n\nThis is the invite you were given, passed on — you are forwarding it, not issuing one. It stops working when it expires, and only the person who started this Mesh can make a new one."
-                } else {
-                    "Paste it to them in any chat, mail or note.\n\nIt works for 24 hours, anyone who has it can join, and they can pass it on. Everyone who joins can use everyone's machines. You cannot take it back, so send it only to people you would lend a laptop to."
-                },
-            );
+            native::notice("Invite copied", "You can send it now.");
             Ok::<(), String>(())
         })();
         if let Err(e) = result {
-            native::notice("Could not copy an invite", &e);
+            native::notice("Could not create an invite", &e);
         }
     }
 

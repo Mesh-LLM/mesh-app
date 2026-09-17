@@ -20,8 +20,6 @@ const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
     menu: Menu,
-    status: MenuItem,
-    status_text: &'static str,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
     retry: MenuItem,
@@ -109,7 +107,6 @@ impl App {
 
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
-        let status = MenuItem::new("Mesh · Starting…", false, None);
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
@@ -119,7 +116,6 @@ impl App {
         menu.append_items(&[
             &chat,
             &PredefinedMenuItem::separator(),
-            &status,
             &public,
             &private,
             &people,
@@ -137,8 +133,6 @@ impl App {
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
             menu,
-            status,
-            status_text: "Mesh · Starting…",
             public,
             private,
             retry,
@@ -271,16 +265,33 @@ impl App {
     }
 
     fn restore_mode_checks(&self) {
+        #[cfg(target_os = "macos")]
+        if native::menu_is_tracking() {
+            return;
+        }
         let Some(ui) = &self.ui else { return };
         let private = matches!(
             self.settings.connection,
             settings::Connection::Private { .. }
         );
-        ui.public.set_checked(!private);
-        ui.private.set_checked(private);
+        // Write only when muda's live state diverges from the committed mode.
+        // Rewriting an item on an open menu makes the platform re-lay-out the
+        // menu, which on macOS dismisses it and steals focus mid-click. muda
+        // auto-toggles the clicked CheckMenuItem, so a divergence check both
+        // corrects that and skips the per-tick no-op writes.
+        if ui.public.is_checked() != !private {
+            ui.public.set_checked(!private);
+        }
+        if ui.private.is_checked() != private {
+            ui.private.set_checked(private);
+        }
     }
 
     fn render(&mut self) {
+        #[cfg(target_os = "macos")]
+        if native::menu_is_tracking() {
+            return;
+        }
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
         // Two actions, and they are the whole model: hand out this Mesh's
@@ -289,37 +300,31 @@ impl App {
         // who is joined is the console's job.
         if ui.people.items().is_empty() {
             let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite", "Copy an invite…", true, None),
+                &MenuItem::with_id("invite", "Invite someone to your mesh…", true, None),
                 &MenuItem::with_id("join", "Join with an invite…", true, None),
             ]);
         }
-        // Three states, not six: a line that changes while the menu is open is
-        // worse than a line that says less. Written only when it differs.
-        let text = if self.stopping.is_some() {
-            "Mesh · Stopping…"
-        } else if self.error.is_some() {
-            "Mesh · Needs attention"
-        } else if self.snapshot.running && self.snapshot.models_available {
-            "Mesh · Ready"
-        } else {
-            "Mesh · Starting…"
-        };
-        if ui.status_text != text {
-            ui.status.set_text(text);
-            ui.status_text = text;
+        // Same discipline as the checks: only touch an item when its state
+        // actually changes, so a background poll never mutates an open menu.
+        let enabled = self.stopping.is_none();
+        if ui.public.is_enabled() != enabled {
+            ui.public.set_enabled(enabled);
         }
-        ui.public.set_enabled(self.stopping.is_none());
-        ui.private.set_enabled(self.stopping.is_none());
+        if ui.private.is_enabled() != enabled {
+            ui.private.set_enabled(enabled);
+        }
         let retry = self.error.is_some() && self.child.is_none();
         if retry != ui.retry_visible {
             if retry {
-                let _ = ui.menu.insert(&ui.retry, 4);
+                let _ = ui.menu.insert(&ui.retry, 5);
             } else {
                 let _ = ui.menu.remove(&ui.retry);
             }
             ui.retry_visible = retry;
         }
-        ui.quit.set_enabled(self.stopping.is_none());
+        if ui.quit.is_enabled() != enabled {
+            ui.quit.set_enabled(enabled);
+        }
     }
 
     fn open(&mut self, path: &'static str) {
@@ -640,7 +645,7 @@ mod desktop {
             for (label, action) in [
                 ("Public", "public"),
                 ("Private", "private"),
-                ("Copy an invite", "invite"),
+                ("Invite someone to your mesh", "invite"),
                 ("Join with an invite", "join"),
                 ("Retry startup", "retry"),
             ] {
