@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// (`mesh/node_requirements.rs:129-135`). So bumping it means everybody
 /// re-pastes a new invite, and that has to be a decision rather than a
 /// side-effect of shipping a new runtime.
-pub const MIN_NODE_VERSION: &str = "0.76.2";
+pub const MIN_NODE_VERSION: &str = "0.76.0";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]

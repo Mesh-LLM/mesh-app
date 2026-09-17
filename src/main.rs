@@ -20,8 +20,6 @@ const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
     menu: Menu,
-    status: MenuItem,
-    status_text: &'static str,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
     retry: MenuItem,
@@ -109,7 +107,6 @@ impl App {
 
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
-        let status = MenuItem::new("Mesh · Starting…", false, None);
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
@@ -119,7 +116,6 @@ impl App {
         menu.append_items(&[
             &chat,
             &PredefinedMenuItem::separator(),
-            &status,
             &public,
             &private,
             &people,
@@ -137,8 +133,6 @@ impl App {
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
             menu,
-            status,
-            status_text: "Mesh · Starting…",
             public,
             private,
             retry,
@@ -271,6 +265,10 @@ impl App {
     }
 
     fn restore_mode_checks(&self) {
+        #[cfg(target_os = "macos")]
+        if native::menu_is_tracking() {
+            return;
+        }
         let Some(ui) = &self.ui else { return };
         let private = matches!(
             self.settings.connection,
@@ -290,6 +288,10 @@ impl App {
     }
 
     fn render(&mut self) {
+        #[cfg(target_os = "macos")]
+        if native::menu_is_tracking() {
+            return;
+        }
         self.restore_mode_checks();
         let Some(ui) = &mut self.ui else { return };
         // Two actions, and they are the whole model: hand out this Mesh's
@@ -301,21 +303,6 @@ impl App {
                 &MenuItem::with_id("invite", "Invite someone to your mesh…", true, None),
                 &MenuItem::with_id("join", "Join with an invite…", true, None),
             ]);
-        }
-        // Three states, not six: a line that changes while the menu is open is
-        // worse than a line that says less. Written only when it differs.
-        let text = if self.stopping.is_some() {
-            "Mesh · Stopping…"
-        } else if self.error.is_some() {
-            "Mesh · Needs attention"
-        } else if self.snapshot.running && self.snapshot.models_available {
-            "Mesh · Ready"
-        } else {
-            "Mesh · Starting…"
-        };
-        if ui.status_text != text {
-            ui.status.set_text(text);
-            ui.status_text = text;
         }
         // Same discipline as the checks: only touch an item when its state
         // actually changes, so a background poll never mutates an open menu.
@@ -329,7 +316,7 @@ impl App {
         let retry = self.error.is_some() && self.child.is_none();
         if retry != ui.retry_visible {
             if retry {
-                let _ = ui.menu.insert(&ui.retry, 4);
+                let _ = ui.menu.insert(&ui.retry, 5);
             } else {
                 let _ = ui.menu.remove(&ui.retry);
             }
