@@ -19,30 +19,7 @@ impl App {
     /// than an error to dress up (`node_identity.rs:181-185`).
     pub(crate) fn invite(&mut self) {
         let result = (|| {
-            if self.stopping.is_some() || self.pending_settings.is_some() {
-                return Err("Wait for Mesh to finish restarting".into());
-            }
-            if !matches!(self.settings.connection, Connection::Private { .. }) {
-                return Err(
-                    "Invites belong to a private Mesh. Choose Private first, then invite people."
-                        .into(),
-                );
-            }
-            // The status owner is the running child's verified identity. Using
-            // it instead of unlocking the keystore keeps the promise of one
-            // credential prompt per launch; the PID check below is what ties
-            // the token to the child this app started.
-            let owner = self
-                .snapshot
-                .private_owner
-                .clone()
-                .ok_or("Mesh is still getting ready. Try again when it says Ready.")?;
-            let pid = self
-                .child
-                .as_ref()
-                .ok_or("Start Private Mesh before inviting")?
-                .id();
-            let token = status::private_invite(self.settings.console_port, pid, &owner)?;
+            let token = self.mint_invite()?;
             native::copy_text(&token)?;
             native::notice("Invite copied", "You can send it now.");
             Ok::<(), String>(())
@@ -50,6 +27,49 @@ impl App {
         if let Err(e) = result {
             native::notice("Could not create an invite", &e);
         }
+    }
+
+    /// Hand this node's invite straight to the macOS share sheet, so it goes out
+    /// through Messages/Mail/AirDrop/etc. with no intermediate copy step. Same
+    /// token as `invite()`; only the delivery differs.
+    pub(crate) fn share_invite(&mut self) {
+        let result = (|| {
+            let token = self.mint_invite()?;
+            native::share_text(&token)?;
+            Ok::<(), String>(())
+        })();
+        if let Err(e) = result {
+            native::notice("Could not create an invite", &e);
+        }
+    }
+
+    /// Mint (or re-share) this node's signed bearer invite. Shared by copy and
+    /// share so both deliver the exact same token under the same guards.
+    fn mint_invite(&mut self) -> Result<String, String> {
+        if self.stopping.is_some() || self.pending_settings.is_some() {
+            return Err("Wait for Mesh to finish restarting".into());
+        }
+        if !matches!(self.settings.connection, Connection::Private { .. }) {
+            return Err(
+                "Invites belong to a private Mesh. Choose Private first, then invite people."
+                    .into(),
+            );
+        }
+        // The status owner is the running child's verified identity. Using
+        // it instead of unlocking the keystore keeps the promise of one
+        // credential prompt per launch; the PID check below is what ties
+        // the token to the child this app started.
+        let owner = self
+            .snapshot
+            .private_owner
+            .clone()
+            .ok_or("Mesh is still getting ready. Try again when it says Ready.")?;
+        let pid = self
+            .child
+            .as_ref()
+            .ok_or("Start Private Mesh before inviting")?
+            .id();
+        status::private_invite(self.settings.console_port, pid, &owner)
     }
 
     /// Paste an invite and join. Nothing is sent back, so there is no second leg
