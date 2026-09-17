@@ -276,8 +276,17 @@ impl App {
             self.settings.connection,
             settings::Connection::Private { .. }
         );
-        ui.public.set_checked(!private);
-        ui.private.set_checked(private);
+        // Write only when muda's live state diverges from the committed mode.
+        // Rewriting an item on an open menu makes the platform re-lay-out the
+        // menu, which on macOS dismisses it and steals focus mid-click. muda
+        // auto-toggles the clicked CheckMenuItem, so a divergence check both
+        // corrects that and skips the per-tick no-op writes.
+        if ui.public.is_checked() != !private {
+            ui.public.set_checked(!private);
+        }
+        if ui.private.is_checked() != private {
+            ui.private.set_checked(private);
+        }
     }
 
     fn render(&mut self) {
@@ -289,7 +298,7 @@ impl App {
         // who is joined is the console's job.
         if ui.people.items().is_empty() {
             let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite", "Copy an invite…", true, None),
+                &MenuItem::with_id("invite", "Invite someone to your mesh…", true, None),
                 &MenuItem::with_id("join", "Join with an invite…", true, None),
             ]);
         }
@@ -308,8 +317,15 @@ impl App {
             ui.status.set_text(text);
             ui.status_text = text;
         }
-        ui.public.set_enabled(self.stopping.is_none());
-        ui.private.set_enabled(self.stopping.is_none());
+        // Same discipline as the checks: only touch an item when its state
+        // actually changes, so a background poll never mutates an open menu.
+        let enabled = self.stopping.is_none();
+        if ui.public.is_enabled() != enabled {
+            ui.public.set_enabled(enabled);
+        }
+        if ui.private.is_enabled() != enabled {
+            ui.private.set_enabled(enabled);
+        }
         let retry = self.error.is_some() && self.child.is_none();
         if retry != ui.retry_visible {
             if retry {
@@ -319,7 +335,9 @@ impl App {
             }
             ui.retry_visible = retry;
         }
-        ui.quit.set_enabled(self.stopping.is_none());
+        if ui.quit.is_enabled() != enabled {
+            ui.quit.set_enabled(enabled);
+        }
     }
 
     fn open(&mut self, path: &'static str) {
@@ -640,7 +658,7 @@ mod desktop {
             for (label, action) in [
                 ("Public", "public"),
                 ("Private", "private"),
-                ("Copy an invite", "invite"),
+                ("Invite someone to your mesh", "invite"),
                 ("Join with an invite", "join"),
                 ("Retry startup", "retry"),
             ] {

@@ -56,7 +56,7 @@ impl App {
             Ok::<(), String>(())
         })();
         if let Err(e) = result {
-            native::notice("Could not copy an invite", &e);
+            native::notice("Could not create an invite", &e);
         }
     }
 
