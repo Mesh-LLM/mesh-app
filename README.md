@@ -86,12 +86,13 @@ holding a valid code to a Mesh you created can still use it. Your machine's Mesh
 not part of that and does not change — it is shared with the CLI and Buzz, and
 resetting it is `rm -rf ~/.mesh-llm`, which resets them too.
 
-Private model selection is two Gemma picks, classified on the machine's rated
-memory rather than what is free at launch: Gemma 4 E4B below 128 GiB, the 26B
-MoE above it, and an error below 8 GiB. Both answer without visible
-chain-of-thought, which is why they are the picks — the tray no longer writes
-engine defaults to say so. It is a total-memory heuristic, not a free-VRAM
-assurance, and first start can download weights.
+Private model selection uses total installed memory in whole GiB: Gemma 4 E4B
+(Q4_K_M) at 8–64 GiB, Gemma 4 26B-A4B (UD-Q4_K_M) at 65–127 GiB,
+and Qwen3.8 27B (UD-Q4_K_M) at 128 GiB and above. Below 8 GiB it reports
+insufficient memory. Configured startup models override these recommendations.
+This is not a free-memory or dedicated-GPU-VRAM fit guarantee; context cache,
+runtime buffers and other applications also need memory. First start can download
+weights. The Qwen tier uses the quant selected in the attended 128-GiB Mac trial.
 
 ## Developer checks
 

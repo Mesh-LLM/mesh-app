@@ -4,7 +4,6 @@ use std::time::Duration;
 #[derive(Clone, Default)]
 pub struct Snapshot {
     pub running: bool,
-    pub models_available: bool,
     pub pid: Option<u32>,
     pub private_owner: Option<String>,
 }
@@ -41,7 +40,6 @@ pub fn snapshot(port: u16) -> Snapshot {
     if !value["peers"].is_array() {
         return Snapshot::default();
     }
-    let models_available = get(port, "/v1/models").is_ok_and(|v| actual_models(&v));
 
     let pid = value["local_instances"]
         .as_array()
@@ -55,7 +53,6 @@ pub fn snapshot(port: u16) -> Snapshot {
     Snapshot {
         pid,
         running: true,
-        models_available,
         private_owner: value["owner"]["owner_id"]
             .as_str()
             .filter(|_| {
@@ -68,16 +65,6 @@ pub fn snapshot(port: u16) -> Snapshot {
             })
             .map(String::from),
     }
-}
-
-fn actual_models(value: &serde_json::Value) -> bool {
-    value["data"].as_array().is_some_and(|models| {
-        models.iter().any(|model| {
-            model["id"]
-                .as_str()
-                .is_some_and(|id| !id.is_empty() && !matches!(id, "auto" | "mesh"))
-        })
-    })
 }
 
 #[cfg(windows)]
@@ -105,16 +92,6 @@ pub fn stop_owned(port: u16, pid: u32) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn synthetic_routes_are_not_readiness() {
-        assert!(!actual_models(
-            &serde_json::json!({"data":[{"id":"auto"},{"id":"mesh"}]})
-        ));
-        assert!(!actual_models(&serde_json::json!({"data":[]})));
-        assert!(actual_models(
-            &serde_json::json!({"data":[{"id":"real/model"}]})
-        ));
-    }
     #[test]
     fn unavailable_daemon_is_not_ready() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

@@ -2,28 +2,12 @@
 //! Joining preserves local serving participation.
 use crate::settings::Connection;
 
-// Two picks, not a ladder: the small one is the default everywhere, and the
-// large one is chosen only where there is no doubt it fits. Buzz's catalog
-// (`desktop/src-tauri/src/mesh_llm/catalog.rs`) steps up at 32 GB; the tray
-// deliberately waits until 64 GiB, because a tray chat window is the one place
-// a model that does not fit is unrecoverable -- the user has no other model to
-// switch to. Erring small costs quality; erring large costs the product.
-//
-// Gemma both sides: measured on the same prompt, the Qwen picks spent their
-// whole token budget reasoning and often returned no answer, while both Gemma
-// picks thought briefly and answered every time. That is the whole reason these
-// two are here: the tray owns no engine config, so the model's own default
-// behaviour is what the user gets.
-//
-// Small is the default; the large pick is for genuinely large machines only,
-// well above Buzz's 32 GB catalog step. A tray chat window is the one place a
-// model that does not fit is unrecoverable, so the tray waits until there is no
-// doubt at all.
-//
-// Quant names are the ones the repos actually publish: the 26B ships only
-// `UD-Q4_K_M`, with no plain `Q4_K_M` file.
+// Total installed system memory, not free memory or dedicated GPU VRAM.
+// These are conservative tray recommendations, not runtime fit guarantees.
+// Explicit startup models in config.toml bypass this selection.
 const SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF@main:Q4_K_M";
-const LARGE: &str = "unsloth/gemma-4-26B-A4B-it-GGUF@main:UD-Q4_K_M";
+const MEDIUM: &str = "unsloth/gemma-4-26B-A4B-it-GGUF@main:UD-Q4_K_M";
+const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M";
 
 pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     if !matches!(connection, Connection::Private { .. }) {
@@ -33,13 +17,9 @@ pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
 }
 
 fn choose(bytes: u64) -> Result<&'static str, String> {
-    // Classified on the machine's rated memory, not on what is free right now:
-    // a busy desktop must not silently drop a tier. Buzz derives that rating by
-    // rounding to the nearest advertised capacity; whole GiB agrees with it at
-    // both boundaries for the sizes Macs ship, so this reads memory directly
-    // rather than taking a dependency on the runtime's hardware crate.
     match bytes / (1024 * 1024 * 1024) {
         128.. => Ok(LARGE),
+        65.. => Ok(MEDIUM),
         8.. => Ok(SMALL),
         _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically.".into()),
     }
@@ -104,14 +84,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn small_is_the_default_and_large_needs_a_large_machine() {
+    fn recommendations_follow_total_memory_rungs() {
         let gib = 1024 * 1024 * 1024;
         for size in [0, 4, 7] {
             assert!(choose(size * gib).is_err());
         }
-        // Every Mac we test on except the 128 GiB M5 stays on the small pick.
-        for size in [8, 16, 24, 32, 48, 64, 96, 127] {
+        for size in [8, 16, 24, 32, 48, 64] {
             assert_eq!(choose(size * gib).unwrap(), SMALL);
+        }
+        for size in [65, 80, 96, 127] {
+            assert_eq!(choose(size * gib).unwrap(), MEDIUM);
         }
         for size in [128, 192, 256, 512] {
             assert_eq!(choose(size * gib).unwrap(), LARGE);
