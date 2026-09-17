@@ -253,6 +253,7 @@ impl App {
             .env_remove("MESH_LLM_OWNER_PASSPHRASE");
         if let Some(model) = model {
             command.args(["--model", model.as_str()]);
+            command.args(mesh_tray::runtime_config::automatic_context_args(&profile));
         }
         #[cfg(windows)]
         {
