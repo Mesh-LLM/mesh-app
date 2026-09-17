@@ -69,22 +69,16 @@ impl App {
             }
             let Some(pasted) = native::prompt_card(
                 "Join a private Mesh",
-                "Paste the invite you were sent. Mesh restarts to join, and then you can use each other's machines.",
+                "Paste the invite you were sent. This replaces your current Mesh selection and restarts Mesh. Your models and settings are kept.",
                 "Join",
             ) else {
                 return Ok(());
             };
             let token = pasted.trim();
             settings::validate_invite(token)?;
-            // Already private: keep the Mesh this node is in and add the new
-            // invite. Coming from Public there is nothing to keep, and mode is
-            // changing, so this is the same forgetting as the Public/Private
-            // switch rather than a second concept.
-            let mut next = if matches!(self.settings.connection, Connection::Private { .. }) {
-                self.settings.clone()
-            } else {
-                mesh_tray::reset::switching_to(&self.settings, Connection::Private { invite: None })
-            };
+            // Explicit joining replaces the prior mesh selection. Ordinary
+            // startup keeps the saved selection for membership restoration.
+            let mut next = self.settings.clone();
             next.accept_seed(token)?;
             let profile = settings::mesh_profile()?;
             mesh_tray::identity::establish(&profile)?;
