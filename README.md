@@ -86,12 +86,38 @@ holding a valid code to a Mesh you created can still use it. Your machine's Mesh
 not part of that and does not change — it is shared with the CLI and Buzz, and
 resetting it is `rm -rf ~/.mesh-llm`, which resets them too.
 
-Private model selection is two Gemma picks, classified on the machine's rated
-memory rather than what is free at launch: Gemma 4 E4B below 128 GiB, the 26B
-MoE above it, and an error below 8 GiB. Both answer without visible
-chain-of-thought, which is why they are the picks — the tray no longer writes
-engine defaults to say so. It is a total-memory heuristic, not a free-VRAM
-assurance, and first start can download weights.
+Private automatic selection adapts the OpenClaw agent recipes, pinned at
+`d08c80a126097113d1b412d67aaa173aa889b4b8` (`extensions/llama-cpp/src/model-catalog.ts`):
+
+| Host memory floor | Model | Required available budget |
+| --- | --- | --- |
+| Below 16 GiB (including 8 GiB) | No automatic local model | — |
+| 16 GiB | Qwen3.5 4B Q4_K_M | 6 GiB |
+| 24 GiB + acceleration | Gemma 4 12B IT Q4_K_M | 12 GiB |
+| 32 GiB + acceleration | Qwen3.8 27B UD-Q4_K_M | 22 GiB |
+
+Below 16 GiB, Private starts without a tray-selected local model; explicit
+configured models are still respected. The 9B recipe is not automatically selected.
+For larger hosts, the highest eligible recipe wins. Host budget is the smaller of available memory and
+installed RAM minus max(2 GiB, 25%). Recipe budgets include upstream's 64K
+context/runtime estimate, not just weights. References pin upstream GGUF revisions.
+Only Apple Silicon is currently positively identified as unified GPU memory;
+Linux and Intel Macs use the CPU recipe (4B), never host RAM as discrete VRAM.
+Windows retains its existing launch gate. Dedicated GPU discovery is not implemented.
+Linux reads MemAvailable and the root cgroup-v2 memory limit; nested/cgroup-v1
+limits are not comprehensively detected. Disk-space admission is left to the
+engine downloader, unlike upstream setup's disk preflight.
+
+Automatic recipes pass `--ctx-size 65536` only when the saved configuration has
+no model or context override. Existing models and explicit context (including
+zero/auto) win; files are not rewritten. Larger explicit context can require more
+memory than these estimates. Public launch is unchanged.
+
+Sources: https://github.com/openclaw/openclaw/blob/d08c80a126097113d1b412d67aaa173aa889b4b8/docs/plugins/llama-cpp.md
+and https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/local_runtime/catalog.json.
+These are recommendation estimates, not Mesh runtime/tool-use certification.
+Gemma 12B and all new pinned references still need live engine qualification;
+no running Mesh is restarted by this change.
 
 ## Developer checks
 
