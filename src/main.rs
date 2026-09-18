@@ -19,13 +19,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
-    menu: Menu,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
-    retry: MenuItem,
-    retry_visible: bool,
-    quit: MenuItem,
-    people: muda::Submenu,
     _tray: TrayIcon,
 }
 
@@ -109,9 +104,19 @@ impl App {
         let menu = Menu::new();
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
-        let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
+        let private_mode = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        let public = muda::CheckMenuItem::with_id("public", "Public", true, !private_mode, None);
+        let private = muda::CheckMenuItem::with_id("private", "Private", true, private_mode, None);
         let people = muda::Submenu::new("Invites", true);
+        people
+            .append_items(&[
+                &MenuItem::with_id("invite", "Invite someone…", true, None),
+                &MenuItem::with_id("join", "Join with an invite…", true, None),
+            ])
+            .map_err(|e| e.to_string())?;
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         menu.append_items(&[
             &chat,
@@ -120,7 +125,7 @@ impl App {
             &private,
             &people,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::separator(),
+            &retry,
             &quit,
         ])
         .map_err(|e| e.to_string())?;
@@ -132,13 +137,8 @@ impl App {
             .build()
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
-            menu,
             public,
             private,
-            retry,
-            retry_visible: false,
-            quit,
-            people,
             _tray: tray,
         });
         self.start();
@@ -160,7 +160,6 @@ impl App {
             }
             Err(e) => self.error = Some(e),
         }
-        self.render();
     }
 
     fn spawn(&self) -> Result<Child, String> {
@@ -265,69 +264,6 @@ impl App {
             .map_err(|e| format!("Could not start Mesh: {e}"))
     }
 
-    fn restore_mode_checks(&self) {
-        #[cfg(target_os = "macos")]
-        if native::menu_is_tracking() {
-            return;
-        }
-        let Some(ui) = &self.ui else { return };
-        let private = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        // Write only when muda's live state diverges from the committed mode.
-        // Rewriting an item on an open menu makes the platform re-lay-out the
-        // menu, which on macOS dismisses it and steals focus mid-click. muda
-        // auto-toggles the clicked CheckMenuItem, so a divergence check both
-        // corrects that and skips the per-tick no-op writes.
-        if ui.public.is_checked() != !private {
-            ui.public.set_checked(!private);
-        }
-        if ui.private.is_checked() != private {
-            ui.private.set_checked(private);
-        }
-    }
-
-    fn render(&mut self) {
-        #[cfg(target_os = "macos")]
-        if native::menu_is_tracking() {
-            return;
-        }
-        self.restore_mode_checks();
-        let Some(ui) = &mut self.ui else { return };
-        // Two actions, and they are the whole model: hand out this Mesh's
-        // invite, or paste one you were given. Nothing comes back, so there is
-        // no reply to chase, no approval to remember and no roster to keep --
-        // who is joined is the console's job.
-        if ui.people.items().is_empty() {
-            let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite", "Invite someone to your mesh…", true, None),
-                &MenuItem::with_id("join", "Join with an invite…", true, None),
-            ]);
-        }
-        // Same discipline as the checks: only touch an item when its state
-        // actually changes, so a background poll never mutates an open menu.
-        let enabled = self.stopping.is_none();
-        if ui.public.is_enabled() != enabled {
-            ui.public.set_enabled(enabled);
-        }
-        if ui.private.is_enabled() != enabled {
-            ui.private.set_enabled(enabled);
-        }
-        let retry = self.error.is_some() && self.child.is_none();
-        if retry != ui.retry_visible {
-            if retry {
-                let _ = ui.menu.insert(&ui.retry, 5);
-            } else {
-                let _ = ui.menu.remove(&ui.retry);
-            }
-            ui.retry_visible = retry;
-        }
-        if ui.quit.is_enabled() != enabled {
-            ui.quit.set_enabled(enabled);
-        }
-    }
-
     fn open(&mut self, path: &'static str) {
         if self.child.is_none() || self.error.is_some() {
             let log = self.root.join("mesh.log");
@@ -369,6 +305,9 @@ impl App {
     }
 
     fn quit(&mut self) {
+        if self.stopping.is_some() {
+            return;
+        }
         self.pending_settings = None;
         let Some(child) = &mut self.child else {
             self.exit = true;
@@ -460,12 +399,27 @@ impl App {
             self.polling = self.tx.send(()).is_ok();
             self.next_poll = Instant::now() + POLL;
         }
-        self.render();
     }
+    // Only called for a mode click or a successfully committed settings change.
+    // Never refresh menu state from the periodic polling/render path.
+    fn sync_mode_checks(&self) {
+        let Some(ui) = &self.ui else { return };
+        let private = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        if ui.public.is_checked() == private {
+            ui.public.set_checked(!private);
+        }
+        if ui.private.is_checked() != private {
+            ui.private.set_checked(private);
+        }
+    }
+
     fn change_mode(&mut self, connection: settings::Connection) {
-        // muda toggles the clicked item before dispatch. Keep the committed mode
-        // visible through confirmation, cancellation and busy/same-mode returns.
-        self.restore_mode_checks();
+        // muda auto-toggles the clicked item before dispatch. Restore the saved
+        // choice so cancellation, same-mode clicks and failures cannot lie.
+        self.sync_mode_checks();
         if self.stopping.is_some()
             || self.pending_settings.is_some()
             || std::mem::discriminant(&self.settings.connection)
@@ -540,6 +494,7 @@ impl App {
             match next.save(&self.root) {
                 Ok(()) => {
                     self.settings = next;
+                    self.sync_mode_checks();
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
                     self.start();
