@@ -5,9 +5,7 @@ use objc2_app_kit::{
     NSAlert, NSApplication, NSBackingStoreType, NSEvent, NSPasteboard, NSPasteboardTypeString,
     NSSharingServicePicker, NSTextField, NSWindow, NSWindowStyleMask,
 };
-use objc2_foundation::{
-    MainThreadMarker, NSArray, NSPoint, NSRect, NSRectEdge, NSSize, NSString,
-};
+use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSRectEdge, NSSize, NSString};
 
 /// Put an invite on the clipboard so it can be pasted into any chat app. Replaces
 /// the clipboard's contents, which is what a "Copy" action is expected to do.

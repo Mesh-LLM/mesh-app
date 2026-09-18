@@ -49,7 +49,10 @@ pub fn paste_text() -> Result<String, String> {
 #[cfg(not(target_os = "macos"))]
 pub fn share_text(text: &str) -> Result<(), String> {
     copy_text(text)?;
-    notice("Invite copied", "Sharing isn't available here, so it's on your clipboard — paste it to send.");
+    notice(
+        "Invite copied",
+        "Sharing isn't available here, so it's on your clipboard — paste it to send.",
+    );
     Ok(())
 }
 pub fn notice(title: &str, detail: &str) {
