@@ -301,8 +301,7 @@ impl App {
         // who is joined is the console's job.
         if ui.people.items().is_empty() {
             let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite", "Invite someone to your mesh…", true, None),
-                &MenuItem::with_id("share", "Share an invite…", true, None),
+                &MenuItem::with_id("invite", "Invite someone…", true, None),
                 &MenuItem::with_id("join", "Join with an invite…", true, None),
             ]);
         }
@@ -388,7 +387,6 @@ impl App {
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite" => self.invite(),
-                "share" => self.share_invite(),
                 "join" => self.join(),
                 "retry" => self.start(),
                 "quit" => self.quit(),

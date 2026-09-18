@@ -8,31 +8,14 @@
 //! (`mesh-llm-host-runtime/src/mesh/node_identity.rs:143-185`).
 //!
 //! So the tray needs exactly two actions, and neither of them is a ceremony:
-//! copy the code, or paste one.
+//! share the code, or paste one.
 use crate::{native, status, App};
 use mesh_tray::settings::{self, Connection};
 
 impl App {
-    /// Copy this node's invite. Under a requirement-aware Mesh the engine
-    /// returns the signed token when it can mint or re-share one, and an empty
-    /// string when it cannot — which is the "ask for a fresh one" case rather
-    /// than an error to dress up (`node_identity.rs:181-185`).
+    /// Share this node's invite on macOS; other platforms copy it.
+    /// The same private-mesh, owner and child-PID guards apply everywhere.
     pub(crate) fn invite(&mut self) {
-        let result = (|| {
-            let token = self.mint_invite()?;
-            native::copy_text(&token)?;
-            native::notice("Invite copied", "You can send it now.");
-            Ok::<(), String>(())
-        })();
-        if let Err(e) = result {
-            native::notice("Could not create an invite", &e);
-        }
-    }
-
-    /// Hand this node's invite straight to the macOS share sheet, so it goes out
-    /// through Messages/Mail/AirDrop/etc. with no intermediate copy step. Same
-    /// token as `invite()`; only the delivery differs.
-    pub(crate) fn share_invite(&mut self) {
         let result = (|| {
             let token = self.mint_invite()?;
             native::share_text(&token)?;
@@ -43,8 +26,7 @@ impl App {
         }
     }
 
-    /// Mint (or re-share) this node's signed bearer invite. Shared by copy and
-    /// share so both deliver the exact same token under the same guards.
+    /// Mint (or re-share) this node's signed bearer invite.
     fn mint_invite(&mut self) -> Result<String, String> {
         if self.stopping.is_some() || self.pending_settings.is_some() {
             return Err("Wait for Mesh to finish restarting".into());

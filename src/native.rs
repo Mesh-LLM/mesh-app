@@ -7,20 +7,6 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSPoint, NSRect, NSRectEdge, NSSize, NSString};
 
-/// Put an invite on the clipboard so it can be pasted into any chat app. Replaces
-/// the clipboard's contents, which is what a "Copy" action is expected to do.
-pub fn copy_text(text: &str) -> Result<(), String> {
-    let _ = MainThreadMarker::new().ok_or("Copying must run on the main thread")?;
-    let pasteboard = NSPasteboard::generalPasteboard();
-    unsafe {
-        pasteboard.clearContents();
-        if !pasteboard.setString_forType(&NSString::from_str(text), NSPasteboardTypeString) {
-            return Err("macOS refused to put the invite on the clipboard.".into());
-        }
-    }
-    Ok(())
-}
-
 /// Hand an invite to the macOS share sheet (`NSSharingServicePicker`), so it can
 /// go out through Messages, Mail, AirDrop, Notes, etc. without a copy/paste step.
 ///
