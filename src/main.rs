@@ -19,6 +19,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
+    public: muda::CheckMenuItem,
+    private: muda::CheckMenuItem,
     _tray: TrayIcon,
 }
 
@@ -102,8 +104,12 @@ impl App {
         let menu = Menu::new();
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        let public = MenuItem::with_id("public", "Public", true, None);
-        let private = MenuItem::with_id("private", "Private", true, None);
+        let private_mode = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        let public = muda::CheckMenuItem::with_id("public", "Public", true, !private_mode, None);
+        let private = muda::CheckMenuItem::with_id("private", "Private", true, private_mode, None);
         let people = muda::Submenu::new("Invites", true);
         people
             .append_items(&[
@@ -130,7 +136,11 @@ impl App {
             .with_tooltip("Mesh")
             .build()
             .map_err(|e| e.to_string())?;
-        self.ui = Some(Ui { _tray: tray });
+        self.ui = Some(Ui {
+            public,
+            private,
+            _tray: tray,
+        });
         self.start();
         Ok(())
     }
@@ -390,7 +400,26 @@ impl App {
             self.next_poll = Instant::now() + POLL;
         }
     }
+    // Only called for a mode click or a successfully committed settings change.
+    // Never refresh menu state from the periodic polling/render path.
+    fn sync_mode_checks(&self) {
+        let Some(ui) = &self.ui else { return };
+        let private = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        if ui.public.is_checked() == private {
+            ui.public.set_checked(!private);
+        }
+        if ui.private.is_checked() != private {
+            ui.private.set_checked(private);
+        }
+    }
+
     fn change_mode(&mut self, connection: settings::Connection) {
+        // muda auto-toggles the clicked item before dispatch. Restore the saved
+        // choice so cancellation, same-mode clicks and failures cannot lie.
+        self.sync_mode_checks();
         if self.stopping.is_some()
             || self.pending_settings.is_some()
             || std::mem::discriminant(&self.settings.connection)
@@ -465,6 +494,7 @@ impl App {
             match next.save(&self.root) {
                 Ok(()) => {
                     self.settings = next;
+                    self.sync_mode_checks();
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
                     self.start();

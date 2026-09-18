@@ -5,8 +5,9 @@ Public/Private are flags on that node. Launcher state is `~/.mesh-app`
 (`launcher.json`, `mesh.log`). Changing mode forgets the Mesh being left, so
 there is no separate Start Over.
 
-The menu is constructed once: Public/Private are plain actions, Retry startup is
-always present, and background polling never changes menu items. Runtime guards
+The menu structure is constructed once; Retry startup is always present.
+Public/Private ticks are initialized from saved settings and synchronized only
+on mode clicks and committed settings changes, never periodically while polling. Runtime guards
 handle unavailable/busy actions; process supervision continues independently.
 
 OS-native jellyfish status menu: Public/Private, Invites, optional Chat, existing
