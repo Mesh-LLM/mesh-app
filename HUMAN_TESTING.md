@@ -95,7 +95,11 @@ and persistence fixtures, fmt/check/Clippy `-D warnings`; package failure tests 
 the bundle hashes. Packaging never runs either executable. The trust model is
 separately proven on four identities across two Macs with this same unmodified
 runtime, on a LAN. **Still to do, not claimed:** the menu-bar journey clicked end
-to end, restarting with an expired code, and NAT traversal between networks.
+to end and NAT traversal between networks. This historical 0.76.2 trial does not
+include the later durable-membership fix. Engine #1896 implemented and exercised
+expired-invite restart and owner-offline re-formation; see DESIGN.md. For any new
+candidate, record the actual bundled engine commit/version rather than treating
+this historical trial as its validation record.
 
 ## Rebuild / packaging
 

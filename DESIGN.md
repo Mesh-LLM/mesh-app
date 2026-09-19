@@ -49,7 +49,7 @@ Mesh-wide eviction, and the clean kick is re-forming the Mesh.
 ## Native verification still required
 
 No final screenshots or UI click/delivery proof; the menu-bar journey is
-unverified. Restarting with an expired code is untraced. The trust model itself
+unverified for a particular packaged candidate. The trust model itself
 is proven on four identities across two Macs with the unmodified 0.76.2 runtime,
 on a LAN — NAT traversal between houses is a separate, unsolved problem. Portable
 native paths compile but are not Windows/Linux product verification; Windows
@@ -58,3 +58,25 @@ runtime isolation remains gated. No accessibility/keyboard/QR success claimed.
 Shutdown signals only the retained child: SIGTERM on macOS/Linux, forced
 termination through the Child handle on Windows. Windows graceful shutdown
 and product support remain deferred; no HTTP shutdown endpoint is assumed.
+
+## Durable private restarts
+
+With an engine containing [mesh-llm #1896](https://github.com/Mesh-LLM/mesh-llm/pull/1896)
+(merged as `37fe1fa2404145ce9242892c12f61b283a83a931`), invite expiry alone does
+not prevent an admitted member from restarting. The tray retains the selected
+invite in `launcher.json`; the engine restores matching verified membership from
+`mesh-adopted-membership.json`, including saved peer addresses. The owner restores
+`mesh-genesis-policy.json`. These engine files are not the removed tray seeds list.
+Missing/corrupt membership, failed persistence, deliberately leaving the Mesh, or
+unreachable peers can still prevent rejoining. Fresh nodes cannot use an expired
+invite through this normal join path.
+
+The earlier engine live matrix covered expired-invite restart, owner restart,
+owner-offline re-formation and fresh-node rejection. Candidate-specific UI checks
+remain distinct from that engine evidence. See the merged PR for implementation.
+
+Packaging selects one engine product: a pinned source commit or a numbered
+release containing the required fixes, with its matching native runtime. The
+preview packager's historical official-release pins are still 0.76.2, which
+predates #1896; its explicit source option supports newer source candidates.
+There is no runtime choice between two engines and no version setting for users.
