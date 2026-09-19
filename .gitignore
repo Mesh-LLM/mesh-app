@@ -1,4 +1,20 @@
-/target
+# Rust build output
+/target/
 
+# Python bytecode, test caches, and local environments
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local packaging output
+/dist/
+*.app/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
