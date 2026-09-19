@@ -52,7 +52,8 @@ confirmed, and there is no list to inspect afterwards — the console shows peer
 
 1. A/B: wait for Private startup. Copy an invite needs a verified owned private
    runtime, so it is refused until the menu says Ready; model download may still
-   be pending. Settings opens the existing console. `ready_idle` is not inference
+   be pending. Open Chat opens the existing chat UI (or startup details on failure).
+   `ready_idle` is not inference
    readiness; wait for a real model before testing Chat. Inspect
    `$PROFILE/mesh.log` if the console is unavailable.
 2. A: **Invites → Copy an invite.** Send the clipboard text to B any way you

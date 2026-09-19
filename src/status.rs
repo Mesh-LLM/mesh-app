@@ -129,16 +129,16 @@ fn checked_private_invite(
         || value["owner"]["owner_id"].as_str() != Some(owner)
         || value["owner"]["verified"].as_bool() != Some(true)
         || value["owner"]["status"].as_str() != Some("verified")
-        || !value["owner"]["cert_id"]
+        || value["owner"]["cert_id"]
             .as_str()
-            .is_some_and(|id| !id.is_empty())
+            .is_none_or(|id| id.is_empty())
         || !matches!(
             value["runtime"]["daemon_state"].as_str(),
             Some("ready_idle" | "ready_proxying" | "ready_serving")
         )
-        || !value["owner"]["expires_at_unix_ms"]
+        || value["owner"]["expires_at_unix_ms"]
             .as_u64()
-            .is_some_and(|expiry| u128::from(expiry) > now)
+            .is_none_or(|expiry| u128::from(expiry) <= now)
     {
         return Err("Private Mesh is not ready with this profile's verified identity. Retry startup, then share the reply.".into());
     }

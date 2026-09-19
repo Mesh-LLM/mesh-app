@@ -75,7 +75,7 @@ pub fn advice(reason: &str) -> Option<&'static str> {
     reason
         .contains("persisted mesh genesis policy does not match local owner or requirements")
         .then_some(
-            "This machine already created a private Mesh under different settings, so Mesh will not reuse it.              A new Mesh means everyone needs a new invite. To start one, remove              ~/.mesh-llm/mesh-genesis-policy.json and choose Private again; your identity, models and              config are not part of that file.",
+            "This machine already created a private Mesh under different settings, so Mesh will not reuse it. A new Mesh means everyone needs a new invite. To start one, remove ~/.mesh-llm/mesh-genesis-policy.json and choose Private again; your identity, models and config are not part of that file.",
         )
 }
 
@@ -88,6 +88,7 @@ mod tests {
         let fatal = "persisted mesh genesis policy does not match local owner or requirements";
         let said = advice(fatal).unwrap();
         assert!(said.contains("new invite"));
+        assert!(!said.contains("  "));
         assert!(said.contains("mesh-genesis-policy.json"));
         assert!(advice("Owner identity is required but no keystore was found.").is_none());
         assert!(advice("").is_none());

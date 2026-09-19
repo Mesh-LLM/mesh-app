@@ -10,8 +10,8 @@ Public/Private ticks are initialized from saved settings and synchronized only
 on mode clicks and committed settings changes, never periodically while polling. Runtime guards
 handle unavailable/busy actions; process supervision continues independently.
 
-OS-native jellyfish status menu: Public/Private, Invites, optional Chat, existing
-console Settings, Quit. Invites contains exactly two items — copy an invite, or
+OS-native jellyfish status menu: Public/Private, Invites, Chat, Retry startup, Quit.
+Invites contains exactly two items — copy an invite, or
 join with one. No roster, no per-person controls, no extra settings website,
 wizard, Buzz UI/runtime, custom typography or webview.
 

@@ -366,7 +366,7 @@ impl App {
                         }
                     } else {
                         self.error = Some(format!(
-                            "Mesh exited ({code}). Open Settings to see why, then Retry startup."
+                            "Mesh exited ({code}). Choose Open Chat to see startup details, then Retry startup."
                         ));
                     }
                 }
@@ -391,7 +391,7 @@ impl App {
         {
             self.started = None;
             self.error = Some(
-                "Mesh startup timed out. Open Settings for the log; Quit stops only this instance."
+                "Mesh startup timed out. Choose Open Chat for startup details; Quit stops only this instance."
                     .into(),
             );
         }
@@ -674,20 +674,6 @@ fn main() {
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let _profile_lock = identity::lock_profile(&root)?;
         let settings = settings::Settings::load(&root)?;
-        if std::env::args().any(|arg| arg == "--print-launch") {
-            // Omit private invitation material from diagnostic output.
-            println!(
-                "mode={} console={} api={}",
-                if matches!(settings.connection, settings::Connection::Automatic) {
-                    "automatic"
-                } else {
-                    "private"
-                },
-                settings.console_port,
-                settings.api_port
-            );
-            return Ok(());
-        }
         desktop::run(App::new(root, settings))
     })();
     if let Err(error) = result {
