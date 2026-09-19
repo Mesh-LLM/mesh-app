@@ -131,7 +131,9 @@ just profile-probe /absolute/profile/root
 ```
 
 CI runs locked Rust builds, the full Rust test suite, fmt and all-targets Clippy
-on macOS and Windows. It does not package, sign or distribute an app, or launch
+on Linux and Windows. Linux checks provide shared Rust and Linux compile/test
+coverage, not macOS native API or UI validation. Native macOS CI is deferred to
+release work. It does not package, sign or distribute an app, or launch
 the real engine. Tests use fake identity stores, not the OS credential store.
 
 The identity crate is pinned to an immutable upstream revision rather than a
