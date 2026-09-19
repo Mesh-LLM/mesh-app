@@ -63,8 +63,8 @@ mod icon_tests {
         super::icon();
         let rgba = include_bytes!("../assets/mesh-jellyfish.rgba");
         assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
-        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 0));
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 255));
     }
 }
 
