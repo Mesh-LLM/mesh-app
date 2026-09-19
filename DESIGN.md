@@ -36,12 +36,12 @@ checking that the child is this app's PID, private, and reporting a verified
 owner. An empty token is the engine declining to emit a legacy code
 (`node_identity.rs:181-185`); that is the one actionable case and it is reported
 as "ask the person who invited you for a new one". Join validates the pasted
-token, adds it to the invites this node holds, and restarts.
+token, replaces the selected invite, and restarts.
 
 ## Honest intermediate states
 
 Joining restarts the runtime; until it is ready the node is not in the Mesh.
-Joining while already private keeps the Mesh this node is in and adds the new
+Joining while already private replaces the selected Mesh with the new
 code. Joining from Public is a mode change, so it forgets nothing that still
 applies. Going Public forgets the code, which is not a revocation: there is no
 Mesh-wide eviction, and the clean kick is re-forming the Mesh.
@@ -54,3 +54,7 @@ is proven on four identities across two Macs with the unmodified 0.76.2 runtime,
 on a LAN — NAT traversal between houses is a separate, unsolved problem. Portable
 native paths compile but are not Windows/Linux product verification; Windows
 runtime isolation remains gated. No accessibility/keyboard/QR success claimed.
+
+Shutdown signals only the retained child: SIGTERM on macOS/Linux, forced
+termination through the Child handle on Windows. Windows graceful shutdown
+and product support remain deferred; no HTTP shutdown endpoint is assumed.

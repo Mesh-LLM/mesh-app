@@ -67,28 +67,6 @@ pub fn snapshot(port: u16) -> Snapshot {
     }
 }
 
-#[cfg(windows)]
-pub fn stop_owned(port: u16, pid: u32) -> Result<(), String> {
-    let status = get(port, "/api/status")?;
-    // Local instance metadata must identify this retained child, not merely a listener.
-    let owned = status["local_instances"]
-        .as_array()
-        .is_some_and(|instances| {
-            instances.iter().any(|instance| {
-                instance["pid"].as_u64() == Some(u64::from(pid))
-                    && instance["is_self"].as_bool() == Some(true)
-            })
-        });
-    if !owned {
-        return Err("Cannot verify Mesh process ownership; leaving it running".into());
-    }
-    agent()
-        .post(&format!("http://127.0.0.1:{port}/api/runtime/shutdown"))
-        .send_string("")
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

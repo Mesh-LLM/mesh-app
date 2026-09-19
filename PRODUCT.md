@@ -34,9 +34,6 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   once, only when the machine has none, and never rewritten afterwards. Public
   and Private are flags on that one node, so switching modes preserves identity.
 - Launcher state is `~/.mesh-app/launcher.json` and `mesh.log`, and nothing else.
-  A `launcher.json` written by the allowlist-era tray still opens; its grants and
-  exchange state are forgotten rather than migrated, because the membership model
-  they describe no longer exists.
 - One reset concept, not two: changing mode forgets the Mesh being left. No
   separate Start Over item. The machine identity, engine config and models are
   the user's and are never touched.

@@ -313,7 +313,7 @@ impl App {
             self.exit = true;
             return;
         };
-        match lifecycle::request_stop(child, self.settings.console_port) {
+        match lifecycle::request_stop(child) {
             Ok(()) => self.stopping = Some(Instant::now()),
             Err(e) => self.error = Some(e),
         }
@@ -464,7 +464,7 @@ impl App {
             }
         }
         // Switching Mesh *is* forgetting this one: the people, the outstanding
-        // invitations and the seeds all belong to the Mesh being left, so there
+        // invitations all belong to the Mesh being left, so there
         // is no separate "start over" to find.
         let next = mesh_tray::reset::switching_to(&self.settings, connection);
         self.queue_settings(next);
@@ -477,7 +477,7 @@ impl App {
         self.pending_settings = Some(next);
         self.open_when_ready = None;
         if let Some(child) = &mut self.child {
-            match lifecycle::request_stop(child, self.settings.console_port) {
+            match lifecycle::request_stop(child) {
                 Ok(()) => self.stopping = Some(Instant::now()),
                 Err(e) => {
                     self.error = Some(e);
