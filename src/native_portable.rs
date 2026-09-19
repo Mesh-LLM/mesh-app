@@ -4,21 +4,17 @@
 /// uses `NSPasteboard` in `native.rs`.
 #[cfg(target_os = "linux")]
 pub fn copy_text(text: &str) -> Result<(), String> {
-    gtk::prelude::GtkClipboardExtManual::set_text(
-        &gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD),
-        text,
-    );
+    gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(text);
     Ok(())
 }
 #[cfg(target_os = "linux")]
 pub fn paste_text() -> Result<String, String> {
-    gtk::prelude::GtkClipboardExtManual::wait_for_text(&gtk::Clipboard::get(
-        &gtk::gdk::SELECTION_CLIPBOARD,
-    ))
-    .map(|text| text.to_string())
-    .ok_or_else(|| {
-        "The clipboard has no text on it. Copy the invite they sent, then try again.".into()
-    })
+    gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD)
+        .wait_for_text()
+        .map(|text| text.to_string())
+        .ok_or_else(|| {
+            "The clipboard has no text on it. Copy the invite they sent, then try again.".into()
+        })
 }
 // Windows: the clipboard is a shared, single-owner resource opened per call.
 // clipboard-win handles the OpenClipboard/EmptyClipboard/GlobalAlloc dance and

@@ -1,4 +1,4 @@
-//! Stable app-profile ownership. Never consult the user's CLI identity.
+//! Machine identity establishment and launcher-profile locking.
 use mesh_llm_identity::{
     keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
     save_keystore_with_keychain, OwnerKeypair,
@@ -25,10 +25,6 @@ pub fn lock_profile(root: &Path) -> Result<File, String> {
     fs2::FileExt::try_lock_exclusive(&file)
         .map_err(|_| "This Mesh profile is already open. Use its existing tray.".to_string())?;
     Ok(file)
-}
-
-pub fn ensure(root: &Path) -> Result<OwnerKeypair, String> {
-    ensure_with(root, &NativeStore)
 }
 
 /// Confirm this profile has a usable identity **without reading its secret**.

@@ -1,7 +1,9 @@
 # Product
 
-Standalone native Mesh tray. Official prebuilt Mesh v0.76.2, unchanged; no Buzz
-runtime, SDK conversion, engine source patch or updater/distribution publication.
+Standalone native Mesh tray. Packaging supplies one explicitly pinned engine
+product (source commit or numbered release) and matching native runtime; no Buzz
+runtime, SDK conversion or updater/distribution publication. Durable private
+restart requires an engine containing mesh-llm #1896; see DESIGN.md.
 
 - Public retains `serve --auto`. Private is `serve --owner-required
   --trust-policy require-owned`, plus `--min-node-version` when this node
@@ -34,9 +36,6 @@ runtime, SDK conversion, engine source patch or updater/distribution publication
   once, only when the machine has none, and never rewritten afterwards. Public
   and Private are flags on that one node, so switching modes preserves identity.
 - Launcher state is `~/.mesh-app/launcher.json` and `mesh.log`, and nothing else.
-  A `launcher.json` written by the allowlist-era tray still opens; its grants and
-  exchange state are forgotten rather than migrated, because the membership model
-  they describe no longer exists.
 - One reset concept, not two: changing mode forgets the Mesh being left. No
   separate Start Over item. The machine identity, engine config and models are
   the user's and are never touched.
@@ -58,6 +57,6 @@ The trust model is proven on the unmodified runtime: four identities on two Macs
 all joined with one originator's code, every peer mutually verified, cross-host
 inference served both ways (LAN only — NAT traversal between houses is untested).
 The tray build carrying it is covered by unit tests, fmt/check/Clippy `-D
-warnings`, and is **not yet clicked through in the menu bar by a human**. Also
-unverified: restarting with a code that has since expired, and the expired-token
-message in front of a real user. Use HUMAN_TESTING.md.
+warnings`, and is **not yet clicked through in the menu bar by a human**. The engine-level expiry/restart behavior is implemented and was exercised by
+the #1896 live matrix; see DESIGN.md. Candidate-specific UI behavior, including
+the expired-token message for a new joiner, still needs human verification.

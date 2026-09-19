@@ -63,8 +63,8 @@ mod icon_tests {
         super::icon();
         let rgba = include_bytes!("../assets/mesh-jellyfish.rgba");
         assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
-        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 0));
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 255));
     }
 }
 
@@ -313,7 +313,7 @@ impl App {
             self.exit = true;
             return;
         };
-        match lifecycle::request_stop(child, self.settings.console_port) {
+        match lifecycle::request_stop(child) {
             Ok(()) => self.stopping = Some(Instant::now()),
             Err(e) => self.error = Some(e),
         }
@@ -366,7 +366,7 @@ impl App {
                         }
                     } else {
                         self.error = Some(format!(
-                            "Mesh exited ({code}). Open Settings to see why, then Retry startup."
+                            "Mesh exited ({code}). Choose Open Chat to see startup details, then Retry startup."
                         ));
                     }
                 }
@@ -391,7 +391,7 @@ impl App {
         {
             self.started = None;
             self.error = Some(
-                "Mesh startup timed out. Open Settings for the log; Quit stops only this instance."
+                "Mesh startup timed out. Choose Open Chat for startup details; Quit stops only this instance."
                     .into(),
             );
         }
@@ -464,7 +464,7 @@ impl App {
             }
         }
         // Switching Mesh *is* forgetting this one: the people, the outstanding
-        // invitations and the seeds all belong to the Mesh being left, so there
+        // invitations all belong to the Mesh being left, so there
         // is no separate "start over" to find.
         let next = mesh_tray::reset::switching_to(&self.settings, connection);
         self.queue_settings(next);
@@ -477,7 +477,7 @@ impl App {
         self.pending_settings = Some(next);
         self.open_when_ready = None;
         if let Some(child) = &mut self.child {
-            match lifecycle::request_stop(child, self.settings.console_port) {
+            match lifecycle::request_stop(child) {
                 Ok(()) => self.stopping = Some(Instant::now()),
                 Err(e) => {
                     self.error = Some(e);
@@ -674,20 +674,6 @@ fn main() {
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let _profile_lock = identity::lock_profile(&root)?;
         let settings = settings::Settings::load(&root)?;
-        if std::env::args().any(|arg| arg == "--print-launch") {
-            // Omit private invitation material from diagnostic output.
-            println!(
-                "mode={} console={} api={}",
-                if matches!(settings.connection, settings::Connection::Automatic) {
-                    "automatic"
-                } else {
-                    "private"
-                },
-                settings.console_port,
-                settings.api_port
-            );
-            return Ok(());
-        }
         desktop::run(App::new(root, settings))
     })();
     if let Err(error) = result {

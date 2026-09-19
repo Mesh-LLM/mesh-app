@@ -128,8 +128,13 @@ just clean
 # Prints the owner identity in a profile directory, creating one if that
 # directory is new. May prompt for keychain permission:
 just profile-probe /absolute/profile/root
-just released-pool-probe /absolute/official/mesh-llm /absolute/fresh/pool-root
 ```
+
+CI runs locked Rust builds, the full Rust test suite, fmt and all-targets Clippy
+on Linux and Windows. Linux checks provide shared Rust and Linux compile/test
+coverage, not macOS native API or UI validation. Native macOS CI is deferred to
+release work. It does not package, sign or distribute an app, or launch
+the real engine. Tests use fake identity stores, not the OS credential store.
 
 The identity crate is pinned to an immutable upstream revision rather than a
 sibling checkout, and no Mesh SDK or runtime is built here.
@@ -144,12 +149,12 @@ That was a LAN test, so it proves trust and routing, not NAT traversal between
 houses. The flags the tray launches, the invite copy and the join restart are
 covered by unit tests.
 
-Not verified: the journey clicked end to end in the menu bar by a human, and
-what happens on restart when a code has since expired. Windows is launch-gated;
-Linux is not natively verified.
-
-[HUMAN_TESTING.md](HUMAN_TESTING.md) has the reproducible checksum-verified
-macOS arm64 bundle and the manual test procedure.
+Candidate-specific menu-bar verification is separate from engine restart coverage.
+For durable private restart with an engine containing #1896, see [DESIGN.md](DESIGN.md).
+Windows is launch-gated;
+Linux support is deferred: its existing code is experimental and not natively
+verified. Windows product support is also deferred; CI compilation/tests do not
+remove the launch gate.
 
 ### Testing an unreleased engine fix
 
