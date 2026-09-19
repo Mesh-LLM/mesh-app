@@ -149,14 +149,12 @@ That was a LAN test, so it proves trust and routing, not NAT traversal between
 houses. The flags the tray launches, the invite copy and the join restart are
 covered by unit tests.
 
-Not verified: the journey clicked end to end in the menu bar by a human, and
-what happens on restart when a code has since expired. Windows is launch-gated;
+Candidate-specific menu-bar verification is separate from engine restart coverage.
+For durable private restart with an engine containing #1896, see [DESIGN.md](DESIGN.md).
+Windows is launch-gated;
 Linux support is deferred: its existing code is experimental and not natively
 verified. Windows product support is also deferred; CI compilation/tests do not
 remove the launch gate.
-
-[HUMAN_TESTING.md](HUMAN_TESTING.md) has the reproducible checksum-verified
-macOS arm64 bundle and the manual test procedure.
 
 ### Testing an unreleased engine fix
 

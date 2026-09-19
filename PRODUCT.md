@@ -60,4 +60,3 @@ The tray build carrying it is covered by unit tests, fmt/check/Clippy `-D
 warnings`, and is **not yet clicked through in the menu bar by a human**. The engine-level expiry/restart behavior is implemented and was exercised by
 the #1896 live matrix; see DESIGN.md. Candidate-specific UI behavior, including
 the expired-token message for a new joiner, still needs human verification.
-Use HUMAN_TESTING.md.
