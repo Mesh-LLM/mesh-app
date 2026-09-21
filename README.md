@@ -86,12 +86,38 @@ holding a valid code to a Mesh you created can still use it. Your machine's Mesh
 not part of that and does not change — it is shared with the CLI and Buzz, and
 resetting it is `rm -rf ~/.mesh-llm`, which resets them too.
 
-Private model selection is two Gemma picks, classified on the machine's rated
-memory rather than what is free at launch: Gemma 4 E4B below 128 GiB, the 26B
-MoE above it, and an error below 8 GiB. Both answer without visible
-chain-of-thought, which is why they are the picks — the tray no longer writes
-engine defaults to say so. It is a total-memory heuristic, not a free-VRAM
-assurance, and first start can download weights.
+Private automatic selection adapts the OpenClaw agent recipes, pinned at
+`d08c80a126097113d1b412d67aaa173aa889b4b8` (`extensions/llama-cpp/src/model-catalog.ts`):
+
+| Host memory floor | Model | Required available budget |
+| --- | --- | --- |
+| Below 16 GiB (including 8 GiB) | No automatic local model | — |
+| 16 GiB | Qwen3.5 4B Q4_K_M | 6 GiB |
+| 24 GiB + acceleration | Gemma 4 12B IT Q4_K_M | 12 GiB |
+| 32 GiB + acceleration | Qwen3.8 27B UD-Q4_K_M | 22 GiB |
+
+Below 16 GiB, Private starts without a tray-selected local model; explicit
+configured models are still respected. The 9B recipe is not automatically selected.
+For larger hosts, the highest eligible recipe wins. Host budget is the smaller of available memory and
+installed RAM minus max(2 GiB, 25%). Recipe budgets include upstream's 64K
+context/runtime estimate, not just weights. References pin upstream GGUF revisions.
+Only Apple Silicon is currently positively identified as unified GPU memory;
+Linux and Intel Macs use the CPU recipe (4B), never host RAM as discrete VRAM.
+Windows retains its existing launch gate. Dedicated GPU discovery is not implemented.
+Linux reads MemAvailable and the root cgroup-v2 memory limit; nested/cgroup-v1
+limits are not comprehensively detected. Disk-space admission is left to the
+engine downloader, unlike upstream setup's disk preflight.
+
+Automatic recipes pass `--ctx-size 65536` only when the saved configuration has
+no model or context override. Existing models and explicit context (including
+zero/auto) win; files are not rewritten. Larger explicit context can require more
+memory than these estimates. Public launch is unchanged.
+
+Sources: https://github.com/openclaw/openclaw/blob/d08c80a126097113d1b412d67aaa173aa889b4b8/docs/plugins/llama-cpp.md
+and https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/local_runtime/catalog.json.
+These are recommendation estimates, not Mesh runtime/tool-use certification.
+Gemma 12B and all new pinned references still need live engine qualification;
+no running Mesh is restarted by this change.
 
 ## Developer checks
 
@@ -102,8 +128,13 @@ just clean
 # Prints the owner identity in a profile directory, creating one if that
 # directory is new. May prompt for keychain permission:
 just profile-probe /absolute/profile/root
-just released-pool-probe /absolute/official/mesh-llm /absolute/fresh/pool-root
 ```
+
+CI runs locked Rust builds, the full Rust test suite, fmt and all-targets Clippy
+on Linux and Windows. Linux checks provide shared Rust and Linux compile/test
+coverage, not macOS native API or UI validation. Native macOS CI is deferred to
+release work. It does not package, sign or distribute an app, or launch
+the real engine. Tests use fake identity stores, not the OS credential store.
 
 The identity crate is pinned to an immutable upstream revision rather than a
 sibling checkout, and no Mesh SDK or runtime is built here.
@@ -118,12 +149,12 @@ That was a LAN test, so it proves trust and routing, not NAT traversal between
 houses. The flags the tray launches, the invite copy and the join restart are
 covered by unit tests.
 
-Not verified: the journey clicked end to end in the menu bar by a human, and
-what happens on restart when a code has since expired. Windows is launch-gated;
-Linux is not natively verified.
-
-[HUMAN_TESTING.md](HUMAN_TESTING.md) has the reproducible checksum-verified
-macOS arm64 bundle and the manual test procedure.
+Candidate-specific menu-bar verification is separate from engine restart coverage.
+For durable private restart with an engine containing #1896, see [DESIGN.md](DESIGN.md).
+Windows is launch-gated;
+Linux support is deferred: its existing code is experimental and not natively
+verified. Windows product support is also deferred; CI compilation/tests do not
+remove the launch gate.
 
 ### Testing an unreleased engine fix
 

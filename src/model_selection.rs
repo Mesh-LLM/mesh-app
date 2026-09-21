@@ -2,47 +2,44 @@
 //! Joining preserves local serving participation.
 use crate::settings::Connection;
 
-// Two picks, not a ladder: the small one is the default everywhere, and the
-// large one is chosen only where there is no doubt it fits. Buzz's catalog
-// (`desktop/src-tauri/src/mesh_llm/catalog.rs`) steps up at 32 GB; the tray
-// deliberately waits until 64 GiB, because a tray chat window is the one place
-// a model that does not fit is unrecoverable -- the user has no other model to
-// switch to. Erring small costs quality; erring large costs the product.
-//
-// Gemma both sides: measured on the same prompt, the Qwen picks spent their
-// whole token budget reasoning and often returned no answer, while both Gemma
-// picks thought briefly and answered every time. That is the whole reason these
-// two are here: the tray owns no engine config, so the model's own default
-// behaviour is what the user gets.
-//
-// Small is the default; the large pick is for genuinely large machines only,
-// well above Buzz's 32 GB catalog step. A tray chat window is the one place a
-// model that does not fit is unrecoverable, so the tray waits until there is no
-// doubt at all.
-//
-// Quant names are the ones the repos actually publish: the 26B ships only
-// `UD-Q4_K_M`, with no plain `Q4_K_M` file.
-const SMALL: &str = "unsloth/gemma-4-E4B-it-GGUF@main:Q4_K_M";
-const LARGE: &str = "unsloth/gemma-4-26B-A4B-it-GGUF@main:UD-Q4_K_M";
+// Pinned OpenClaw recipes: d08c80a126097113d1b412d67aaa173aa889b4b8,
+// extensions/llama-cpp/src/model-catalog.ts. Budgets include 64K context/runtime.
+const GIB: u64 = 1024 * 1024 * 1024;
+const SMALL: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523:Q4_K_M";
+const GEMMA: &str = "unsloth/gemma-4-12b-it-GGUF@fc034cfff751157913579611efad8462ac1be606:Q4_K_M";
+const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@4ca720788d1e01f1bff70c033e0d0028fd02e502:UD-Q4_K_M";
 
 pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     if !matches!(connection, Connection::Private { .. }) {
         return Ok(None);
     }
-    choose(memory_bytes()?).map(str::to_string).map(Some)
+    let total = memory_bytes()?;
+    // Small hosts participate without automatically loading a local model.
+    if total < 16 * GIB {
+        return Ok(None);
+    }
+    let available = crate::model_hardware::available_memory()?;
+    // Only Apple Silicon is positively identified here as unified GPU memory.
+    // Other platforms stay on CPU recipes until a usable GPU budget is probed.
+    let accelerated = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+    choose(total, available, accelerated).map(|model| model.map(str::to_string))
 }
 
-fn choose(bytes: u64) -> Result<&'static str, String> {
-    // Classified on the machine's rated memory, not on what is free right now:
-    // a busy desktop must not silently drop a tier. Buzz derives that rating by
-    // rounding to the nearest advertised capacity; whole GiB agrees with it at
-    // both boundaries for the sizes Macs ship, so this reads memory directly
-    // rather than taking a dependency on the runtime's hardware crate.
-    match bytes / (1024 * 1024 * 1024) {
-        128.. => Ok(LARGE),
-        8.. => Ok(SMALL),
-        _ => Err("Private hosting needs at least 8 GiB memory. This device cannot select a local model automatically.".into()),
+fn choose(total: u64, available: u64, accelerated: bool) -> Result<Option<&'static str>, String> {
+    if total < 16 * GIB {
+        return Ok(None);
     }
+    let budget = available.min(total.saturating_sub((2 * GIB).max(total / 4)));
+    for (model, floor, required, gpu) in [
+        (LARGE, 32, 22, true),
+        (GEMMA, 24, 12, true),
+        (SMALL, 16, 6, false),
+    ] {
+        if total >= floor * GIB && budget >= required * GIB && (!gpu || accelerated) {
+            return Ok(Some(model));
+        }
+    }
+    Err("Not enough available memory for an automatic model with 64K context. Close other applications or configure a model explicitly.".into())
 }
 
 #[cfg(target_os = "macos")]
@@ -77,7 +74,24 @@ fn memory_bytes() -> Result<u64, String> {
         .ok_or_else(|| "Cannot read local memory for private model selection".into())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+#[cfg(target_os = "windows")]
+fn memory_bytes() -> Result<u64, String> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: MEMORYSTATUSEX is a plain-old-data struct with no invalid bit
+    // patterns, so a zeroed value is valid; dwLength must be the struct size
+    // before the call, which the next line sets.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    // SAFETY: the pointer refers to a live, correctly sized, writable buffer
+    // with dwLength initialised as the API requires.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return Err("Cannot read local memory for private model selection".into());
+    }
+    Ok(status.ullTotalPhys)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 fn memory_bytes() -> Result<u64, String> {
     Err("Private model selection is not supported on this platform yet".into())
 }
@@ -87,28 +101,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn small_is_the_default_and_large_needs_a_large_machine() {
-        let gib = 1024 * 1024 * 1024;
-        for size in [0, 4, 7] {
-            assert!(choose(size * gib).is_err());
+    fn recipes_reserve_context_and_host_headroom() {
+        for (size, expected) in [(16, SMALL), (24, GEMMA), (32, LARGE), (128, LARGE)] {
+            assert_eq!(
+                choose(size * GIB, size * GIB, true).unwrap(),
+                Some(expected)
+            );
         }
-        // Every Mac we test on except the 128 GiB M5 stays on the small pick.
-        for size in [8, 16, 24, 32, 48, 64, 96, 127] {
-            assert_eq!(choose(size * gib).unwrap(), SMALL);
+        assert_eq!(choose(128 * GIB, 128 * GIB, false).unwrap(), Some(SMALL));
+        assert_eq!(choose(32 * GIB, 12 * GIB, true).unwrap(), Some(GEMMA));
+        assert_eq!(choose(32 * GIB, 10 * GIB, true).unwrap(), Some(SMALL));
+        assert_eq!(choose(32 * GIB, 6 * GIB, true).unwrap(), Some(SMALL));
+        assert!(choose(128 * GIB, 5 * GIB, true).is_err());
+        for size in [0, 7, 8, 15] {
+            for accelerated in [false, true] {
+                assert_eq!(choose(size * GIB, 0, accelerated).unwrap(), None);
+                assert_eq!(choose(size * GIB, size * GIB, accelerated).unwrap(), None);
+            }
         }
-        for size in [128, 192, 256, 512] {
-            assert_eq!(choose(size * gib).unwrap(), LARGE);
-        }
-    }
-
-    #[test]
-    fn public_does_not_select_and_private_joins_keep_serving() {
+        assert!(choose(16 * GIB, 5 * GIB, true).is_err());
         assert_eq!(local_model(&Connection::Automatic).unwrap(), None);
-        assert_eq!(
-            local_model(&Connection::Private { invite: None }),
-            local_model(&Connection::Private {
-                invite: Some("token".into())
-            })
-        );
     }
 }

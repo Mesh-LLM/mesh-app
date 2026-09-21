@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 /// (`mesh/node_requirements.rs:129-135`). So bumping it means everybody
 /// re-pastes a new invite, and that has to be a decision rather than a
 /// side-effect of shipping a new runtime.
-pub const MIN_NODE_VERSION: &str = "0.76.2";
+pub const MIN_NODE_VERSION: &str = "0.76.0";
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
@@ -30,18 +30,11 @@ pub enum Connection {
     },
 }
 
-/// Unknown keys are ignored on purpose: a `launcher.json` written by an earlier
-/// tray carries allowlist-era grants and exchange state that this build has no
-/// concept of, and refusing to open it would leave the user with an app that
-/// cannot start. Those keys describe a Mesh whose membership model is gone, so
-/// forgetting them is the correct migration, not a lossy one.
+/// Current launcher settings: one selected private invite, not a seed history.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Settings {
     pub connection: Connection,
-    /// Legacy bootstrap addresses retained on ordinary restart. Explicit joining
-    /// replaces this set rather than accumulating mesh selections.
-    pub seeds: Vec<String>,
     pub console_port: u16,
     pub api_port: u16,
 }
@@ -50,7 +43,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             connection: Connection::Automatic,
-            seeds: Vec::new(),
             console_port: 3232,
             api_port: 9447,
         }
@@ -84,12 +76,6 @@ impl Settings {
         {
             validate_invite(invite)?;
         }
-        if self.seeds.len() > 32 {
-            return Err("Too many saved Mesh invites".into());
-        }
-        for seed in &self.seeds {
-            validate_invite(seed)?;
-        }
         Ok(())
     }
 
@@ -113,7 +99,6 @@ impl Settings {
             connection: Connection::Private {
                 invite: Some(seed.into()),
             },
-            seeds: Vec::new(),
             console_port: self.console_port,
             api_port: self.api_port,
         };
@@ -122,19 +107,12 @@ impl Settings {
         Ok(())
     }
 
-    /// Every invite this node holds, in the order it accepted them.
+    /// The single invite for the selected private Mesh.
     pub fn joins(&self) -> Vec<&String> {
-        let Connection::Private { invite } = &self.connection else {
-            return Vec::new();
-        };
-        invite
-            .iter()
-            .chain(
-                self.seeds
-                    .iter()
-                    .filter(|seed| Some(*seed) != invite.as_ref()),
-            )
-            .collect()
+        match &self.connection {
+            Connection::Private { invite } => invite.iter().collect(),
+            Connection::Automatic => Vec::new(),
+        }
     }
 
     pub fn args(&self) -> Vec<String> {
@@ -239,20 +217,36 @@ pub fn looks_like_invite(text: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn removed_seeds_are_neither_joined_nor_saved() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("launcher.json"),
+            r#"{"connection":{"mode":"private","invite":"current"},"seeds":["discarded"]}"#,
+        )
+        .unwrap();
+        let settings = Settings::load(root.path()).unwrap();
+        assert_eq!(settings.joins(), vec![&"current".to_string()]);
+        assert!(!settings.args().contains(&"discarded".to_string()));
+        settings.save(root.path()).unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.path().join("launcher.json")).unwrap())
+                .unwrap();
+        assert!(saved.get("seeds").is_none());
+    }
+
+    #[test]
     fn joining_replaces_old_invites_and_survives_restart() {
         let root = tempfile::tempdir().unwrap();
         let mut settings = Settings {
             connection: Connection::Private {
                 invite: Some("original".into()),
             },
-            seeds: vec!["old-seed".into()],
             console_port: 4242,
             api_port: 4243,
         };
         settings.accept_seed("new-mesh").unwrap();
         settings.save(root.path()).unwrap();
         let settings = Settings::load(root.path()).unwrap();
-        assert!(settings.seeds.is_empty());
         assert_eq!((settings.console_port, settings.api_port), (4242, 4243));
         let args = settings.args();
         assert_eq!(
@@ -267,10 +261,7 @@ mod tests {
 
     #[test]
     fn joining_from_public_selects_only_the_supplied_invite() {
-        let mut settings = Settings {
-            seeds: vec!["legacy-seed".into()],
-            ..Default::default()
-        };
+        let mut settings = Settings::default();
         settings.accept_seed("new-mesh").unwrap();
         settings.accept_seed("new-mesh").unwrap();
         assert_eq!(
@@ -279,7 +270,6 @@ mod tests {
                 invite: Some("new-mesh".into()),
             }
         );
-        assert!(settings.seeds.is_empty());
         assert_eq!(settings.joins(), vec![&"new-mesh".to_string()]);
     }
 
@@ -289,7 +279,6 @@ mod tests {
             connection: Connection::Private {
                 invite: Some("original".into()),
             },
-            seeds: vec!["old-seed".into()],
             ..Default::default()
         };
         let before = serde_json::to_value(&settings).unwrap();

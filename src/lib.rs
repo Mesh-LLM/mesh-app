@@ -1,5 +1,6 @@
 //! Launcher-owned pieces, separate from platform presentation.
 pub mod identity;
+mod model_hardware;
 pub mod model_selection;
 pub mod settings;
 

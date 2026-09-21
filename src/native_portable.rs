@@ -4,29 +4,52 @@
 /// uses `NSPasteboard` in `native.rs`.
 #[cfg(target_os = "linux")]
 pub fn copy_text(text: &str) -> Result<(), String> {
-    gtk::prelude::GtkClipboardExtManual::set_text(
-        &gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD),
-        text,
-    );
+    gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD).set_text(text);
     Ok(())
 }
 #[cfg(target_os = "linux")]
 pub fn paste_text() -> Result<String, String> {
-    gtk::prelude::GtkClipboardExtManual::wait_for_text(&gtk::Clipboard::get(
-        &gtk::gdk::SELECTION_CLIPBOARD,
-    ))
-    .map(|text| text.to_string())
-    .ok_or_else(|| {
+    gtk::Clipboard::get(&gtk::gdk::SELECTION_CLIPBOARD)
+        .wait_for_text()
+        .map(|text| text.to_string())
+        .ok_or_else(|| {
+            "The clipboard has no text on it. Copy the invite they sent, then try again.".into()
+        })
+}
+// Windows: the clipboard is a shared, single-owner resource opened per call.
+// clipboard-win handles the OpenClipboard/EmptyClipboard/GlobalAlloc dance and
+// the UTF-16 CF_UNICODETEXT round-trip, keeping this adapter free of raw Win32.
+#[cfg(target_os = "windows")]
+pub fn copy_text(text: &str) -> Result<(), String> {
+    clipboard_win::set_clipboard_string(text)
+        .map_err(|e| format!("Could not put the invite on the clipboard: {e}"))
+}
+#[cfg(target_os = "windows")]
+pub fn paste_text() -> Result<String, String> {
+    clipboard_win::get_clipboard_string().map_err(|_| {
         "The clipboard has no text on it. Copy the invite they sent, then try again.".into()
     })
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub fn copy_text(_: &str) -> Result<(), String> {
     Err("Copying is not available on this platform.".into())
 }
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub fn paste_text() -> Result<String, String> {
     Err("Pasting is not available on this platform.".into())
+}
+/// The macOS share sheet has no cross-platform equivalent here, so sharing
+/// degrades to copying the invite and saying so — the same delivery the tray
+/// offered before the share sheet existed. Gated off macOS: there this file is
+/// only pulled in as a test module, and `copy_text` lives in `native.rs`.
+#[cfg(not(target_os = "macos"))]
+pub fn share_text(text: &str) -> Result<(), String> {
+    copy_text(text)?;
+    notice(
+        "Invite copied",
+        "Sharing isn't available here, so it's on your clipboard — paste it to send.",
+    );
+    Ok(())
 }
 pub fn notice(title: &str, detail: &str) {
     rfd::MessageDialog::new()

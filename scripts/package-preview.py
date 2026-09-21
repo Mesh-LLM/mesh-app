@@ -78,17 +78,6 @@ def package(tray, archive, destination, *, source_commit=None,
         if path.is_file():
             manifest["files"][str(path.relative_to(destination))] = sha(path)
     (destination / "SHA256.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    guide = (repo / "HUMAN_TESTING.md").read_text()
-    if source_build:
-        guide = ("# Source-build candidate — NOT the official release trial\n\n"
-                 f"Engine source commit: `{source_commit}`. Archive and host were "
-                 "checked against caller-supplied pins, not official release pins. "
-                 "These pins record the input; they do not attest its origin.\n\n"
-                 "The release/version/artifact claims in the guide below do not "
-                 "apply to this candidate. Do not launch alongside a live Mesh. "
-                 "Restart-after-expiry remains an acceptance test, not a packaging "
-                 "guarantee.\n\n---\n\n" + guide)
-    (destination / "READ_ME_FIRST.md").write_text(guide)
     print(destination)
 
 

@@ -19,15 +19,8 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
-    menu: Menu,
-    status: MenuItem,
-    status_text: &'static str,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
-    retry: MenuItem,
-    retry_visible: bool,
-    quit: MenuItem,
-    people: muda::Submenu,
     _tray: TrayIcon,
 }
 
@@ -70,8 +63,8 @@ mod icon_tests {
         super::icon();
         let rgba = include_bytes!("../assets/mesh-jellyfish.rgba");
         assert_eq!(rgba.len(), 32 * 32 * 4);
-        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
-        assert!(rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 0));
+        assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 255));
     }
 }
 
@@ -109,22 +102,30 @@ impl App {
 
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
-        let status = MenuItem::new("Mesh · Starting…", false, None);
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        let public = muda::CheckMenuItem::with_id("public", "Public", true, false, None);
-        let private = muda::CheckMenuItem::with_id("private", "Private", true, false, None);
+        let private_mode = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        let public = muda::CheckMenuItem::with_id("public", "Public", true, !private_mode, None);
+        let private = muda::CheckMenuItem::with_id("private", "Private", true, private_mode, None);
         let people = muda::Submenu::new("Invites", true);
+        people
+            .append_items(&[
+                &MenuItem::with_id("invite", "Invite someone…", true, None),
+                &MenuItem::with_id("join", "Join with an invite…", true, None),
+            ])
+            .map_err(|e| e.to_string())?;
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         menu.append_items(&[
             &chat,
             &PredefinedMenuItem::separator(),
-            &status,
             &public,
             &private,
             &people,
             &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::separator(),
+            &retry,
             &quit,
         ])
         .map_err(|e| e.to_string())?;
@@ -136,15 +137,8 @@ impl App {
             .build()
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
-            menu,
-            status,
-            status_text: "Mesh · Starting…",
             public,
             private,
-            retry,
-            retry_visible: false,
-            quit,
-            people,
             _tray: tray,
         });
         self.start();
@@ -166,7 +160,6 @@ impl App {
             }
             Err(e) => self.error = Some(e),
         }
-        self.render();
     }
 
     fn spawn(&self) -> Result<Child, String> {
@@ -259,6 +252,7 @@ impl App {
             .env_remove("MESH_LLM_OWNER_PASSPHRASE");
         if let Some(model) = model {
             command.args(["--model", model.as_str()]);
+            command.args(mesh_tray::runtime_config::automatic_context_args(&profile));
         }
         #[cfg(windows)]
         {
@@ -268,58 +262,6 @@ impl App {
         command
             .spawn()
             .map_err(|e| format!("Could not start Mesh: {e}"))
-    }
-
-    fn restore_mode_checks(&self) {
-        let Some(ui) = &self.ui else { return };
-        let private = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        ui.public.set_checked(!private);
-        ui.private.set_checked(private);
-    }
-
-    fn render(&mut self) {
-        self.restore_mode_checks();
-        let Some(ui) = &mut self.ui else { return };
-        // Two actions, and they are the whole model: hand out this Mesh's
-        // invite, or paste one you were given. Nothing comes back, so there is
-        // no reply to chase, no approval to remember and no roster to keep --
-        // who is joined is the console's job.
-        if ui.people.items().is_empty() {
-            let _ = ui.people.append_items(&[
-                &MenuItem::with_id("invite", "Copy an invite…", true, None),
-                &MenuItem::with_id("join", "Join with an invite…", true, None),
-            ]);
-        }
-        // Three states, not six: a line that changes while the menu is open is
-        // worse than a line that says less. Written only when it differs.
-        let text = if self.stopping.is_some() {
-            "Mesh · Stopping…"
-        } else if self.error.is_some() {
-            "Mesh · Needs attention"
-        } else if self.snapshot.running && self.snapshot.models_available {
-            "Mesh · Ready"
-        } else {
-            "Mesh · Starting…"
-        };
-        if ui.status_text != text {
-            ui.status.set_text(text);
-            ui.status_text = text;
-        }
-        ui.public.set_enabled(self.stopping.is_none());
-        ui.private.set_enabled(self.stopping.is_none());
-        let retry = self.error.is_some() && self.child.is_none();
-        if retry != ui.retry_visible {
-            if retry {
-                let _ = ui.menu.insert(&ui.retry, 4);
-            } else {
-                let _ = ui.menu.remove(&ui.retry);
-            }
-            ui.retry_visible = retry;
-        }
-        ui.quit.set_enabled(self.stopping.is_none());
     }
 
     fn open(&mut self, path: &'static str) {
@@ -363,12 +305,15 @@ impl App {
     }
 
     fn quit(&mut self) {
+        if self.stopping.is_some() {
+            return;
+        }
         self.pending_settings = None;
         let Some(child) = &mut self.child else {
             self.exit = true;
             return;
         };
-        match lifecycle::request_stop(child, self.settings.console_port) {
+        match lifecycle::request_stop(child) {
             Ok(()) => self.stopping = Some(Instant::now()),
             Err(e) => self.error = Some(e),
         }
@@ -421,7 +366,7 @@ impl App {
                         }
                     } else {
                         self.error = Some(format!(
-                            "Mesh exited ({code}). Open Settings to see why, then Retry startup."
+                            "Mesh exited ({code}). Choose Open Chat to see startup details, then Retry startup."
                         ));
                     }
                 }
@@ -446,7 +391,7 @@ impl App {
         {
             self.started = None;
             self.error = Some(
-                "Mesh startup timed out. Open Settings for the log; Quit stops only this instance."
+                "Mesh startup timed out. Choose Open Chat for startup details; Quit stops only this instance."
                     .into(),
             );
         }
@@ -454,12 +399,27 @@ impl App {
             self.polling = self.tx.send(()).is_ok();
             self.next_poll = Instant::now() + POLL;
         }
-        self.render();
     }
+    // Only called for a mode click or a successfully committed settings change.
+    // Never refresh menu state from the periodic polling/render path.
+    fn sync_mode_checks(&self) {
+        let Some(ui) = &self.ui else { return };
+        let private = matches!(
+            self.settings.connection,
+            settings::Connection::Private { .. }
+        );
+        if ui.public.is_checked() == private {
+            ui.public.set_checked(!private);
+        }
+        if ui.private.is_checked() != private {
+            ui.private.set_checked(private);
+        }
+    }
+
     fn change_mode(&mut self, connection: settings::Connection) {
-        // muda toggles the clicked item before dispatch. Keep the committed mode
-        // visible through confirmation, cancellation and busy/same-mode returns.
-        self.restore_mode_checks();
+        // muda auto-toggles the clicked item before dispatch. Restore the saved
+        // choice so cancellation, same-mode clicks and failures cannot lie.
+        self.sync_mode_checks();
         if self.stopping.is_some()
             || self.pending_settings.is_some()
             || std::mem::discriminant(&self.settings.connection)
@@ -504,7 +464,7 @@ impl App {
             }
         }
         // Switching Mesh *is* forgetting this one: the people, the outstanding
-        // invitations and the seeds all belong to the Mesh being left, so there
+        // invitations all belong to the Mesh being left, so there
         // is no separate "start over" to find.
         let next = mesh_tray::reset::switching_to(&self.settings, connection);
         self.queue_settings(next);
@@ -517,7 +477,7 @@ impl App {
         self.pending_settings = Some(next);
         self.open_when_ready = None;
         if let Some(child) = &mut self.child {
-            match lifecycle::request_stop(child, self.settings.console_port) {
+            match lifecycle::request_stop(child) {
                 Ok(()) => self.stopping = Some(Instant::now()),
                 Err(e) => {
                     self.error = Some(e);
@@ -534,6 +494,7 @@ impl App {
             match next.save(&self.root) {
                 Ok(()) => {
                     self.settings = next;
+                    self.sync_mode_checks();
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
                     self.start();
@@ -640,7 +601,7 @@ mod desktop {
             for (label, action) in [
                 ("Public", "public"),
                 ("Private", "private"),
-                ("Copy an invite", "invite"),
+                ("Invite someone to your mesh", "invite"),
                 ("Join with an invite", "join"),
                 ("Retry startup", "retry"),
             ] {
@@ -713,20 +674,6 @@ fn main() {
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let _profile_lock = identity::lock_profile(&root)?;
         let settings = settings::Settings::load(&root)?;
-        if std::env::args().any(|arg| arg == "--print-launch") {
-            // Omit private invitation material from diagnostic output.
-            println!(
-                "mode={} console={} api={}",
-                if matches!(settings.connection, settings::Connection::Automatic) {
-                    "automatic"
-                } else {
-                    "private"
-                },
-                settings.console_port,
-                settings.api_port
-            );
-            return Ok(());
-        }
         desktop::run(App::new(root, settings))
     })();
     if let Err(error) = result {

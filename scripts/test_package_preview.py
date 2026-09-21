@@ -46,7 +46,7 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(manifest["candidate_kind"], "source")
             self.assertEqual((out / "Mesh Candidate.app/Contents/MacOS/"
                               "native-runtimes/test/manifest.json").read_text(), "{}")
-            self.assertIn("NOT the official release", (out / "READ_ME_FIRST.md").read_text())
+            self.assertFalse((out / "READ_ME_FIRST.md").exists())
 
     def test_source_archive_checksum_mismatch_creates_nothing(self):
         with tempfile.TemporaryDirectory() as root:

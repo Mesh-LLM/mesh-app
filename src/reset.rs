@@ -22,7 +22,6 @@ pub fn switching_to(current: &Settings, connection: Connection) -> Settings {
         connection,
         console_port: current.console_port,
         api_port: current.api_port,
-        ..Default::default()
     }
 }
 
@@ -35,7 +34,6 @@ mod tests {
             connection: Connection::Private {
                 invite: Some("invite".into()),
             },
-            seeds: vec!["seed".into()],
             console_port: 4242,
             api_port: 4243,
         }
@@ -46,7 +44,6 @@ mod tests {
         let after = switching_to(&joined(), Connection::Automatic);
         after.validate().unwrap();
         assert_eq!(after.connection, Connection::Automatic);
-        assert!(after.seeds.is_empty());
         assert!(after.joins().is_empty());
         assert_eq!((after.console_port, after.api_port), (4242, 4243));
         assert!(!after.args().contains(&"--join".into()));
@@ -57,7 +54,6 @@ mod tests {
         let after = switching_to(&joined(), Connection::Private { invite: None });
         after.validate().unwrap();
         assert_eq!(after.connection, Connection::Private { invite: None });
-        assert!(after.seeds.is_empty());
         assert!(!after.args().contains(&"--join".into()));
         // No invite left means this node creates: it declares the requirement.
         assert!(after.args().contains(&"--min-node-version".into()));
