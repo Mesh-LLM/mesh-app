@@ -67,28 +67,6 @@ pub fn snapshot(port: u16) -> Snapshot {
     }
 }
 
-#[cfg(windows)]
-pub fn stop_owned(port: u16, pid: u32) -> Result<(), String> {
-    let status = get(port, "/api/status")?;
-    // Local instance metadata must identify this retained child, not merely a listener.
-    let owned = status["local_instances"]
-        .as_array()
-        .is_some_and(|instances| {
-            instances.iter().any(|instance| {
-                instance["pid"].as_u64() == Some(u64::from(pid))
-                    && instance["is_self"].as_bool() == Some(true)
-            })
-        });
-    if !owned {
-        return Err("Cannot verify Mesh process ownership; leaving it running".into());
-    }
-    agent()
-        .post(&format!("http://127.0.0.1:{port}/api/runtime/shutdown"))
-        .send_string("")
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,16 +107,16 @@ fn checked_private_invite(
         || value["owner"]["owner_id"].as_str() != Some(owner)
         || value["owner"]["verified"].as_bool() != Some(true)
         || value["owner"]["status"].as_str() != Some("verified")
-        || !value["owner"]["cert_id"]
+        || value["owner"]["cert_id"]
             .as_str()
-            .is_some_and(|id| !id.is_empty())
+            .is_none_or(|id| id.is_empty())
         || !matches!(
             value["runtime"]["daemon_state"].as_str(),
             Some("ready_idle" | "ready_proxying" | "ready_serving")
         )
-        || !value["owner"]["expires_at_unix_ms"]
+        || value["owner"]["expires_at_unix_ms"]
             .as_u64()
-            .is_some_and(|expiry| u128::from(expiry) > now)
+            .is_none_or(|expiry| u128::from(expiry) <= now)
     {
         return Err("Private Mesh is not ready with this profile's verified identity. Retry startup, then share the reply.".into());
     }
