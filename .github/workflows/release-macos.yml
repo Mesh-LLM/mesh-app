@@ -116,7 +116,7 @@ jobs:
           ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
         run: |
           set -euo pipefail
-          brew install cmake ninja just
+          brew install cmake ninja just sccache
           cd engine-src
           engine_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           just release-build
