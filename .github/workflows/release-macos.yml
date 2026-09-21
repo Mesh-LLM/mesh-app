@@ -116,8 +116,13 @@ jobs:
           ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
         run: |
           set -euo pipefail
-          brew install cmake ninja just sccache
+          # Match mesh-llm's setup-macos-lld action and probe before compiling.
+          brew install cmake ninja just sccache lld
+          lld_bin="$(brew --prefix lld)/bin"
+          export PATH="$lld_bin:$PATH"
           cd engine-src
+          sccache --version
+          scripts/cargo-linker --mesh-probe
           engine_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           just release-build
           just release-bundle "v${engine_version}" dist
