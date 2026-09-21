@@ -2,10 +2,8 @@ name: Release macOS
 
 # Alternative Mesh app distribution. Signing transforms upstream inputs;
 # original archive provenance is retained, runtime hashes are regenerated.
-# Branch push is the non-publishing candidate lane until dispatch is on main.
+# Packaging is on demand; publishing is explicitly opt-in.
 on:
-  push:
-    branches: [ci/macos-release-pipeline]
   workflow_dispatch:
     inputs:
       engine:
@@ -248,8 +246,9 @@ jobs:
             | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
           codesign --force --timestamp --sign "$identity" \
             "artifacts/${{ steps.dist.outputs.base }}.dmg"
-          shasum -a 256 "artifacts/${{ steps.dist.outputs.base }}.dmg" \
-            > "artifacts/${{ steps.dist.outputs.base }}.dmg.sha256"
+          cd artifacts
+          shasum -a 256 "${{ steps.dist.outputs.base }}.dmg" \
+            > "${{ steps.dist.outputs.base }}.dmg.sha256"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
