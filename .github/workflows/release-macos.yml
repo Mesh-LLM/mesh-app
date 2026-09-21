@@ -101,6 +101,15 @@ jobs:
         with:
           node-version: 24
 
+      - name: Install engine UI package manager
+        if: steps.meta.outputs.engine_kind == 'source'
+        run: |
+          set -euo pipefail
+          manager="$(node -p 'require("./engine-src/crates/mesh-llm-ui/package.json").packageManager')"
+          [[ "$manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          npm install --global "$manager"
+          pnpm --version
+
       - name: Build engine from source
         if: steps.meta.outputs.engine_kind == 'source'
         env:
