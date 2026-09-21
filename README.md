@@ -183,3 +183,27 @@ candidate, verify joiner restart after expiry, owner restart, two joiners restar
 with the owner offline, and rejection of a fresh node with the expired code.
 The tray must retain the original invite as the engine's mesh-selection hint;
 it must not discard it merely because its admission window has elapsed.
+
+## Signed macOS app candidates
+
+`Release macOS` builds the alternative Mesh app distribution, including Metal.
+Select `main`, a full engine commit, `pr/NUMBER` (PR head, not merge ref), or a
+numbered `vX.Y.Z` release. Source refs resolve once to an immutable commit.
+Only dispatch reviewed/trusted engine source: this is a privileged distribution
+workflow, not an untrusted PR test executor. Signing credentials are mandatory.
+The packaging branch push runs a non-publishing candidate against engine main;
+after merge use manual dispatch. Publication is manual and opt-in, never a tag
+push side effect. Historical releases may lack the private-restart fix; use a
+source commit containing #1896 for that capability.
+
+The engine executable stays beside the tray. Runtime data lives in
+`Contents/Resources/engine`, selected explicitly by the launcher. This pipeline
+creates a new Developer ID app distribution: it signs nested executable code,
+refreshes runtime library checksums, signs the outer app, notarizes and staples,
+then records final file hashes. Original engine archive provenance and upstream
+metadata are retained separately; upstream attestations are not claimed to
+certify the transformed app bytes. The original downloaded archive is unchanged.
+
+Candidate checks include strict signature verification, stapler validation,
+Gatekeeper assessment, packaged engine version and GPU enumeration. These do
+not substitute for human menu-bar testing or multi-node inference testing.

@@ -201,7 +201,15 @@ impl App {
             .append(true)
             .open(self.root.join("mesh.log"))
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new(binary);
+        let mut command = Command::new(&binary);
+        // Signed app resources are outside Contents/MacOS. Preview/loose
+        // products retain the engine's normal adjacent-runtime discovery.
+        if let Some(macos) = binary.parent() {
+            let runtimes = macos.join("../Resources/engine/native-runtimes");
+            if runtimes.is_dir() {
+                command.env("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", runtimes);
+            }
+        }
         {
             use std::io::Write;
             // First run on a machine with no engine config gets one, with

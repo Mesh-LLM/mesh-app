@@ -52,8 +52,11 @@ def package(tray, archive, destination, *, version, archive_sha256,
     runtime = destination / "runtime/mesh-bundle"
     if not (runtime / "mesh-llm").is_file():
         raise ValueError("Engine archive does not contain mesh-bundle/mesh-llm")
+    resources = app / "Contents/Resources/engine"
+    resources.mkdir(parents=True)
     for path in runtime.iterdir():
-        shutil.move(str(path), macos / path.name)
+        target = macos if path.name == "mesh-llm" else resources
+        shutil.move(str(path), target / path.name)
     shutil.rmtree(destination / "runtime")
     shutil.copy2(tray, macos / "mesh-tray")
     with (app / "Contents/Info.plist").open("wb") as out:

@@ -52,7 +52,7 @@ class PackageAppTests(unittest.TestCase):
             self.assertEqual(manifest["mesh_version"], "0.76.2")
             self.assertIsNone(manifest["mesh_source_commit"])
             self.assertEqual(manifest["engine_kind"], "official-release")
-            self.assertEqual((out / "Mesh.app/Contents/MacOS/"
+            self.assertEqual((out / "Mesh.app/Contents/Resources/engine/"
                               "native-runtimes/test/manifest.json").read_text(), "{}")
 
     def test_source_engine_records_commit(self):
