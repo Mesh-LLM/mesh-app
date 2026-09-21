@@ -15,7 +15,7 @@ class FinalizeTests(unittest.TestCase):
         runtime = root / 'Mesh.app/Contents/Resources/engine/native-runtimes/metal'
         runtime.mkdir(parents=True)
         (runtime / 'lib.dylib').write_bytes(b'signed library')
-        manifest = {'runtime': {'backend': 'metal', 'files': {'lib.dylib': 'old'},
+        manifest = {'runtime': {'backend': {'kind': 'metal'}, 'files': {'lib.dylib': 'old'},
                                 'tools': {}, 'sha256': 'old archive', 'signature': 'old'}}
         (runtime / 'manifest.json').write_text(json.dumps(manifest))
         (runtime.parent.parent / 'product-manifest.json').write_text('{"upstream":true}')
@@ -49,7 +49,7 @@ class FinalizeTests(unittest.TestCase):
             root = Path(tmp)
             runtime = self.fixture(root)
             manifest = runtime / 'manifest.json'
-            manifest.write_text(json.dumps({'runtime': {'backend': 'metal',
+            manifest.write_text(json.dumps({'runtime': {'backend': {'kind': 'metal'},
                                                        'files': {'../escape': 'old'}}}))
             with self.assertRaisesRegex(ValueError, 'escapes'):
                 f.finalize(root, 'runtime')

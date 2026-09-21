@@ -30,7 +30,7 @@ def finalize(root, phase):
         for path in manifests:
             data = json.loads(path.read_text())
             runtime = data['runtime']
-            if runtime['backend'] != 'metal':
+            if runtime['backend'].get('kind') != 'metal':
                 raise ValueError('macOS app requires Metal runtime')
             (evidence / (path.parent.name + '.json')).write_text(path.read_text())
             for field in ('files', 'tools'):
