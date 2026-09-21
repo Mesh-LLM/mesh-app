@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 # Immutable upstream revision; no dependency on another local checkout.
 mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d4ffbbacd9c8486e0b80c44452876ffa17785964", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d4ffbbacd9c8486e0b80c44452876ffa17785964", default-features = false, features = ["serving", "console"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
 open = "5"

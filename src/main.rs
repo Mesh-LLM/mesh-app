@@ -9,9 +9,11 @@ mod native;
 mod native;
 mod status;
 
+use lifecycle::Engine;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+#[cfg(test)]
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -29,7 +31,7 @@ struct App {
     pending_settings: Option<settings::Settings>,
     root: PathBuf,
     ui: Option<Ui>,
-    child: Option<Child>,
+    child: Option<Engine>,
     rx: Receiver<status::Snapshot>,
     tx: Sender<()>,
     snapshot: status::Snapshot,
@@ -162,7 +164,7 @@ impl App {
         }
     }
 
-    fn spawn(&self) -> Result<Child, String> {
+    fn spawn(&self) -> Result<Engine, String> {
         if cfg!(windows) {
             return Err("Windows is not supported by this tray yet. Your existing Mesh state was not touched.".into());
         }
@@ -178,7 +180,6 @@ impl App {
                 ));
             }
         }
-        let binary = settings::binary()?;
         std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
         #[cfg(unix)]
         {
@@ -201,15 +202,6 @@ impl App {
             .append(true)
             .open(self.root.join("mesh.log"))
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new(&binary);
-        // Signed app resources are outside Contents/MacOS. Preview/loose
-        // products retain the engine's normal adjacent-runtime discovery.
-        if let Some(macos) = binary.parent() {
-            let runtimes = macos.join("../Resources/engine/native-runtimes");
-            if runtimes.is_dir() {
-                command.env("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", runtimes);
-            }
-        }
         {
             use std::io::Write;
             // First run on a machine with no engine config gets one, with
@@ -251,25 +243,13 @@ impl App {
             use std::io::Write;
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
-        command
-            .args(self.settings.args())
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
-            .stderr(Stdio::from(log))
-            .env_remove("MESH_LLM_EPHEMERAL_KEY")
-            .env_remove("MESH_LLM_OWNER_PASSPHRASE");
-        if let Some(model) = model {
-            command.args(["--model", model.as_str()]);
-            command.args(mesh_tray::runtime_config::automatic_context_args(&profile));
-        }
-        #[cfg(windows)]
+        if model.is_some()
+            && !mesh_tray::runtime_config::automatic_context_args(&profile).is_empty()
         {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            return Err("Embedded SDK prototype: automatic 64K context needs an SDK override; configure defaults.model_fit.ctx_size explicitly for this trial. Your config was not changed.".into());
         }
-        command
-            .spawn()
-            .map_err(|e| format!("Could not start Mesh: {e}"))
+        let config = lifecycle::config(&self.settings, &profile, model);
+        Engine::start(config)
     }
 
     fn open(&mut self, path: &'static str) {
@@ -752,11 +732,11 @@ mod transaction_tests {
         assert!(app.settings.joins().is_empty());
     }
     #[cfg(unix)]
-    fn exited_child() -> Child {
+    fn exited_child() -> Engine {
         let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
         // try_wait returns the cached status too; no scheduling race in tick.
         child.wait().unwrap();
-        child
+        child.into()
     }
 
     #[cfg(unix)]
@@ -842,14 +822,14 @@ mod transaction_tests {
             .spawn()
             .unwrap();
         let pid = child.id();
-        app.child = Some(child);
+        app.child = Some(child.into());
         app.started = Some(Instant::now());
 
         app.tick();
         let fresh_start_pending = app.started.is_some() && app.error.is_none();
         app.started = Some(Instant::now() - Duration::from_secs(181));
         app.tick();
-        let retained_pid = app.child.as_ref().map(Child::id);
+        let retained_pid = app.child.as_ref().map(Engine::id);
         // Reap the fixture before assertions; wait closes stdin so read sees EOF.
         let mut child = app.child.take().unwrap();
         let still_alive = child.try_wait().unwrap().is_none();
@@ -872,7 +852,7 @@ mod transaction_tests {
         let mut app = app(root.path());
         app.settings.save(root.path()).unwrap();
         let mut other = Command::new("sleep").arg("30").spawn().unwrap();
-        app.child = Some(Command::new("sleep").arg("30").spawn().unwrap());
+        app.child = Some(Command::new("sleep").arg("30").spawn().unwrap().into());
         let mut next = app.settings.clone();
         next.accept_seed("their-invite").unwrap();
         app.queue_settings(next);

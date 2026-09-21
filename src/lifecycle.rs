@@ -1,75 +1,220 @@
-//! Only signal a child retained by this process; never stop a daemon by port/name.
-use std::process::Child;
+//! Prototype in-process engine ownership. A pending stop never cancels the SDK
+//! startup future: the worker retains it, then stops the resulting handle before
+//! reporting completion. No replacement may start until completion is observed.
+use mesh_llm_sdk::{serve, TrustPolicy};
+use mesh_tray::settings::{Connection, Settings, MIN_NODE_VERSION};
+use std::path::Path;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-pub fn request_stop(child: &mut Child) -> Result<(), String> {
-    if child.try_wait().map_err(|e| e.to_string())?.is_some() {
-        return Ok(());
+pub fn config(
+    settings: &Settings,
+    profile: &Path,
+    model: Option<String>,
+) -> serve::EmbeddedServeConfig {
+    let mut builder = serve::EmbeddedServeConfig::builder()
+        .api_port(settings.api_port)
+        .console_port(settings.console_port)
+        .console_ui(true)
+        .config_path(profile.join("config.toml"))
+        .isolated_config(false)
+        .startup_timeout(std::time::Duration::from_secs(180));
+    if let Some(model) = model {
+        builder = builder.model(model);
     }
-    #[cfg(unix)]
-    {
-        // The retained, unreaped Child prevents PID reuse while signalling.
-        let result = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-        if result == 0 {
-            Ok(())
-        } else {
-            Err(std::io::Error::last_os_error().to_string())
+    match settings.connection {
+        Connection::Automatic => builder = builder.auto_join(true),
+        Connection::Private { .. } => {
+            builder = builder
+                .owner_key(profile.join("owner-keystore.json"))
+                .owner_required(true)
+                .trust_policy(TrustPolicy::RequireOwned);
+            let joins = settings.joins();
+            if joins.is_empty() {
+                builder = builder.min_node_version(MIN_NODE_VERSION);
+            } else {
+                builder = builder.join_tokens(joins.into_iter().cloned());
+            }
         }
     }
-    #[cfg(windows)]
-    {
-        // Windows has no Unix-style signal for this CREATE_NO_WINDOW child.
-        // Terminate only the retained process handle, never a listener or PID lookup.
-        // This is forced termination, not a graceful engine shutdown.
-        child.kill().map_err(|e| e.to_string())
+    builder.build()
+}
+
+pub struct Engine {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    done: Receiver<Result<(), String>>,
+    result: Option<String>,
+    // Existing UI lifecycle tests exercise retained ownership with harmless
+    // child fixtures. Production never constructs this variant.
+    #[cfg(test)]
+    fixture: Option<std::process::Child>,
+}
+
+impl Engine {
+    pub fn start(config: serve::EmbeddedServeConfig) -> Result<Self, String> {
+        // Environment filtering can be per-child but not per embedded thread.
+        // Fail closed rather than mutate the process environment after threads start.
+        for name in ["MESH_LLM_EPHEMERAL_KEY", "MESH_LLM_OWNER_PASSPHRASE"] {
+            if std::env::var_os(name).is_some() {
+                return Err(format!(
+                    "Unset {name} before launching this embedded prototype"
+                ));
+            }
+        }
+        let (stop, requested) = tokio::sync::oneshot::channel();
+        let (finished, done) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("tray-engine".into())
+            .spawn(move || {
+                let result = (|| {
+                    let runtime = tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| e.to_string())?;
+                    runtime.block_on(async {
+                        let handle = serve::start(config).await.map_err(|e| format!("{e:#}"))?;
+                        // Dropping the UI owner also requests cooperative shutdown.
+                        let _ = requested.await;
+                        handle.stop().await.map_err(|e| format!("{e:#}"))
+                    })
+                })();
+                let _ = finished.send(result);
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self {
+            stop: Some(stop),
+            done,
+            result: None,
+            #[cfg(test)]
+            fixture: None,
+        })
+    }
+
+    pub fn id(&self) -> u32 {
+        #[cfg(test)]
+        if let Some(child) = &self.fixture {
+            return child.id();
+        }
+        std::process::id()
+    }
+
+    pub fn try_wait(&mut self) -> Result<Option<String>, String> {
+        #[cfg(test)]
+        if let Some(child) = &mut self.fixture {
+            return child
+                .try_wait()
+                .map(|code| code.map(|c| c.to_string()))
+                .map_err(|e| e.to_string());
+        }
+        if self.result.is_none() {
+            self.result = match self.done.try_recv() {
+                Ok(Ok(())) => Some("stopped".into()),
+                Ok(Err(error)) => Some(error),
+                Err(TryRecvError::Disconnected) => Some("embedded worker disconnected".into()),
+                Err(TryRecvError::Empty) => None,
+            };
+        }
+        Ok(self.result.clone())
+    }
+
+    #[cfg(test)]
+    pub fn kill(&mut self) -> std::io::Result<()> {
+        self.fixture.as_mut().expect("fixture only").kill()
+    }
+    #[cfg(test)]
+    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.fixture.as_mut().expect("fixture only").wait()
+    }
+}
+
+pub fn request_stop(engine: &mut Engine) -> Result<(), String> {
+    #[cfg(test)]
+    if let Some(child) = &mut engine.fixture {
+        return child.kill().map_err(|e| e.to_string());
+    }
+    if let Some(stop) = engine.stop.take() {
+        // If the receiver exited, try_wait will report the worker's result.
+        let _ = stop.send(());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+impl From<std::process::Child> for Engine {
+    fn from(child: std::process::Child) -> Self {
+        let (_, done) = mpsc::channel();
+        Self {
+            stop: None,
+            done,
+            result: None,
+            fixture: Some(child),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn sleeper() -> Child {
-        #[cfg(unix)]
-        let mut command = std::process::Command::new("sleep");
-        #[cfg(unix)]
-        command.arg("30");
-        #[cfg(windows)]
-        let mut command = std::process::Command::new("ping.exe");
-        #[cfg(windows)]
-        command.args(["-n", "31", "127.0.0.1"]);
-        command.stdout(std::process::Stdio::null()).spawn().unwrap()
-    }
-
     #[test]
-    fn already_exited_child_is_safe_to_stop_again() {
-        let mut child = sleeper();
-        child.kill().unwrap();
-        child.wait().unwrap();
-        request_stop(&mut child).unwrap();
-    }
-
-    #[test]
-    fn stops_and_reaps_only_retained_child() {
-        let mut owned = sleeper();
-        let mut other = sleeper();
-        request_stop(&mut owned).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        let stopped = loop {
-            if owned.try_wait().unwrap().is_some() {
-                break true;
-            }
-            if std::time::Instant::now() >= deadline {
-                break false;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+    fn private_origin_and_join_preserve_policy_without_a_roster() {
+        let mut settings = Settings {
+            connection: Connection::Private { invite: None },
+            ..Settings::default()
         };
-        let other_alive = other.try_wait().unwrap().is_none();
-        if !stopped {
-            let _ = owned.kill();
-        }
-        let _ = owned.wait();
-        other.kill().unwrap();
-        other.wait().unwrap();
-        assert!(stopped);
-        assert!(other_alive);
+        let origin = config(&settings, Path::new("profile"), Some("model".into()));
+        assert!(!origin.network.auto_join);
+        assert!(!origin.network.publish);
+        assert!(origin.admission.owner_required);
+        assert_eq!(
+            origin.admission.trust_policy,
+            Some(TrustPolicy::RequireOwned)
+        );
+        assert!(origin.admission.trusted_owners.is_empty());
+        assert_eq!(
+            origin
+                .admission
+                .mesh_requirements
+                .min_node_version
+                .as_deref(),
+            Some(MIN_NODE_VERSION)
+        );
+        assert_eq!(origin.serving.models, ["model"]);
+        settings.accept_seed("test-invite").unwrap();
+        let joined = config(&settings, Path::new("profile"), None);
+        assert_eq!(joined.network.join_tokens, ["test-invite"]);
+        assert!(joined
+            .admission
+            .mesh_requirements
+            .min_node_version
+            .is_none());
+        assert!(joined.serving.models.is_empty());
+        assert!(!joined.storage.isolated_config);
+    }
+    #[test]
+    fn public_mode_and_user_config_are_explicit() {
+        let config = config(&Settings::default(), Path::new("profile"), None);
+        assert!(config.network.auto_join);
+        assert!(config.http.console_ui);
+        assert_eq!(
+            config.storage.config_path,
+            Some(Path::new("profile/config.toml").into())
+        );
+    }
+    #[test]
+    fn pending_stop_is_retained_until_worker_reports_completion() {
+        let (stop, mut requested) = tokio::sync::oneshot::channel();
+        let (finished, done) = mpsc::channel();
+        let mut engine = Engine {
+            stop: Some(stop),
+            done,
+            result: None,
+            fixture: None,
+        };
+        request_stop(&mut engine).unwrap();
+        request_stop(&mut engine).unwrap();
+        assert_eq!(requested.try_recv(), Ok(()));
+        assert!(engine.try_wait().unwrap().is_none());
+        finished.send(Ok(())).unwrap();
+        assert_eq!(engine.try_wait().unwrap().as_deref(), Some("stopped"));
+        assert_eq!(engine.try_wait().unwrap().as_deref(), Some("stopped"));
     }
 }
