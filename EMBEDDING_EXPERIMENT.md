@@ -52,50 +52,56 @@ The earlier pin `d4ffbbac` lacked the durable private-membership restart fix;
 the new dependency includes it. The two-cycle trial is not an expiry or
 multi-node admission matrix.
 
-## Remaining gates — do not ship this draft
+## Local app candidate (2026-09-22)
 
-- Automatic model recipes request 64K context when the user has no override.
-  The SDK builder still exposes no context override. This draft explicitly
-  blocks that case rather than altering user config or silently changing it.
-- Packaging scripts still package a child engine and need migration to a tray
-  executable plus compatible native runtime. Signed-app resource discovery is
-  not wired for the embedded layout. The trial supplied the runtime directory
-  explicitly; it was not a packaged-app launch.
-- Child stderr capture into `mesh.log` is gone. Integrate embedded startup
-  diagnostics with the existing error-viewer experience.
-- A running SDK handle is not yet supervised for unexpected runtime exit.
-  Early startup cancellation and native-hang recovery remain limitations.
-- Credential environment overrides cannot be scrubbed per-thread. Startup
-  refuses the two overrides previously filtered on the child command.
-- Windows startup remains gated. Cooperative shutdown is portable in principle;
-  Windows DLL loading and native UI behavior have not been exercised.
-- No menu-bar click-through, bundled browser UI, public/private switch or
-  stop-during-startup live trial. The local harness had no built web UI assets.
-- Production machine identity and Keychain integration are unchanged in intent,
-  but were not exercised by the disposable-identity trial.
+The local replacement removes obsolete executable lookup/CLI argument generation
+and child-process test fixtures. It retains the memory-based model ladder and
+first-run config setup; existing config is not rewritten. Per Mic's direction,
+the former 65,536-token override is removed: context is the engine/model default
+or an explicit user setting. No tray-generated configuration snapshot remains.
+
+`just build` now builds the console in Cargo's exact resolved Git dependency
+before embedding it. `package-app.py --embedded` packages the tray plus the
+matching native runtime, with no child engine executable. The legacy packaging
+mode remains for the existing release workflow; release automation is not yet
+migrated to embedded builds.
+
+Before creating threads, the app selects its bundled runtime and redirects
+stdout/stderr to the existing mesh.log. A bounded SDK status watchdog requests
+shutdown and joins the owned runtime if its management surface stops responding.
+This is health supervision, not a direct runtime-exit notification: the public
+SDK does not expose that notification. Uncertain shutdown still blocks restart.
+
+Validation of the local candidate: 50 Rust package tests, format/check and
+all-target Clippy with warnings denied; all 14 Python packaging tests; release
+build with console assets; nested ad-hoc signing and deep strict verification.
+The earlier two-cycle Metal inference proof above is prior evidence, not a live
+test of this final packaged candidate. The native menu/Keychain/public-private
+switch journey is for the human trial. Windows remains gated.
+
+The installed candidate preserves `com.mesh-llm.tray.candidate`. Ad-hoc signing
+is for this local trial, not notarized distribution. The app is replaced without
+launching it or changing machine configuration, identities, models or trust.
+
+## Human-launched observation and plugin correction
+
+Mic launched the installed candidate. Its own PID 97784 reported private serving,
+verified ownership and Qwen3.8 27B ready with 131072 context. `/chat` returned 200;
+a text request returned "Hello, how can I help you today?" in 0.58 seconds.
+The blobstore startup timed out: upstream invokes current_exe with
+`--log-format json --plugin blobstore`, which the tray had not dispatched.
+The follow-up build dispatches that exact built-in helper before profile lock/UI
+setup, using the already-linked host-runtime entrypoint. It is a plugin process,
+not a second inference node. This corrected build is staged for replacement
+after Mic quits the running candidate; its plugin handshake is not yet live-tested.
 
 ## Complexity assessment
 
-Typed configuration is clearer and removes executable lookup, CLI launch and
-OS-specific child termination from the active startup path. The adapter adds a
-worker, stop channel and completion tracking. Status/invite HTTP remains because
-its existing bounds and validation are useful; embedding does not eliminate it.
-
-This draft is not a net source reduction. Packaging and old CLI helpers remain
-while parity is unfinished. The Rust dependency graph is much larger. Conversely,
-there is no separate engine process to package/manage once that migration is
-finished. A native crash now affects the tray, and a stuck runtime can require
-app restart. This is a reasonable tradeoff for a dedicated engine-hosting app,
-with demonstrated local inference/restart, but not yet a shipping replacement.
-
-## Validation
-
-With Git dependencies on `d2fc780f6`, full `just verify` passed: format, check,
-54 package tests and all-target Clippy with warnings denied. These tests do not
-start Mesh or access Keychain. The local release harness and Metal build both
-exited successfully; engine main emitted dependency compiler warnings during
-the harness build. Do not describe that as a warning-free engine validation.
-Cargo outputs were cleaned after verification; installed apps were untouched.
+Against original base 7884735, the candidate's Rust is +346/-311, net +35 lines including tests.
+Cargo.lock remains approximately +5,729 net generated lines, reported separately.
+Embedding removes child ownership but native crashes now affect the tray itself.
+The bounded HTTP status/invite reader remains; the SDK status method itself also
+uses HTTP. A full typed management API is a separate engine change.
 
 ## Updates (not implemented)
 

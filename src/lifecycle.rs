@@ -1,4 +1,4 @@
-//! Prototype in-process engine ownership. A pending stop never cancels the SDK
+//! In-process engine ownership. A pending stop never cancels the SDK
 //! startup future: the worker retains it, then stops the resulting handle before
 //! reporting completion. No replacement may start until completion is observed.
 use mesh_llm_sdk::{serve, TrustPolicy};
@@ -63,10 +63,6 @@ pub struct Engine {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     done: Receiver<Result<(), String>>,
     result: Option<String>,
-    // Existing UI lifecycle tests exercise retained ownership with harmless
-    // child fixtures. Production never constructs this variant.
-    #[cfg(test)]
-    fixture: Option<std::process::Child>,
 }
 
 impl Engine {
@@ -94,7 +90,22 @@ impl Engine {
                     runtime.block_on(async {
                         let handle = serve::start(config).await.map_err(|e| format!("{e:#}"))?;
                         // Dropping the UI owner also requests cooperative shutdown.
-                        let _ = requested.await;
+                        let mut requested = requested;
+                        loop {
+                            tokio::select! {
+                                _ = &mut requested => break,
+                                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
+                                    // A lost management surface is not proof of exit. Stop and
+                                    // join the owned runtime before reporting failure.
+                                    if !matches!(tokio::time::timeout(
+                                        std::time::Duration::from_secs(10), handle.status()
+                                    ).await, Ok(Ok(_))) {
+                                        handle.stop().await.map_err(|e| format!("{e:#}"))?;
+                                        return Err("Embedded runtime stopped responding; it has been shut down. Restart the app.".into());
+                                    }
+                                }
+                            }
+                        }
                         handle.stop().await.map_err(|e| format!("{e:#}"))
                     })
                 })();
@@ -106,27 +117,14 @@ impl Engine {
             stop: Some(stop),
             done,
             result: None,
-            #[cfg(test)]
-            fixture: None,
         })
     }
 
     pub fn id(&self) -> u32 {
-        #[cfg(test)]
-        if let Some(child) = &self.fixture {
-            return child.id();
-        }
         std::process::id()
     }
 
     pub fn try_wait(&mut self) -> Result<Option<String>, String> {
-        #[cfg(test)]
-        if let Some(child) = &mut self.fixture {
-            return child
-                .try_wait()
-                .map(|code| code.map(|c| c.to_string()))
-                .map_err(|e| e.to_string());
-        }
         if self.result.is_none() {
             self.result = match self.done.try_recv() {
                 Ok(Ok(())) => Some("stopped".into()),
@@ -141,21 +139,27 @@ impl Engine {
         Ok(self.result.clone())
     }
 
-    #[cfg(test)]
-    pub fn kill(&mut self) -> std::io::Result<()> {
-        self.fixture.as_mut().expect("fixture only").kill()
-    }
-    #[cfg(test)]
-    pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.fixture.as_mut().expect("fixture only").wait()
+    #[cfg(all(test, unix))]
+    pub fn fixture() -> (
+        Self,
+        tokio::sync::oneshot::Receiver<()>,
+        mpsc::Sender<Result<(), String>>,
+    ) {
+        let (stop, requested) = tokio::sync::oneshot::channel();
+        let (finished, done) = mpsc::channel();
+        (
+            Self {
+                stop: Some(stop),
+                done,
+                result: None,
+            },
+            requested,
+            finished,
+        )
     }
 }
 
 pub fn request_stop(engine: &mut Engine) -> Result<(), String> {
-    #[cfg(test)]
-    if let Some(child) = &mut engine.fixture {
-        return child.kill().map_err(|e| e.to_string());
-    }
     if let Some(stop) = engine.stop.take() {
         // If the receiver exited, try_wait will report the worker's result.
         let _ = stop.send(());
@@ -164,21 +168,39 @@ pub fn request_stop(engine: &mut Engine) -> Result<(), String> {
 }
 
 #[cfg(test)]
-impl From<std::process::Child> for Engine {
-    fn from(child: std::process::Child) -> Self {
-        let (_, done) = mpsc::channel();
-        Self {
-            stop: None,
-            done,
-            result: None,
-            fixture: Some(child),
-        }
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_origin_and_join_never_fall_back_to_public_or_allowlist() {
+        for invite in [None, Some("their-token".into())] {
+            let settings = Settings {
+                connection: Connection::Private {
+                    invite: invite.clone(),
+                },
+                ..Default::default()
+            };
+            let cfg = config(&settings, Path::new("profile"), None);
+            assert!(!cfg.network.auto_join);
+            assert!(!cfg.network.publish);
+            assert!(cfg.admission.owner_required);
+            assert!(cfg.admission.trusted_owners.is_empty());
+            assert_eq!(cfg.admission.trust_policy, Some(TrustPolicy::RequireOwned));
+            assert_eq!(cfg.network.join_tokens.len(), usize::from(invite.is_some()));
+            assert_eq!(
+                cfg.admission.mesh_requirements.min_node_version.is_some(),
+                invite.is_none()
+            );
+        }
+        let public = config(&Settings::default(), Path::new("profile"), None);
+        assert!(public.network.join_tokens.is_empty());
+        assert!(public
+            .admission
+            .mesh_requirements
+            .min_node_version
+            .is_none());
+        assert!(public.admission.trust_policy.is_none());
+    }
+
     #[test]
     fn private_origin_and_join_preserve_policy_without_a_roster() {
         let mut settings = Settings {
@@ -251,7 +273,6 @@ mod tests {
             stop: Some(stop),
             done,
             result: None,
-            fixture: None,
         };
         request_stop(&mut engine).unwrap();
         request_stop(&mut engine).unwrap();
