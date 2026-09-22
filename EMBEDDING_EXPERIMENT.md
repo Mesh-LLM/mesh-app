@@ -67,10 +67,13 @@ mode remains for the existing release workflow; release automation is not yet
 migrated to embedded builds.
 
 Before creating threads, the app selects its bundled runtime and redirects
-stdout/stderr to the existing mesh.log. A bounded SDK status watchdog requests
-shutdown and joins the owned runtime if its management surface stops responding.
-This is health supervision, not a direct runtime-exit notification: the public
-SDK does not expose that notification. Uncertain shutdown still blocks restart.
+stdout/stderr to the existing mesh.log. Status polling is for presentation,
+not automatic recovery. The adapter waits for an explicit stop request (or
+owner drop), then cooperatively stops the engine. It does not shut down or
+restart an engine because a status request failed. Uncertain shutdown still
+blocks replacement to prevent overlapping engines. The SDK does not expose a
+direct runtime-completion notification; unexpected exit reporting remains a
+limitation, not a reason to invent a tray supervision policy.
 
 Validation of the local candidate: 50 Rust package tests, format/check and
 all-target Clippy with warnings denied; all 14 Python packaging tests; release
@@ -97,7 +100,7 @@ after Mic quits the running candidate; its plugin handshake is not yet live-test
 
 ## Complexity assessment
 
-Against original base 7884735, the candidate's Rust is +346/-311, net +35 lines including tests.
+Against original base 7884735, the candidate's Rust is +331/-311, net +20 lines including tests.
 Cargo.lock remains approximately +5,729 net generated lines, reported separately.
 Embedding removes child ownership but native crashes now affect the tray itself.
 The bounded HTTP status/invite reader remains; the SDK status method itself also

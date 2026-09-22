@@ -8,7 +8,7 @@ edition = "2021"
 mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d2fc780f670e603c0ea78e0b39150ef8a2c9e8b5", features = ["host-io"] }
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d2fc780f670e603c0ea78e0b39150ef8a2c9e8b5", default-features = false, features = ["serving", "console"] }
 mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d2fc780f670e603c0ea78e0b39150ef8a2c9e8b5", default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
 open = "5"

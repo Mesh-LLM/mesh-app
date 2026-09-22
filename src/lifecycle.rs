@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-// The pinned SDK can return a startup error after its shutdown wait times out,
+// The tested engine revision can return a startup error after its shutdown wait times out,
 // dropping (detaching) the native runtime thread. An error is not proof of exit.
 // Conservatively forbid another start in this process after any worker failure.
 static RESTART_UNSAFE: AtomicBool = AtomicBool::new(false);
@@ -90,22 +90,7 @@ impl Engine {
                     runtime.block_on(async {
                         let handle = serve::start(config).await.map_err(|e| format!("{e:#}"))?;
                         // Dropping the UI owner also requests cooperative shutdown.
-                        let mut requested = requested;
-                        loop {
-                            tokio::select! {
-                                _ = &mut requested => break,
-                                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {
-                                    // A lost management surface is not proof of exit. Stop and
-                                    // join the owned runtime before reporting failure.
-                                    if !matches!(tokio::time::timeout(
-                                        std::time::Duration::from_secs(10), handle.status()
-                                    ).await, Ok(Ok(_))) {
-                                        handle.stop().await.map_err(|e| format!("{e:#}"))?;
-                                        return Err("Embedded runtime stopped responding; it has been shut down. Restart the app.".into());
-                                    }
-                                }
-                            }
-                        }
+                        let _ = requested.await;
                         handle.stop().await.map_err(|e| format!("{e:#}"))
                     })
                 })();
