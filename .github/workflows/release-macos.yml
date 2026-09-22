@@ -6,24 +6,21 @@ name: Release macOS
 on:
   workflow_dispatch:
     inputs:
-      engine:
-        description: "mesh-llm engine: vX.Y.Z, main, pr/NUMBER, or a 40-char commit SHA"
-        required: true
-        default: main
       publish:
         description: "Publish a prerelease on this repository"
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   macos-arm64:
+    permissions:
+      contents: write # Explicit opt-in release publication below.
     runs-on: macos-15
     timeout-minutes: 180
     env:
-      ENGINE_REPO: Mesh-LLM/mesh-llm
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -41,52 +38,20 @@ jobs:
 
       - name: Resolve versions
         id: meta
-        env:
-          ENGINE_INPUT: ${{ inputs.engine || 'main' }}
         run: |
           set -euo pipefail
+          sha="$(python3 scripts/release-inputs.py)"
+          app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)-dev.${GITHUB_SHA:0:9}"
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             app_version="${GITHUB_REF_NAME#v}"
-          else
-            app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)-dev.${GITHUB_SHA:0:9}"
           fi
-          case "$ENGINE_INPUT" in
-            v[0-9]*)
-              echo "engine_kind=release" >> "$GITHUB_OUTPUT"
-              echo "engine_tag=$ENGINE_INPUT" >> "$GITHUB_OUTPUT" ;;
-            *)
-              if [[ "$ENGINE_INPUT" =~ ^pr/([0-9]+)$ ]]; then
-                sha="$(gh api "repos/$ENGINE_REPO/pulls/${BASH_REMATCH[1]}" -q .head.sha)"
-              elif [[ "$ENGINE_INPUT" == main || "$ENGINE_INPUT" =~ ^[0-9a-f]{40}$ ]]; then
-                sha="$(gh api "repos/$ENGINE_REPO/commits/$ENGINE_INPUT" -q .sha)"
-              else
-                echo 'Expected version, main, pr/NUMBER, or full SHA' >&2; exit 1
-              fi
-              [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-              echo "engine_kind=source" >> "$GITHUB_OUTPUT"
-              echo "engine_commit=$sha" >> "$GITHUB_OUTPUT" ;;
-          esac
-          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
-          echo "signed=${{ secrets.APPLE_CERTIFICATE_P12 != '' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Download official engine release
-        if: steps.meta.outputs.engine_kind == 'release'
-        env:
-          TAG: ${{ steps.meta.outputs.engine_tag }}
-        run: |
-          set -euo pipefail
-          mkdir engine && cd engine
-          gh release download "$TAG" --repo "$ENGINE_REPO" \
-            --pattern "mesh-llm-${TAG}-aarch64-apple-darwin.tar.gz*"
-          shasum -a 256 -c "mesh-llm-${TAG}-aarch64-apple-darwin.tar.gz.sha256"
           {
-            echo "ENGINE_ARCHIVE=$PWD/mesh-llm-${TAG}-aarch64-apple-darwin.tar.gz"
-            echo "ENGINE_SHA256=$(awk '{print $1}' ./*.sha256)"
-            echo "ENGINE_PROVENANCE=--engine-version ${TAG#v}"
-          } >> "$GITHUB_ENV"
+            echo "engine_commit=$sha"
+            echo "app_version=$app_version"
+            echo "signed=true"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Check out engine source
-        if: steps.meta.outputs.engine_kind == 'source'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: Mesh-LLM/mesh-llm
@@ -95,12 +60,10 @@ jobs:
           persist-credentials: false
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        if: steps.meta.outputs.engine_kind == 'source'
         with:
           node-version: 24
 
       - name: Install engine UI package manager
-        if: steps.meta.outputs.engine_kind == 'source'
         run: |
           set -euo pipefail
           manager="$(node -p 'require("./engine-src/crates/mesh-llm-ui/package.json").packageManager')"
@@ -108,8 +71,8 @@ jobs:
           npm install --global "$manager"
           pnpm --version
 
-      - name: Build engine from source
-        if: steps.meta.outputs.engine_kind == 'source'
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Build matching Metal runtime
         env:
           ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
         run: |
@@ -121,33 +84,36 @@ jobs:
           cd engine-src
           sccache --version
           scripts/cargo-linker --mesh-probe
-          engine_version="$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          just release-build
-          just release-bundle "v${engine_version}" dist
-          archive="$PWD/dist/mesh-llm-v${engine_version}-aarch64-apple-darwin.tar.gz"
+          test "$(git rev-parse HEAD)" = "$ENGINE_COMMIT"
+          deployment_target="$(cat scripts/lib/macos-deployment-target.txt)"
+          echo "MACOSX_DEPLOYMENT_TARGET=$deployment_target" >> "$GITHUB_ENV"
+          just release-runtime-build metal
+          archive="$PWD/dist/native-runtimes/meshllm-native-runtime-darwin-aarch64-metal.tar.gz"
           test -f "$archive"
           {
             echo "ENGINE_ARCHIVE=$archive"
             echo "ENGINE_SHA256=$(shasum -a 256 "$archive" | awk '{print $1}')"
-            echo "ENGINE_PROVENANCE=--engine-commit $ENGINE_COMMIT"
           } >> "$GITHUB_ENV"
 
-      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - name: Build tray
         run: |
-          brew install just
+          set -euo pipefail
           python3 -m unittest discover -s scripts -p 'test_*.py'
           just verify
           just build
+          test -z "$(git diff -- Cargo.toml Cargo.lock)"
+          python3 engine-src/scripts/verify-host-dependencies.py target/release/mesh-tray \
+            --format macho --report host-import-policy.json
 
       - name: Package Mesh.app
         env:
           APP_VERSION: ${{ steps.meta.outputs.app_version }}
+          ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
         run: |
           set -euo pipefail
-          read -r -a provenance <<< "$ENGINE_PROVENANCE"
           python3 scripts/package-app.py target/release/mesh-tray "$ENGINE_ARCHIVE" out \
-            --version "$APP_VERSION" --archive-sha256 "$ENGINE_SHA256" "${provenance[@]}"
+            --version "$APP_VERSION" --archive-sha256 "$ENGINE_SHA256" --embedded --engine-commit "$ENGINE_COMMIT" \
+            --minimum-system-version "$MACOSX_DEPLOYMENT_TARGET"
 
       - name: Sign
         if: steps.meta.outputs.signed == 'true'
@@ -171,13 +137,10 @@ jobs:
             | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)"
           test -n "$identity"
           app="out/Mesh.app"
-          # Inside out: runtime payload first, then the engine host, then the app.
+          # Inside out: runtime payload first, then the embedded tray/app.
           find "$app/Contents/Resources/engine/native-runtimes" -type f \
             \( -name '*.dylib' -o -perm -u+x \) -print0 2>/dev/null \
             | xargs -0 -n1 codesign --force --timestamp --options runtime --sign "$identity"
-          codesign --force --timestamp --options runtime \
-            --entitlements scripts/entitlements.plist --sign "$identity" \
-            "$app/Contents/MacOS/mesh-llm"
           python3 scripts/finalize-app.py out runtime
           codesign --force --timestamp --options runtime \
             --entitlements scripts/entitlements.plist --sign "$identity" "$app"
@@ -204,16 +167,10 @@ jobs:
           python3 scripts/finalize-app.py out final
           rm "$RUNNER_TEMP/notary.p8"
 
-      - name: Packaged engine smoke (no user profile)
-        env:
-          HOME: ${{ runner.temp }}/mesh-smoke-home
-          MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR: ${{ github.workspace }}/out/Mesh.app/Contents/Resources/engine/native-runtimes
-          MESH_LLM_NATIVE_RUNTIME_CACHE_DIR: ${{ runner.temp }}/mesh-smoke-cache
+      - name: Verify packaged embedded contract (no launch or credentials)
         run: |
           set -euo pipefail
-          mkdir -p "$HOME"
-          out/Mesh.app/Contents/MacOS/mesh-llm --log-format json --version
-          out/Mesh.app/Contents/MacOS/mesh-llm --log-format json gpus
+          python3 scripts/verify-embedded-package.py out
           codesign --verify --strict --deep out/Mesh.app
 
       - name: Create distributables
@@ -231,6 +188,7 @@ jobs:
           hdiutil create -volname "Mesh" -srcfolder out/Mesh.app -ov -format UDZO \
             "artifacts/${base}.dmg"
           tar -czf "artifacts/${base}.upstream-metadata.tar.gz" -C out upstream-metadata
+          cp host-import-policy.json "artifacts/${base}.host-import-policy.json"
           cp out/SHA256.json "artifacts/${base}.manifest.json"
           cd artifacts
           for f in "${base}.zip" "${base}.dmg"; do
@@ -268,7 +226,7 @@ jobs:
             tag="build-${APP_VERSION}"
             prerelease="--prerelease"
           fi
-          engine_note="engine: ${{ steps.meta.outputs.engine_tag || steps.meta.outputs.engine_commit }}"
+          engine_note="engine: ${{ steps.meta.outputs.engine_commit }}"
           gh release create "$tag" --target "$GITHUB_SHA" $prerelease \
             --title "Mesh $APP_VERSION (macOS arm64)" \
             --notes "Signed, notarized macOS arm64 build. $engine_note. Verify downloads with the .sha256 sidecars; SHA256.json in the manifest lists every file inside the app." \
