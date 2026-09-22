@@ -74,18 +74,20 @@ def package(tray, archive, destination, *, version, archive_sha256,
             shutil.move(str(path), target / path.name)
     shutil.rmtree(destination / "runtime")
     shutil.copy2(tray, macos / "mesh-tray")
+    repo = pathlib.Path(__file__).resolve().parents[1]
+    shutil.copy2(repo / "assets/Mesh.icns", app / "Contents/Resources/Mesh.icns")
     with (app / "Contents/Info.plist").open("wb") as out:
         plistlib.dump({
             "CFBundleExecutable": "mesh-tray",
             "CFBundleIdentifier": bundle_id,
             "CFBundleName": APP_NAME,
+            "CFBundleIconFile": "Mesh.icns",
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
             "LSUIElement": True,
             "LSMinimumSystemVersion": minimum_system_version,
         }, out)
-    repo = pathlib.Path(__file__).resolve().parents[1]
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     manifest = {"app_version": version,
                 "tray_commit": head,

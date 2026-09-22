@@ -202,8 +202,13 @@ separate mesh-llm executable. Blobstore uses the tray's plugin-only dispatch.
 Signing credentials are mandatory. Nested native code is signed first, runtime
 hashes refreshed, then the outer app is signed, notarized and stapled. Original
 runtime archive provenance and pre-signing metadata are retained separately;
-final hashes describe the redistributed bytes. ZIP, DMG, checksum sidecars,
-manifest and host-import report are uploaded. Publication remains explicit opt-in.
+final hashes describe the redistributed bytes. The `-installer` artifact contains
+only the DMG; GitHub Actions wraps it in a ZIP for download. Open the DMG and drag
+Mesh.app to its Applications shortcut. The app carries the colour jellyfish icon.
+The separate `-engineering` artifact contains the alternative app ZIP, checksum
+sidecars, manifest, upstream metadata and host-import report. Published releases
+offer the DMG directly plus its checksum, not the engineering files.
+Publication remains explicit opt-in.
 No workflow is triggered by a tag push or an ordinary branch push.
 
 Validation checks source identity, packaging tests, Rust checks, import policy,

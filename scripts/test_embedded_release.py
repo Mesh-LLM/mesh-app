@@ -81,3 +81,15 @@ class ReleaseTests(unittest.TestCase):
         self.assertNotIn('Contents/MacOS/mesh-llm', workflow)
         self.assertNotIn('just release-bundle', workflow)
         self.assertIn("inputs.publish", workflow)
+
+    def test_installer_is_separate_from_engineering_artifacts(self):
+        workflow = (Path(__file__).parents[1] / '.github/workflows/release-macos.yml').read_text()
+        self.assertIn('ln -s /Applications dmg-stage/Applications', workflow)
+        self.assertIn('-srcfolder dmg-stage', workflow)
+        self.assertIn('name: ${{ steps.dist.outputs.base }}-installer', workflow)
+        self.assertIn('path: artifacts/*.dmg', workflow)
+        self.assertIn('name: ${{ steps.dist.outputs.base }}-engineering', workflow)
+        self.assertIn('!artifacts/*.dmg', workflow)
+        publication = workflow.split('      - name: Publish release')[1].split('      - name: Clean')[0]
+        self.assertNotIn('artifacts/*', publication)
+        self.assertIn('.dmg.sha256', publication)

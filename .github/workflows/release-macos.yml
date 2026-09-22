@@ -185,7 +185,10 @@ jobs:
           base="Mesh-${APP_VERSION}-macos-arm64${suffix}"
           mkdir artifacts
           ditto -c -k --keepParent out/Mesh.app "artifacts/${base}.zip"
-          hdiutil create -volname "Mesh" -srcfolder out/Mesh.app -ov -format UDZO \
+          mkdir dmg-stage
+          ditto out/Mesh.app dmg-stage/Mesh.app
+          ln -s /Applications dmg-stage/Applications
+          hdiutil create -volname "Mesh" -srcfolder dmg-stage -ov -format UDZO \
             "artifacts/${base}.dmg"
           tar -czf "artifacts/${base}.upstream-metadata.tar.gz" -C out upstream-metadata
           cp host-import-policy.json "artifacts/${base}.host-import-policy.json"
@@ -210,8 +213,17 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: ${{ steps.dist.outputs.base }}
-          path: artifacts/*
+          name: ${{ steps.dist.outputs.base }}-installer
+          path: artifacts/*.dmg
+          if-no-files-found: error
+
+      - name: Upload engineering artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.dist.outputs.base }}-engineering
+          path: |
+            artifacts/*
+            !artifacts/*.dmg
           if-no-files-found: error
 
       - name: Publish release
@@ -229,8 +241,9 @@ jobs:
           engine_note="engine: ${{ steps.meta.outputs.engine_commit }}"
           gh release create "$tag" --target "$GITHUB_SHA" $prerelease \
             --title "Mesh $APP_VERSION (macOS arm64)" \
-            --notes "Signed, notarized macOS arm64 build. $engine_note. Verify downloads with the .sha256 sidecars; SHA256.json in the manifest lists every file inside the app." \
-            artifacts/*
+            --notes "Signed, notarized macOS arm64 build. $engine_note. Download the DMG and drag Mesh into Applications. The .sha256 sidecar verifies the download; engineering metadata is retained in the workflow artifacts." \
+            "artifacts/${{ steps.dist.outputs.base }}.dmg" \
+            "artifacts/${{ steps.dist.outputs.base }}.dmg.sha256"
 
       - name: Clean signing credentials
         if: always()
