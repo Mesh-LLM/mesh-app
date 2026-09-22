@@ -4,6 +4,7 @@ import pathlib
 import tempfile
 import tarfile
 import json
+import plistlib
 import unittest
 
 spec = importlib.util.spec_from_file_location(
@@ -43,6 +44,11 @@ class PackageAppTests(unittest.TestCase):
                          archive_sha256=pack.sha(archive), engine_commit="a" * 40,
                          embedded=True, bundle_id="com.mesh-llm.tray.candidate")
             app = out / "Mesh.app"
+            info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+            icon = app / "Contents/Resources" / info["CFBundleIconFile"]
+            self.assertEqual(icon.read_bytes()[:4], b"icns")
+            manifest = json.loads((out / "SHA256.json").read_text())
+            self.assertEqual(manifest["files"][str(icon.relative_to(out))], pack.sha(icon))
             self.assertEqual([p.name for p in (app / "Contents/MacOS").iterdir()], ["mesh-tray"])
             self.assertTrue((app / "Contents/Resources/engine/native-runtimes/metal/manifest.json").is_file())
             self.assertEqual(json.loads((out / "SHA256.json").read_text())["engine_kind"], "embedded-sdk")
