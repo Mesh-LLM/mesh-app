@@ -28,7 +28,9 @@ def sha(path):
 
 def package(tray, archive, destination, *, version, archive_sha256,
             engine_version=None, engine_commit=None, embedded=False,
-            bundle_id=BUNDLE_ID):
+            bundle_id=BUNDLE_ID, minimum_system_version="13.0"):
+    if not re.fullmatch(r"[0-9]+\.[0-9]+(?:\.[0-9]+)?", minimum_system_version):
+        raise ValueError("Invalid macOS minimum version")
     if not re.fullmatch(r"[0-9a-f]{64}", archive_sha256 or ""):
         raise ValueError("An archive SHA256 pin is required")
     if not re.fullmatch(r"[0-9A-Za-z][-+.0-9A-Za-z]*", version):
@@ -81,7 +83,7 @@ def package(tray, archive, destination, *, version, archive_sha256,
             "CFBundleShortVersionString": version,
             "CFBundleVersion": version,
             "LSUIElement": True,
-            "LSMinimumSystemVersion": "13.0",
+            "LSMinimumSystemVersion": minimum_system_version,
         }, out)
     repo = pathlib.Path(__file__).resolve().parents[1]
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
@@ -110,8 +112,10 @@ if __name__ == "__main__":
     parser.add_argument("--engine-commit")
     parser.add_argument("--embedded", action="store_true")
     parser.add_argument("--bundle-id", default=BUNDLE_ID)
+    parser.add_argument("--minimum-system-version", default="13.0")
     args = parser.parse_args()
     package(args.tray.resolve(), args.archive.resolve(), args.destination.resolve(),
             version=args.version, archive_sha256=args.archive_sha256,
             engine_version=args.engine_version, engine_commit=args.engine_commit,
-            embedded=args.embedded, bundle_id=args.bundle_id)
+            embedded=args.embedded, bundle_id=args.bundle_id,
+            minimum_system_version=args.minimum_system_version)
