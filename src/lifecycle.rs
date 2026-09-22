@@ -4,7 +4,27 @@
 use mesh_llm_sdk::{serve, TrustPolicy};
 use mesh_tray::settings::{Connection, Settings, MIN_NODE_VERSION};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+
+// The pinned SDK can return a startup error after its shutdown wait times out,
+// dropping (detaching) the native runtime thread. An error is not proof of exit.
+// Conservatively forbid another start in this process after any worker failure.
+static RESTART_UNSAFE: AtomicBool = AtomicBool::new(false);
+
+fn check_restart(safety: &AtomicBool) -> Result<(), String> {
+    if safety.load(Ordering::Acquire) {
+        Err("Restart the Mesh app before retrying: the embedded SDK did not prove that its previous runtime exited. No replacement runtime was started.".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn record_completion(safety: &AtomicBool, result: &Result<(), String>) {
+    if result.is_err() {
+        safety.store(true, Ordering::Release);
+    }
+}
 
 pub fn config(
     settings: &Settings,
@@ -51,6 +71,7 @@ pub struct Engine {
 
 impl Engine {
     pub fn start(config: serve::EmbeddedServeConfig) -> Result<Self, String> {
+        check_restart(&RESTART_UNSAFE)?;
         // Environment filtering can be per-child but not per embedded thread.
         // Fail closed rather than mutate the process environment after threads start.
         for name in ["MESH_LLM_EPHEMERAL_KEY", "MESH_LLM_OWNER_PASSPHRASE"] {
@@ -77,6 +98,7 @@ impl Engine {
                         handle.stop().await.map_err(|e| format!("{e:#}"))
                     })
                 })();
+                record_completion(&RESTART_UNSAFE, &result);
                 let _ = finished.send(result);
             })
             .map_err(|e| e.to_string())?;
@@ -109,7 +131,10 @@ impl Engine {
             self.result = match self.done.try_recv() {
                 Ok(Ok(())) => Some("stopped".into()),
                 Ok(Err(error)) => Some(error),
-                Err(TryRecvError::Disconnected) => Some("embedded worker disconnected".into()),
+                Err(TryRecvError::Disconnected) => {
+                    RESTART_UNSAFE.store(true, Ordering::Release);
+                    Some("embedded worker disconnected; restart the app before retrying".into())
+                }
                 Err(TryRecvError::Empty) => None,
             };
         }
@@ -199,6 +224,25 @@ mod tests {
             Some(Path::new("profile/config.toml").into())
         );
     }
+    #[test]
+    fn worker_failure_blocks_replacement_even_after_later_success() {
+        let safety = AtomicBool::new(false);
+        assert!(check_restart(&safety).is_ok());
+        record_completion(&safety, &Err("startup cleanup timed out".into()));
+        assert!(check_restart(&safety)
+            .unwrap_err()
+            .contains("Restart the Mesh app"));
+        record_completion(&safety, &Ok(()));
+        assert!(check_restart(&safety).is_err());
+    }
+
+    #[test]
+    fn proven_stop_permits_restart() {
+        let safety = AtomicBool::new(false);
+        record_completion(&safety, &Ok(()));
+        assert!(check_restart(&safety).is_ok());
+    }
+
     #[test]
     fn pending_stop_is_retained_until_worker_reports_completion() {
         let (stop, mut requested) = tokio::sync::oneshot::channel();

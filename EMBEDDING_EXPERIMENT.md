@@ -87,3 +87,28 @@ check, full package tests: 37 library + 15 binary, Clippy all-targets with
 warnings denied). `just build` passed, producing a stripped release executable
 of approximately 63 MiB. This proves compilation/linking, not native runtime
 loading or live mesh behavior. Build outputs are cleaned after verification.
+
+## Follow-up safety review (2026-09-22)
+
+A worker completion is **not** proof of SDK runtime termination on error. At the
+pinned engine revision, `sdk.rs::shutdown_failed_embedded_startup` waits only five
+seconds; `join_embedded_runtime_thread_with_timeout` then drops its thread handle
+on timeout. The thread can remain alive. The previous adapter would allow Retry
+or a pending settings change to start another runtime in that process.
+
+The adapter now latches restart-unsafe after any SDK worker error or disconnected
+worker. A subsequent start is refused until the whole app is restarted. This is
+intentionally conservative even for errors before thread creation: the SDK does
+not expose a structured termination guarantee. Normal successful stops permit
+restart. This guard does not add early cancellation or make native hangs safe.
+
+A second source gate: `git merge-base --is-ancestor 37fe1fa2404145ce9242892c12f61b283a83a931 d4ffbbacd9c8486e0b80c44452876ffa17785964`
+returns 1. The current SDK pin does not contain the required durable private
+membership fix. Do not package this pin as a replacement for the current tray.
+
+Full `just verify` passed on the modified tree based on `5e9f50c`: 54 package
+tests, formatting, check and warning-denying Clippy. No live engine was started.
+The remaining gate is a newer immutable SDK/runtime pair, a proper context-size
+SDK override and runtime-exit supervision, then packaging and isolated lifecycle
+validation with a verified noninteractive credential backend. A temporary HOME
+alone is not sufficient to make macOS credential access safe.
