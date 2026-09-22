@@ -46,7 +46,6 @@ mod tests {
         assert_eq!(after.connection, Connection::Automatic);
         assert!(after.joins().is_empty());
         assert_eq!((after.console_port, after.api_port), (4242, 4243));
-        assert!(!after.args().contains(&"--join".into()));
     }
 
     #[test]
@@ -54,9 +53,7 @@ mod tests {
         let after = switching_to(&joined(), Connection::Private { invite: None });
         after.validate().unwrap();
         assert_eq!(after.connection, Connection::Private { invite: None });
-        assert!(!after.args().contains(&"--join".into()));
-        // No invite left means this node creates: it declares the requirement.
-        assert!(after.args().contains(&"--min-node-version".into()));
-        assert!(after.args().contains(&"--owner-required".into()));
+        assert!(after.joins().is_empty());
+        // SDK policy mapping is covered by lifecycle configuration tests.
     }
 }

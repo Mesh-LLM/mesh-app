@@ -27,6 +27,26 @@ def fixture(root):
 
 
 class PackageAppTests(unittest.TestCase):
+    def test_embedded_package_has_only_tray_and_native_runtime(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = pathlib.Path(root)
+            native = root / "metal"
+            native.mkdir()
+            (native / "manifest.json").write_text("{}")
+            tray = root / "tray"
+            tray.write_bytes(b"inert embedded tray")
+            archive = root / "native.tar.gz"
+            with tarfile.open(archive, "w:gz") as bundle:
+                bundle.add(native, arcname="metal")
+            out = root / "out"
+            pack.package(tray, archive, out, version="0.1.0",
+                         archive_sha256=pack.sha(archive), engine_commit="a" * 40,
+                         embedded=True, bundle_id="com.mesh-llm.tray.candidate")
+            app = out / "Mesh.app"
+            self.assertEqual([p.name for p in (app / "Contents/MacOS").iterdir()], ["mesh-tray"])
+            self.assertTrue((app / "Contents/Resources/engine/native-runtimes/metal/manifest.json").is_file())
+            self.assertEqual(json.loads((out / "SHA256.json").read_text())["engine_kind"], "embedded-sdk")
+
     def test_requires_pin_and_exactly_one_engine_provenance(self):
         with tempfile.TemporaryDirectory() as root:
             root = pathlib.Path(root)

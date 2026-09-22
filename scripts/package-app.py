@@ -27,7 +27,8 @@ def sha(path):
 
 
 def package(tray, archive, destination, *, version, archive_sha256,
-            engine_version=None, engine_commit=None):
+            engine_version=None, engine_commit=None, embedded=False,
+            bundle_id=BUNDLE_ID):
     if not re.fullmatch(r"[0-9a-f]{64}", archive_sha256 or ""):
         raise ValueError("An archive SHA256 pin is required")
     if not re.fullmatch(r"[0-9A-Za-z][-+.0-9A-Za-z]*", version):
@@ -49,20 +50,32 @@ def package(tray, archive, destination, *, version, archive_sha256,
     # Python's data filter rejects escaping paths/links and device files.
     with tarfile.open(archive) as bundle:
         bundle.extractall(destination / "runtime", filter="data")
-    runtime = destination / "runtime/mesh-bundle"
-    if not (runtime / "mesh-llm").is_file():
-        raise ValueError("Engine archive does not contain mesh-bundle/mesh-llm")
     resources = app / "Contents/Resources/engine"
     resources.mkdir(parents=True)
-    for path in runtime.iterdir():
-        target = macos if path.name == "mesh-llm" else resources
-        shutil.move(str(path), target / path.name)
+    if embedded:
+        if not engine_commit:
+            raise ValueError("Embedded packaging requires the SDK source commit")
+        runtimes = resources / "native-runtimes"
+        runtimes.mkdir()
+        for path in (destination / "runtime").iterdir():
+            if not path.is_dir() or not (path / "manifest.json").is_file():
+                raise ValueError("Expected a native runtime archive, not an engine product")
+            shutil.move(str(path), runtimes / path.name)
+        if not list(runtimes.iterdir()):
+            raise ValueError("Native runtime archive is empty")
+    else:
+        runtime = destination / "runtime/mesh-bundle"
+        if not (runtime / "mesh-llm").is_file():
+            raise ValueError("Engine archive does not contain mesh-bundle/mesh-llm")
+        for path in runtime.iterdir():
+            target = macos if path.name == "mesh-llm" else resources
+            shutil.move(str(path), target / path.name)
     shutil.rmtree(destination / "runtime")
     shutil.copy2(tray, macos / "mesh-tray")
     with (app / "Contents/Info.plist").open("wb") as out:
         plistlib.dump({
             "CFBundleExecutable": "mesh-tray",
-            "CFBundleIdentifier": BUNDLE_ID,
+            "CFBundleIdentifier": bundle_id,
             "CFBundleName": APP_NAME,
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": version,
@@ -76,7 +89,7 @@ def package(tray, archive, destination, *, version, archive_sha256,
                 "tray_commit": head,
                 "mesh_version": engine_version,
                 "mesh_source_commit": engine_commit,
-                "engine_kind": "official-release" if engine_version else "source",
+                "engine_kind": "embedded-sdk" if embedded else ("official-release" if engine_version else "source"),
                 "archive_sha256": archive_sha256,
                 "files": {}}
     for path in sorted(app.rglob("*")):
@@ -95,7 +108,10 @@ if __name__ == "__main__":
     parser.add_argument("--archive-sha256", required=True)
     parser.add_argument("--engine-version")
     parser.add_argument("--engine-commit")
+    parser.add_argument("--embedded", action="store_true")
+    parser.add_argument("--bundle-id", default=BUNDLE_ID)
     args = parser.parse_args()
     package(args.tray.resolve(), args.archive.resolve(), args.destination.resolve(),
             version=args.version, archive_sha256=args.archive_sha256,
-            engine_version=args.engine_version, engine_commit=args.engine_commit)
+            engine_version=args.engine_version, engine_commit=args.engine_commit,
+            embedded=args.embedded, bundle_id=args.bundle_id)

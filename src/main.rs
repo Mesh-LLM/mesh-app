@@ -9,9 +9,9 @@ mod native;
 mod native;
 mod status;
 
+use lifecycle::Engine;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -29,7 +29,7 @@ struct App {
     pending_settings: Option<settings::Settings>,
     root: PathBuf,
     ui: Option<Ui>,
-    child: Option<Child>,
+    child: Option<Engine>,
     rx: Receiver<status::Snapshot>,
     tx: Sender<()>,
     snapshot: status::Snapshot,
@@ -162,7 +162,7 @@ impl App {
         }
     }
 
-    fn spawn(&self) -> Result<Child, String> {
+    fn spawn(&self) -> Result<Engine, String> {
         if cfg!(windows) {
             return Err("Windows is not supported by this tray yet. Your existing Mesh state was not touched.".into());
         }
@@ -178,7 +178,6 @@ impl App {
                 ));
             }
         }
-        let binary = settings::binary()?;
         std::fs::create_dir_all(&self.root).map_err(|e| e.to_string())?;
         #[cfg(unix)]
         {
@@ -201,15 +200,6 @@ impl App {
             .append(true)
             .open(self.root.join("mesh.log"))
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new(&binary);
-        // Signed app resources are outside Contents/MacOS. Preview/loose
-        // products retain the engine's normal adjacent-runtime discovery.
-        if let Some(macos) = binary.parent() {
-            let runtimes = macos.join("../Resources/engine/native-runtimes");
-            if runtimes.is_dir() {
-                command.env("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", runtimes);
-            }
-        }
         {
             use std::io::Write;
             // First run on a machine with no engine config gets one, with
@@ -251,25 +241,8 @@ impl App {
             use std::io::Write;
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
-        command
-            .args(self.settings.args())
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().map_err(|e| e.to_string())?))
-            .stderr(Stdio::from(log))
-            .env_remove("MESH_LLM_EPHEMERAL_KEY")
-            .env_remove("MESH_LLM_OWNER_PASSPHRASE");
-        if let Some(model) = model {
-            command.args(["--model", model.as_str()]);
-            command.args(mesh_tray::runtime_config::automatic_context_args(&profile));
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        command
-            .spawn()
-            .map_err(|e| format!("Could not start Mesh: {e}"))
+        let config = lifecycle::config(&self.settings, &profile, model);
+        Engine::start(config)
     }
 
     fn open(&mut self, path: &'static str) {
@@ -676,11 +649,62 @@ mod desktop {
     }
 }
 
+/// Redirect before creating any threads. Native and Rust output share the
+/// existing log; no second credential unlock or process is involved.
+#[cfg(unix)]
+fn capture_logs(root: &std::path::Path) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(root.join("mesh.log"))
+        .map_err(|e| e.to_string())?;
+    for fd in [libc::STDOUT_FILENO, libc::STDERR_FILENO] {
+        if unsafe { libc::dup2(log.as_raw_fd(), fd) } == -1 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn capture_logs(_: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
+
 fn main() {
     let result = (|| {
+        // The engine invokes its built-in blobstore through current_exe().
+        // Dispatch before profile locking or UI setup; this is not another node.
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if args == ["--log-format", "json", "--plugin", "blobstore"] {
+            return tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| e.to_string())?
+                .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
+                    "blobstore".into(),
+                ))
+                .map_err(|e| format!("{e:#}"));
+        }
+        if !args.is_empty() {
+            return Err("Unsupported Mesh app arguments".into());
+        }
         let root = settings::data_root()?;
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
         let _profile_lock = identity::lock_profile(&root)?;
+        // Process environment is configured before App creates any threads.
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let runtimes = exe
+            .parent()
+            .ok_or("Cannot locate app executable")?
+            .join("../Resources/engine/native-runtimes");
+        if runtimes.is_dir() {
+            std::env::set_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", runtimes);
+        }
+        capture_logs(&root)?;
         let settings = settings::Settings::load(&root)?;
         desktop::run(App::new(root, settings))
     })();
@@ -752,11 +776,10 @@ mod transaction_tests {
         assert!(app.settings.joins().is_empty());
     }
     #[cfg(unix)]
-    fn exited_child() -> Child {
-        let mut child = Command::new("sh").args(["-c", "exit 7"]).spawn().unwrap();
-        // try_wait returns the cached status too; no scheduling race in tick.
-        child.wait().unwrap();
-        child
+    fn exited_child() -> Engine {
+        let (engine, _, finished) = Engine::fixture();
+        finished.send(Ok(())).unwrap();
+        engine
     }
 
     #[cfg(unix)]
@@ -835,25 +858,19 @@ mod transaction_tests {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(root.path());
         app.polling = true;
-        // Block on our open pipe, not a sleep or a real Mesh/status service.
-        let child = Command::new("sh")
-            .args(["-c", "read -r line"])
-            .stdin(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        app.child = Some(child);
+        let (engine, _requested, _finished) = Engine::fixture();
+        let pid = engine.id();
+        app.child = Some(engine);
         app.started = Some(Instant::now());
 
         app.tick();
         let fresh_start_pending = app.started.is_some() && app.error.is_none();
         app.started = Some(Instant::now() - Duration::from_secs(181));
         app.tick();
-        let retained_pid = app.child.as_ref().map(Child::id);
-        // Reap the fixture before assertions; wait closes stdin so read sees EOF.
+        let retained_pid = app.child.as_ref().map(Engine::id);
+        // Completion is controlled by the test, not an OS child.
         let mut child = app.child.take().unwrap();
         let still_alive = child.try_wait().unwrap().is_none();
-        child.wait().unwrap();
 
         assert!(fresh_start_pending);
         assert_eq!(retained_pid, Some(pid));
@@ -871,8 +888,9 @@ mod transaction_tests {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(root.path());
         app.settings.save(root.path()).unwrap();
-        let mut other = Command::new("sleep").arg("30").spawn().unwrap();
-        app.child = Some(Command::new("sleep").arg("30").spawn().unwrap());
+        let (mut other, mut other_stop, _other_done) = Engine::fixture();
+        let (engine, mut requested, finished) = Engine::fixture();
+        app.child = Some(engine);
         let mut next = app.settings.clone();
         next.accept_seed("their-invite").unwrap();
         app.queue_settings(next);
@@ -882,14 +900,11 @@ mod transaction_tests {
             .is_empty());
         app.queue_settings(settings::Settings::default());
         assert_eq!(app.pending_settings.as_ref().unwrap().joins().len(), 1);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while app.child.as_mut().unwrap().try_wait().unwrap().is_none() && Instant::now() < deadline
-        {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let mut child = app.child.take().unwrap();
-        let _ = child.kill();
-        child.wait().unwrap();
+        assert_eq!(requested.try_recv(), Ok(()));
+        assert!(app.child.as_mut().unwrap().try_wait().unwrap().is_none());
+        finished.send(Ok(())).unwrap();
+        assert!(app.child.as_mut().unwrap().try_wait().unwrap().is_some());
+        app.child = None;
         app.stopping = None;
         // Force save failure so this test cannot spawn a runtime after reaping.
         std::fs::remove_file(root.path().join("launcher.json")).unwrap();
@@ -898,8 +913,7 @@ mod transaction_tests {
         assert!(app.settings.joins().is_empty());
         assert!(app.child.is_none());
         let alive = other.try_wait().unwrap().is_none();
-        other.kill().unwrap();
-        other.wait().unwrap();
+        assert!(other_stop.try_recv().is_err());
         assert!(alive);
     }
 }

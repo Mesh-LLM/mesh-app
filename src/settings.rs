@@ -114,46 +114,6 @@ impl Settings {
             Connection::Automatic => Vec::new(),
         }
     }
-
-    pub fn args(&self) -> Vec<String> {
-        let mut args = vec![
-            "serve".into(),
-            "--console".into(),
-            self.console_port.to_string(),
-            "--port".into(),
-            self.api_port.to_string(),
-            "--log-format".into(),
-            "json".into(),
-        ];
-        match &self.connection {
-            Connection::Automatic => args.push("--auto".into()),
-            Connection::Private { .. } => {
-                // `require-owned` is what makes this a Mesh rather than a star:
-                // every peer carrying a valid owner attestation and the same
-                // signed Mesh policy is trusted, with no per-person list
-                // (`mesh/ownership.rs:355-416`). Membership is therefore the
-                // Mesh itself, and the invite is the membership.
-                args.extend([
-                    "--owner-required".into(),
-                    "--trust-policy".into(),
-                    "require-owned".into(),
-                ]);
-                let joins = self.joins();
-                if joins.is_empty() {
-                    // Creating: declare the requirement, which is what buys the
-                    // signed bearer invite. A joiner must not declare it — it
-                    // inherits the policy from the token it pastes, and its own
-                    // requirements would describe a different Mesh.
-                    args.extend(["--min-node-version".into(), MIN_NODE_VERSION.into()]);
-                } else {
-                    for join in joins {
-                        args.extend(["--join".into(), join.clone()]);
-                    }
-                }
-            }
-        }
-        args
-    }
 }
 
 pub fn home() -> Result<PathBuf, String> {
@@ -172,24 +132,6 @@ pub fn data_root() -> Result<PathBuf, String> {
 /// node identity per machine however Mesh is started.
 pub fn mesh_profile() -> Result<PathBuf, String> {
     Ok(home()?.join(".mesh-llm"))
-}
-
-pub fn binary() -> Result<PathBuf, String> {
-    let name = if cfg!(windows) {
-        "mesh-llm.exe"
-    } else {
-        "mesh-llm"
-    };
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let bundled = exe
-        .parent()
-        .ok_or("Cannot locate Mesh installation")?
-        .join(name);
-    if bundled.is_file() {
-        Ok(bundled)
-    } else {
-        Err("Mesh runtime is missing from this installation. Reinstall Mesh.".into())
-    }
 }
 
 pub fn validate_invite(invite: &str) -> Result<(), String> {
@@ -226,7 +168,6 @@ mod tests {
         .unwrap();
         let settings = Settings::load(root.path()).unwrap();
         assert_eq!(settings.joins(), vec![&"current".to_string()]);
-        assert!(!settings.args().contains(&"discarded".to_string()));
         settings.save(root.path()).unwrap();
         let saved: serde_json::Value =
             serde_json::from_slice(&std::fs::read(root.path().join("launcher.json")).unwrap())
@@ -248,15 +189,7 @@ mod tests {
         settings.save(root.path()).unwrap();
         let settings = Settings::load(root.path()).unwrap();
         assert_eq!((settings.console_port, settings.api_port), (4242, 4243));
-        let args = settings.args();
-        assert_eq!(
-            args.windows(2)
-                .filter(|p| p[0] == "--join")
-                .map(|p| p[1].as_str())
-                .collect::<Vec<_>>(),
-            ["new-mesh"]
-        );
-        assert!(!args.contains(&"--min-node-version".into()));
+        assert_eq!(settings.joins(), vec![&"new-mesh".to_string()]);
     }
 
     #[test]
@@ -298,35 +231,6 @@ mod tests {
     /// The version floor is not a version preference: it is what makes the Mesh
     /// requirement-aware, so only the node that *creates* the Mesh may declare
     /// it. A joiner that also declared it would be describing a second Mesh.
-    #[test]
-    fn only_the_creator_declares_the_requirement_and_a_joiner_only_joins() {
-        let creating = Settings {
-            connection: Connection::Private { invite: None },
-            ..Default::default()
-        };
-        let args = creating.args();
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--min-node-version", MIN_NODE_VERSION]));
-        assert!(!args.contains(&"--join".into()));
-
-        let joining = Settings {
-            connection: Connection::Private {
-                invite: Some("their-token".into()),
-            },
-            ..Default::default()
-        };
-        let args = joining.args();
-        assert!(!args.contains(&"--min-node-version".into()));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--join", "their-token"]));
-
-        // Public declares neither: it is not a Mesh of ours to create or join.
-        let public = Settings::default().args();
-        assert!(!public.contains(&"--min-node-version".into()));
-        assert!(!public.contains(&"--join".into()));
-    }
 
     #[test]
     fn saves_and_reloads_private_connection() {
@@ -374,52 +278,11 @@ mod tests {
         // Long, but not an invite: spaces and punctuation are not base64url.
         assert!(!looks_like_invite(&"word ".repeat(200)));
     }
-    #[test]
-    fn default_is_real_auto_not_a_fallback_ladder() {
-        let args = Settings::default().args();
-        assert_eq!(args[0], "serve");
-        assert!(args.contains(&"--auto".into()));
-        assert!(!args.contains(&"--publish".into()));
-        assert!(!args.contains(&"--mesh-discovery-mode".into()));
-    }
-    #[test]
-    fn private_choice_never_falls_back_publicly() {
-        for invite in [None, Some("opaque-invite".into())] {
-            let settings = Settings {
-                connection: Connection::Private {
-                    invite: invite.clone(),
-                },
-                ..Settings::default()
-            };
-            let args = settings.args();
-            assert!(!args.contains(&"--auto".into()));
-            assert!(!args.contains(&"--publish".into()));
-            assert_eq!(args.contains(&"--join".into()), invite.is_some());
-            assert_eq!(args[0], "serve");
-        }
-    }
+
     /// Mutual trust is the whole point of the pivot: a Private node must never
     /// launch with a per-person allowlist, in either the creating or the
     /// joining shape.
-    #[test]
-    fn private_is_owner_required_and_mutually_trusting_never_an_allowlist() {
-        for invite in [None, Some("their-token".to_string())] {
-            let settings = Settings {
-                connection: Connection::Private { invite },
-                ..Default::default()
-            };
-            let args = settings.args();
-            assert!(args.contains(&"--owner-required".into()));
-            assert!(args
-                .windows(2)
-                .any(|pair| pair == ["--trust-policy", "require-owned"]));
-            assert!(!args.contains(&"allowlist".into()));
-            assert!(!args.contains(&"--trust-owner".into()));
-        }
-        assert!(!Settings::default()
-            .args()
-            .contains(&"--trust-policy".into()));
-    }
+
     #[test]
     fn a_launcher_file_from_the_allowlist_tray_still_opens_and_forgets_its_grants() {
         // The old fields describe a membership model that no longer exists.
@@ -433,12 +296,7 @@ mod tests {
         )
         .unwrap();
         settings.validate().unwrap();
-        let args = settings.args();
-        assert!(!args.contains(&"--trust-owner".into()));
-        assert!(args
-            .windows(2)
-            .any(|pair| pair == ["--trust-policy", "require-owned"]));
-        assert!(args.windows(2).any(|pair| pair == ["--join", "old-invite"]));
+        assert_eq!(settings.joins(), vec![&"old-invite".to_string()]);
         let written = serde_json::to_string(&settings).unwrap();
         assert!(!written.contains("admitted_owners"));
         assert!(!written.contains("exchange"));
