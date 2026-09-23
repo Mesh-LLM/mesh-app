@@ -119,6 +119,8 @@ fn confirmation_result(result: rfd::MessageDialogResult, action: &str) -> bool {
 #[cfg(not(target_os = "macos"))]
 mod payments {
     use super::notice;
+    // Mirrors the macOS enum; this stub only ever returns Done.
+    #[allow(dead_code)]
     #[derive(Debug, PartialEq, Eq)]
     pub enum InvoiceAction {
         Done,
