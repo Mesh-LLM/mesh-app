@@ -196,16 +196,7 @@ impl Payments {
             ),
             Reply::Invoice(Ok(inv)) => {
                 self.next_refresh = Instant::now();
-                let amount = inv
-                    .amount_msat
-                    .map(format_sats)
-                    .unwrap_or_else(|| "any amount (payer chooses)".into());
-                let minutes = inv.expires_at_ms.saturating_sub(now_ms()) / 60_000;
-                let balance = self
-                    .balance
-                    .map(|b| format!("Balance: {}\n\n", format_sats(b)))
-                    .unwrap_or_default();
-                let detail = format!("{balance}Amount: {amount}\nExpires in about {minutes} min.\n\nScan with a Lightning wallet, or copy the invoice. Your balance updates once the payment arrives.");
+                let detail = invoice_detail(self.balance, &inv, now_ms());
                 match crate::qr::png(&crate::qr::lightning_uri(&inv.bolt11), 6) {
                     Ok(png) => {
                         self.last_invoice =
@@ -280,15 +271,10 @@ impl Payments {
                 let Some(text) = ui::fund_amount() else {
                     return true;
                 };
-                let amount = if text.trim().is_empty() {
-                    None
-                } else {
-                    match sats_to_msat(&text) {
-                        Ok(msat) => Some(msat),
-                        Err(e) => return invalid(&e),
-                    }
-                };
-                self.send(t, Job::Invoice(amount));
+                match fund_amount(&text) {
+                    Ok(amount) => self.send(t, Job::Invoice(amount)),
+                    Err(e) => return invalid(&e),
+                }
             }
             _ => {}
         }
@@ -296,20 +282,12 @@ impl Payments {
     }
 
     fn edit_pay(&mut self, t: (u16, u32), p: &PolicyStatus) {
-        let budget = p
-            .daily_budget_msat
-            .map(|b| (b / 1000).to_string())
-            .unwrap_or_default();
-        let usage = format!(
-            "Today: {} spent · {} left.",
-            format_sats(p.spent_today_msat),
-            format_sats(p.remaining_daily_budget_msat)
-        );
+        let (checked, budget, usage) = pay_form(p);
         let Some((on, text)) = ui::toggle_amount(
             "Pay",
             &format!("When on, Mesh may pay other nodes for models it can't use for free, up to this limit per UTC day. Turning it off stops new paid requests.\n\n{usage}"),
             "Pay for models",
-            p.mode == Mode::Automatic,
+            checked,
             "Daily limit (sats)",
             &budget,
         ) else {
@@ -324,15 +302,12 @@ impl Payments {
     }
 
     fn edit_earn(&mut self, t: (u16, u32), model: String, current: Option<Pricing>) {
-        let price = current
-            .as_ref()
-            .map(|p| (p.output_msat_per_million / 1000).to_string())
-            .unwrap_or_default();
+        let (checked, price) = earn_form(current.as_ref());
         let Some((on, text)) = ui::toggle_amount(
             "Get paid",
             &format!("When on, other nodes pay you to use {model}. Off serves it for free."),
             "Charge for this model",
-            current.is_some(),
+            checked,
             "Price (sats per M tokens)",
             &price,
         ) else {
@@ -345,6 +320,52 @@ impl Payments {
             }
         }
     }
+}
+
+/// What the Pay form opens with: (ticked, limit in sats, usage line).
+pub fn pay_form(p: &PolicyStatus) -> (bool, String, String) {
+    (
+        p.mode == Mode::Automatic,
+        p.daily_budget_msat
+            .map(|b| (b / 1000).to_string())
+            .unwrap_or_default(),
+        format!(
+            "Today: {} spent · {} left.",
+            format_sats(p.spent_today_msat),
+            format_sats(p.remaining_daily_budget_msat)
+        ),
+    )
+}
+
+/// What the Get paid form opens with: (ticked, price in sats).
+pub fn earn_form(current: Option<&Pricing>) -> (bool, String) {
+    (
+        current.is_some(),
+        current
+            .map(|p| (p.output_msat_per_million / 1000).to_string())
+            .unwrap_or_default(),
+    )
+}
+
+/// Add funds amount: blank lets the payer choose.
+pub fn fund_amount(text: &str) -> Result<Option<u64>, payments::Error> {
+    if text.trim().is_empty() {
+        Ok(None)
+    } else {
+        sats_to_msat(text).map(Some)
+    }
+}
+
+pub fn invoice_detail(balance: Option<u64>, inv: &FundingInvoice, now_ms: u64) -> String {
+    let amount = inv
+        .amount_msat
+        .map(format_sats)
+        .unwrap_or_else(|| "any amount (payer chooses)".into());
+    let minutes = inv.expires_at_ms.saturating_sub(now_ms) / 60_000;
+    let balance = balance
+        .map(|b| format!("Balance: {}\n\n", format_sats(b)))
+        .unwrap_or_default();
+    format!("{balance}Amount: {amount}\nExpires in about {minutes} min.\n\nScan with a Lightning wallet, or copy the invoice. Your balance updates once the payment arrives.")
 }
 
 /// Pay form -> command. Off keeps the typed limit so re-enabling is one click.
@@ -476,6 +497,87 @@ mod tests {
             DEFAULT_MINIMUM_MSAT
         );
         assert!(earn_command("m".into(), None, true, "").is_err());
+    }
+
+    fn status(mode: Mode, budget: Option<u64>) -> PolicyStatus {
+        PolicyStatus {
+            mode,
+            daily_budget_msat: budget,
+            spent_today_msat: 250_000,
+            reserved_msat: 0,
+            remaining_daily_budget_msat: 750_000,
+        }
+    }
+
+    #[test]
+    fn pay_form_prefills_from_mesh() {
+        let (on, limit, usage) = pay_form(&status(Mode::Automatic, Some(1_000_000)));
+        assert!(on);
+        assert_eq!(limit, "1000");
+        assert_eq!(usage, "Today: 250 sats spent · 750 sats left.");
+        let (on, limit, _) = pay_form(&status(Mode::FreeOnly, None));
+        assert!(!on);
+        assert_eq!(limit, "");
+    }
+
+    #[test]
+    fn saving_the_pay_form_unchanged_keeps_the_setting() {
+        for s in [
+            status(Mode::Automatic, Some(1_000_000)),
+            status(Mode::FreeOnly, Some(5_000_000)),
+            status(Mode::FreeOnly, None),
+        ] {
+            let (on, limit, _) = pay_form(&s);
+            let Command::Policy { value: Some(p) } = pay_command(on, &limit).unwrap() else {
+                panic!("not a policy command");
+            };
+            assert_eq!(
+                (p.mode, p.daily_budget_msat),
+                (s.mode.clone(), s.daily_budget_msat)
+            );
+        }
+    }
+
+    #[test]
+    fn saving_the_earn_form_unchanged_keeps_the_price() {
+        let existing = Pricing {
+            input_msat_per_million: 100_000,
+            output_msat_per_million: 100_000,
+            minimum_invoice_msat: 42_000,
+        };
+        let (on, price) = earn_form(Some(&existing));
+        assert!(on);
+        let Command::SetPricing { value, .. } =
+            earn_command("m".into(), Some(&existing), on, &price).unwrap()
+        else {
+            panic!("not a pricing command");
+        };
+        assert_eq!(value, Some(existing));
+        assert_eq!(earn_form(None), (false, String::new()));
+    }
+
+    #[test]
+    fn fund_amount_blank_lets_payer_choose() {
+        assert_eq!(fund_amount("").unwrap(), None);
+        assert_eq!(fund_amount("  ").unwrap(), None);
+        assert_eq!(fund_amount("5000").unwrap(), Some(5_000_000));
+        assert!(fund_amount("-1").is_err());
+    }
+
+    #[test]
+    fn invoice_detail_shows_balance_amount_and_expiry() {
+        let inv = FundingInvoice {
+            bolt11: "lnbc1".into(),
+            payment_hash: "h".into(),
+            payee: "p".into(),
+            amount_msat: None,
+            expires_at_ms: 10 * 60_000,
+        };
+        let d = invoice_detail(Some(1_234_000), &inv, 0);
+        assert!(d.starts_with("Balance: 1,234 sats"));
+        assert!(d.contains("any amount (payer chooses)"));
+        assert!(d.contains("about 10 min"));
+        assert!(!invoice_detail(None, &inv, 0).contains("Balance"));
     }
 
     #[test]
