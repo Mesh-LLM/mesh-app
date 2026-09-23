@@ -14,6 +14,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 const REFRESH: Duration = Duration::from_secs(20);
+/// After Mesh reports ready, its wallet side can lag; failures in this window
+/// are retried quickly and never shown.
+const STARTUP_GRACE: Duration = Duration::from_secs(30);
+const STARTUP_RETRY: Duration = Duration::from_secs(2);
 
 enum Job {
     Refresh { wallet: bool },
@@ -36,6 +40,9 @@ enum Reply {
 /// Last answers from Mesh. `None` = never read; errors are shown, not zeroed.
 #[derive(Default)]
 pub struct View {
+    /// Our own Mesh is ready to answer. While false every label says so;
+    /// no earlier answer is left on screen.
+    pub ready: bool,
     pub wallet: bool,
     pub balance: Option<Result<u64, String>>,
     pub policy: Option<Result<PolicyStatus, String>>,
@@ -68,6 +75,20 @@ pub struct Labels {
 }
 
 pub fn labels(view: &View) -> Labels {
+    if !view.ready {
+        return Labels {
+            title: "Payments".into(),
+            balance: "Waiting for Mesh…".into(),
+            fund: if view.wallet {
+                "Add funds…"
+            } else {
+                "Enable wallet…"
+            },
+            spending: "Spending: waiting for Mesh…".into(),
+            earning: "Earning: waiting for Mesh…".into(),
+            can_price: false,
+        };
+    }
     let (title, balance) = match (&view.balance, view.wallet) {
         (_, false) => ("Payments".into(), "Wallet not enabled".into()),
         (None, true) => ("Payments".into(), "Balance: checking…".into()),
@@ -132,6 +153,8 @@ pub struct Payments {
     replies: Receiver<Reply>,
     busy: bool,
     next_refresh: Instant,
+    /// When our Mesh last became ready; None while it is not.
+    ready_since: Option<Instant>,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
 }
 
@@ -160,6 +183,7 @@ impl Payments {
             replies,
             busy: false,
             next_refresh: Instant::now(),
+            ready_since: None,
             last_invoice: None,
         }
     }
@@ -235,6 +259,7 @@ impl Payments {
         if self.view.models != models {
             self.view.models = models.to_vec();
         }
+        self.set_ready(target.is_some(), Instant::now());
         while let Ok(reply) = self.replies.try_recv() {
             self.busy = false;
             self.handle(reply, target);
@@ -257,6 +282,25 @@ impl Payments {
         self.busy = self.jobs.send((port, pid, job)).is_ok();
     }
 
+    /// Edge-triggered: becoming ready reads immediately; losing readiness
+    /// forgets every answer so nothing stale stays on screen.
+    fn set_ready(&mut self, ready: bool, now: Instant) {
+        if ready == self.view.ready {
+            return;
+        }
+        self.view.ready = ready;
+        self.view.balance = None;
+        self.view.policy = None;
+        self.view.pricing = None;
+        self.ready_since = ready.then_some(now);
+        self.next_refresh = now;
+    }
+
+    fn in_startup_grace(&self, now: Instant) -> bool {
+        self.ready_since
+            .is_some_and(|since| now.duration_since(since) < STARTUP_GRACE)
+    }
+
     fn refresh_soon(&mut self) {
         self.next_refresh = Instant::now();
     }
@@ -268,6 +312,17 @@ impl Payments {
                 policy,
                 pricing,
             } => {
+                if !self.view.ready {
+                    return; // answer from before readiness was lost
+                }
+                let failed = balance.as_ref().is_some_and(|b| b.is_err())
+                    || policy.is_err()
+                    || pricing.is_err();
+                let now = Instant::now();
+                if failed && self.in_startup_grace(now) {
+                    self.next_refresh = now + STARTUP_RETRY;
+                    return; // keep "checking…"; Mesh's wallet side is still coming up
+                }
                 if let Some(b) = balance {
                     self.view.balance = Some(b.map(|b| b.spendable_msat).map_err(|e| describe(&e)));
                 }
@@ -521,14 +576,70 @@ mod tests {
 
     fn view() -> View {
         View {
+            ready: true,
             wallet: true,
             ..View::default()
         }
     }
 
+    fn failed_refresh() -> Reply {
+        Reply::Refreshed {
+            balance: Some(Err(payments::Error::Transport)),
+            policy: Err(payments::Error::Transport),
+            pricing: Err(payments::Error::Transport),
+        }
+    }
+
+    #[test]
+    fn not_ready_shows_waiting_never_a_stale_answer() {
+        let mut p = Payments::new(true);
+        let t0 = Instant::now();
+        p.set_ready(true, t0);
+        p.view.policy = Some(Err("Mesh not reachable".into()));
+        p.set_ready(false, t0);
+        let l = labels(&p.view);
+        assert_eq!(l.spending, "Spending: waiting for Mesh…");
+        assert!(!l.can_price);
+    }
+
+    #[test]
+    fn becoming_ready_reads_immediately_and_early_failures_are_retried_not_shown() {
+        let mut p = Payments::new(true);
+        p.next_refresh = Instant::now() + Duration::from_secs(3600);
+        p.set_ready(true, Instant::now());
+        assert!(p.next_refresh <= Instant::now(), "ready edge must read now");
+        p.handle(failed_refresh(), None);
+        assert_eq!(labels(&p.view).spending, "Spending: checking…");
+        assert!(p.next_refresh <= Instant::now() + STARTUP_RETRY);
+        // After the grace window a failure is real and shown.
+        p.ready_since = Some(Instant::now() - STARTUP_GRACE);
+        p.handle(failed_refresh(), None);
+        assert_eq!(
+            labels(&p.view).spending,
+            "Spending unavailable — Mesh not reachable"
+        );
+    }
+
+    #[test]
+    fn answer_arriving_after_readiness_is_lost_is_discarded() {
+        let mut p = Payments::new(true);
+        p.handle(
+            Reply::Refreshed {
+                balance: None,
+                policy: Ok(status(Mode::FreeOnly, 0)),
+                pricing: Ok(BTreeMap::new()),
+            },
+            None,
+        );
+        assert_eq!(labels(&p.view).spending, "Spending: waiting for Mesh…");
+    }
+
     #[test]
     fn no_wallet_keeps_the_same_items_and_offers_enable() {
-        let l = labels(&View::default());
+        let l = labels(&View {
+            ready: true,
+            ..View::default()
+        });
         assert_eq!(l.title, "Payments");
         assert_eq!(l.balance, "Wallet not enabled");
         assert_eq!(l.fund, "Enable wallet…");
