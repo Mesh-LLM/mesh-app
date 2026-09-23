@@ -315,30 +315,12 @@ impl Payments {
         ) else {
             return;
         };
-        let policy = if on {
-            match sats_to_msat(&text) {
-                Ok(msat) => Policy {
-                    mode: Mode::Automatic,
-                    daily_budget_msat: Some(msat),
-                },
-                Err(e) => {
-                    invalid(&e);
-                    return;
-                }
+        match pay_command(on, &text) {
+            Ok(command) => self.send(t, Job::Run(command)),
+            Err(e) => {
+                invalid(&e);
             }
-        } else {
-            // Keep the limit so turning it back on is one click.
-            Policy {
-                mode: Mode::FreeOnly,
-                daily_budget_msat: sats_to_msat(&text).ok(),
-            }
-        };
-        self.send(
-            t,
-            Job::Run(Command::Policy {
-                value: Some(policy),
-            }),
-        );
+        }
     }
 
     fn edit_earn(&mut self, t: (u16, u32), model: String, current: Option<Pricing>) {
@@ -356,29 +338,55 @@ impl Payments {
         ) else {
             return;
         };
-        if !on {
-            self.send(t, Job::Run(Command::SetPricing { model, value: None }));
-            return;
-        }
-        match sats_to_msat(&text) {
-            Ok(msat) => self.send(
-                t,
-                Job::Run(Command::SetPricing {
-                    model,
-                    value: Some(Pricing {
-                        input_msat_per_million: msat,
-                        output_msat_per_million: msat,
-                        minimum_invoice_msat: current
-                            .map(|p| p.minimum_invoice_msat)
-                            .unwrap_or(DEFAULT_MINIMUM_MSAT),
-                    }),
-                }),
-            ),
+        match earn_command(model, current.as_ref(), on, &text) {
+            Ok(command) => self.send(t, Job::Run(command)),
             Err(e) => {
                 invalid(&e);
             }
         }
     }
+}
+
+/// Pay form -> command. Off keeps the typed limit so re-enabling is one click.
+pub fn pay_command(on: bool, limit: &str) -> Result<Command, payments::Error> {
+    let policy = if on {
+        Policy {
+            mode: Mode::Automatic,
+            daily_budget_msat: Some(sats_to_msat(limit)?),
+        }
+    } else {
+        Policy {
+            mode: Mode::FreeOnly,
+            daily_budget_msat: sats_to_msat(limit).ok(),
+        }
+    };
+    Ok(Command::Policy {
+        value: Some(policy),
+    })
+}
+
+/// Get paid form -> command. Off removes the price (serve free, never 0);
+/// on applies one price to input and output and keeps the existing minimum.
+pub fn earn_command(
+    model: String,
+    current: Option<&Pricing>,
+    on: bool,
+    price: &str,
+) -> Result<Command, payments::Error> {
+    if !on {
+        return Ok(Command::SetPricing { model, value: None });
+    }
+    let msat = sats_to_msat(price)?;
+    Ok(Command::SetPricing {
+        model,
+        value: Some(Pricing {
+            input_msat_per_million: msat,
+            output_msat_per_million: msat,
+            minimum_invoice_msat: current
+                .map(|p| p.minimum_invoice_msat)
+                .unwrap_or(DEFAULT_MINIMUM_MSAT),
+        }),
+    })
 }
 
 fn run(client: Client, job: Job) -> Reply {
@@ -411,6 +419,64 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn json(c: &Command) -> serde_json::Value {
+        serde_json::to_value(c).unwrap()
+    }
+
+    #[test]
+    fn pay_on_sets_automatic_with_limit_in_msat() {
+        let c = pay_command(true, "1000").unwrap();
+        assert_eq!(
+            json(&c),
+            serde_json::json!({"command":"policy","value":{"mode":"automatic","daily_budget_msat":1_000_000}})
+        );
+    }
+
+    #[test]
+    fn pay_off_is_free_only_and_keeps_the_limit() {
+        let c = pay_command(false, "1000").unwrap();
+        assert_eq!(json(&c)["value"]["mode"], "free_only");
+        assert_eq!(json(&c)["value"]["daily_budget_msat"], 1_000_000);
+        // Blank limit when turning off is fine; nothing to keep.
+        let c = pay_command(false, "").unwrap();
+        assert!(json(&c)["value"]["daily_budget_msat"].is_null());
+    }
+
+    #[test]
+    fn pay_on_needs_a_valid_limit() {
+        assert!(pay_command(true, "").is_err());
+        assert!(pay_command(true, "abc").is_err());
+    }
+
+    #[test]
+    fn earn_off_removes_the_price_instead_of_zero() {
+        let c = earn_command("m".into(), None, false, "500").unwrap();
+        assert_eq!(
+            json(&c),
+            serde_json::json!({"command":"set_pricing","model":"m","value":null})
+        );
+    }
+
+    #[test]
+    fn earn_on_uses_one_price_for_both_and_keeps_minimum() {
+        let existing = Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 2,
+            minimum_invoice_msat: 42_000,
+        };
+        let c = earn_command("m".into(), Some(&existing), true, "100").unwrap();
+        let v = json(&c)["value"].clone();
+        assert_eq!(v["input_msat_per_million"], 100_000);
+        assert_eq!(v["output_msat_per_million"], 100_000);
+        assert_eq!(v["minimum_invoice_msat"], 42_000);
+        let c = earn_command("m".into(), None, true, "100").unwrap();
+        assert_eq!(
+            json(&c)["value"]["minimum_invoice_msat"],
+            DEFAULT_MINIMUM_MSAT
+        );
+        assert!(earn_command("m".into(), None, true, "").is_err());
+    }
 
     #[test]
     fn title_shows_balance_only_with_a_wallet() {
