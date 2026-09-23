@@ -103,7 +103,7 @@ installed RAM minus max(2 GiB, 25%). Recipe budgets include upstream's 64K
 context/runtime estimate, not just weights. References pin upstream GGUF revisions.
 Only Apple Silicon is currently positively identified as unified GPU memory;
 Linux and Intel Macs use the CPU recipe (4B), never host RAM as discrete VRAM.
-Windows retains its existing launch gate. Dedicated GPU discovery is not implemented.
+Windows starts the embedded engine (see CI below). Dedicated GPU discovery is not implemented.
 Linux reads MemAvailable and the root cgroup-v2 memory limit; nested/cgroup-v1
 limits are not comprehensively detected. Disk-space admission is left to the
 engine downloader, unlike upstream setup's disk preflight.
