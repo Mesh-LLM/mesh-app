@@ -130,11 +130,14 @@ mod payments {
         notice("Payments", PAYMENTS_MAC_ONLY);
         None
     }
-    pub fn spending(_: bool, _: &str, _: &str) -> Option<(bool, String)> {
-        notice("Payments", PAYMENTS_MAC_ONLY);
-        None
-    }
-    pub fn price(_: &str, _: [String; 3]) -> Option<[String; 3]> {
+    pub fn toggle_amount(
+        _: &str,
+        _: &str,
+        _: &str,
+        _: bool,
+        _: &str,
+        _: &str,
+    ) -> Option<(bool, String)> {
         notice("Payments", PAYMENTS_MAC_ONLY);
         None
     }

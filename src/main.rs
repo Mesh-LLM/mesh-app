@@ -101,11 +101,7 @@ impl App {
             open_when_ready: None,
             exit: false,
             // Side-effect free file check; the wallet itself is Mesh's.
-            pay: pay_menu::Payments::new(
-                settings::mesh_profile()
-                    .map(|p| mesh_tray::payments::wallet_exists(&p))
-                    .unwrap_or(false),
-            ),
+            pay: pay_menu::Payments::new(settings::mesh_profile().ok()),
         }
     }
 
@@ -321,7 +317,8 @@ impl App {
     fn tick(&mut self) {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             let target = self.pay_target();
-            if self.pay.click(event.id.as_ref(), target) {
+            let models = self.snapshot.serving_models.clone();
+            if self.pay.click(event.id.as_ref(), target, &models) {
                 continue;
             }
             match event.id.as_ref() {
@@ -399,8 +396,7 @@ impl App {
             );
         }
         let target = self.pay_target();
-        let models = self.snapshot.serving_models.clone();
-        self.pay.tick(target, &models);
+        self.pay.tick(target);
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(()).is_ok();
             self.next_poll = Instant::now() + POLL;

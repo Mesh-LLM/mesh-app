@@ -1,60 +1,50 @@
 //! Payments submenu: a thin controller over Mesh's local wallet API.
 //!
-//! Mesh owns the wallet, ledger, prices, budgets and settlement. This file
-//! only turns clicks into `/api/wallet` commands on a worker thread and shows
-//! the last answer Mesh gave. Nothing here computes or stores money state.
+//! Mesh owns the wallet, ledger, prices, budgets and settlement. The menu is
+//! three fixed items; the only thing that ever changes is the submenu title,
+//! which shows the last good balance once a wallet exists. Every form reads
+//! Mesh fresh when clicked, so there is no menu state to go stale.
 use crate::native::{self as ui, InvoiceAction};
 use mesh_tray::payments::{
     self, format_sats, sats_to_msat, Balance, Client, Command, FundingInvoice, Mode, Policy,
     PolicyStatus, Pricing, Receipt, Transaction,
 };
-use muda::{MenuItem, PredefinedMenuItem, Submenu};
+use muda::{MenuItem, Submenu};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 const REFRESH: Duration = Duration::from_secs(20);
-/// After Mesh reports ready, its wallet side can lag; failures in this window
-/// are retried quickly and never shown.
+/// Mesh's wallet side can lag its status endpoint; retry quickly for a while.
 const STARTUP_GRACE: Duration = Duration::from_secs(30);
 const STARTUP_RETRY: Duration = Duration::from_secs(2);
+/// Minimum invoice used when a price is first set; Mesh bills at least this.
+const DEFAULT_MINIMUM_MSAT: u64 = 10_000;
 
 enum Job {
-    Refresh { wallet: bool },
+    Balance,
+    ReadPolicy,
+    ReadPricing(String),
     Run(Command),
     Invoice(Option<u64>),
     Receipt(String),
 }
 
 enum Reply {
-    Refreshed {
-        balance: Option<Result<Balance, payments::Error>>,
-        policy: Result<PolicyStatus, payments::Error>,
-        pricing: Result<BTreeMap<String, Pricing>, payments::Error>,
-    },
+    Balance(Result<Balance, payments::Error>),
+    Policy(Result<PolicyStatus, payments::Error>),
+    Pricing(String, Result<BTreeMap<String, Pricing>, payments::Error>),
     Done(Result<serde_json::Value, payments::Error>),
     Invoice(Result<FundingInvoice, payments::Error>),
     Receipt(Result<Receipt, payments::Error>),
-}
-
-/// Last answers from Mesh. `None` = never read; errors are shown, not zeroed.
-#[derive(Default)]
-pub struct View {
-    /// Our own Mesh is ready to answer. While false every label says so;
-    /// no earlier answer is left on screen.
-    pub ready: bool,
-    pub wallet: bool,
-    pub balance: Option<Result<u64, String>>,
-    pub policy: Option<Result<PolicyStatus, String>>,
-    pub pricing: Option<Result<BTreeMap<String, Pricing>, String>>,
-    pub models: Vec<String>,
 }
 
 fn describe(error: &payments::Error) -> String {
     use payments::Error::*;
     match error {
         InvalidInput(m) => (*m).into(),
-        RuntimeChanged => "Mesh restarted; refreshing".into(),
+        RuntimeChanged => "Mesh restarted; try again".into(),
         Unavailable => "not available in this Mesh".into(),
         Rejected(code) => format!("Mesh refused ({code})"),
         Transport => "Mesh not reachable".into(),
@@ -62,104 +52,30 @@ fn describe(error: &payments::Error) -> String {
     }
 }
 
-/// The Payments menu text, derived from the last answers only. Pure so the
-/// labels are testable without AppKit; the items themselves never change.
-#[derive(Debug, PartialEq, Eq)]
-pub struct Labels {
-    pub title: String,
-    pub balance: String,
-    pub fund: &'static str,
-    pub spending: String,
-    pub earning: String,
-    pub can_price: bool,
-}
-
-pub fn labels(view: &View) -> Labels {
-    if !view.ready {
-        return Labels {
-            title: "Payments".into(),
-            balance: "Waiting for Mesh…".into(),
-            fund: if view.wallet {
-                "Add funds…"
-            } else {
-                "Enable wallet…"
-            },
-            spending: "Spending: waiting for Mesh…".into(),
-            earning: "Earning: waiting for Mesh…".into(),
-            can_price: false,
-        };
+/// Submenu title: the balance only when a wallet exists and has been read.
+pub fn title(wallet: bool, balance: Option<u64>) -> String {
+    match (wallet, balance) {
+        (true, Some(msat)) => format!("Payments · {}", format_sats(msat)),
+        _ => "Payments".into(),
     }
-    let (title, balance) = match (&view.balance, view.wallet) {
-        (_, false) => ("Payments".into(), "Wallet not enabled".into()),
-        (None, true) => ("Payments".into(), "Balance: checking…".into()),
-        (Some(Ok(msat)), true) => (
-            format!("Payments · {}", format_sats(*msat)),
-            format!("Balance: {}", format_sats(*msat)),
-        ),
-        (Some(Err(e)), true) => ("Payments".into(), format!("Balance unavailable — {e}")),
-    };
-    let spending = match &view.policy {
-        None => "Spending: checking…".into(),
-        Some(Err(e)) => format!("Spending unavailable — {e}"),
-        Some(Ok(p)) if p.mode == Mode::FreeOnly => "Spending: free only".into(),
-        Some(Ok(p)) => format!(
-            "Spending: on · {} left today",
-            format_sats(p.remaining_daily_budget_msat)
-        ),
-    };
-    let earning = match (view.models.first(), &view.pricing) {
-        (None, _) => "Earning: no model being served".into(),
-        (Some(_), None) => "Earning: checking…".into(),
-        (Some(_), Some(Err(e))) => format!("Earning unavailable — {e}"),
-        (Some(m), Some(Ok(prices))) => match prices.get(m) {
-            None => "Earning: free".into(),
-            Some(p) => format!(
-                "Earning: {} in · {} out per M tokens",
-                format_sats(p.input_msat_per_million),
-                format_sats(p.output_msat_per_million)
-            ),
-        },
-    };
-    Labels {
-        title,
-        balance,
-        fund: if view.wallet {
-            "Add funds…"
-        } else {
-            "Enable wallet…"
-        },
-        spending,
-        earning,
-        can_price: !view.models.is_empty(),
-    }
-}
-
-/// Built once with the tray; polling only updates text and enabled state.
-struct Items {
-    menu: Submenu,
-    balance: MenuItem,
-    fund: MenuItem,
-    spending: MenuItem,
-    earning: MenuItem,
-    price: MenuItem,
 }
 
 pub struct Payments {
-    pub view: View,
-    /// Created with the tray on the main thread; AppKit menus are main-thread only.
-    items: Option<Items>,
-    shown: Option<Labels>,
+    profile: Option<PathBuf>,
+    menu: Option<Submenu>,
+    shown: String,
+    /// Last good balance; a failed read never clears it.
+    balance: Option<u64>,
+    ready_since: Option<Instant>,
+    next_refresh: Instant,
+    refreshing: bool,
     jobs: Sender<(u16, u32, Job)>,
     replies: Receiver<Reply>,
-    busy: bool,
-    next_refresh: Instant,
-    /// When our Mesh last became ready; None while it is not.
-    ready_since: Option<Instant>,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
 }
 
 impl Payments {
-    pub fn new(wallet: bool) -> Self {
+    pub fn new(profile: Option<PathBuf>) -> Self {
         let (jobs, work) = mpsc::channel::<(u16, u32, Job)>();
         let (reply, replies) = mpsc::channel();
         std::thread::Builder::new()
@@ -173,180 +89,123 @@ impl Payments {
             })
             .expect("spawn payments worker");
         Self {
-            view: View {
-                wallet,
-                ..View::default()
-            },
-            items: None,
-            shown: None,
+            profile,
+            menu: None,
+            shown: String::new(),
+            balance: None,
+            ready_since: None,
+            next_refresh: Instant::now(),
+            refreshing: false,
             jobs,
             replies,
-            busy: false,
-            next_refresh: Instant::now(),
-            ready_since: None,
             last_invoice: None,
         }
     }
 
+    /// Side-effect free file check; reading the balance of a missing wallet
+    /// must never be what creates one.
+    fn wallet(&self) -> bool {
+        self.profile.as_deref().is_some_and(payments::wallet_exists)
+    }
+
     /// Main thread only, called once from `App::build`.
     pub fn submenu(&mut self) -> Result<Submenu, String> {
-        let l = labels(&self.view);
-        let items = Items {
-            menu: Submenu::new(&l.title, true),
-            balance: MenuItem::with_id("pay:balance", &l.balance, false, None),
-            fund: MenuItem::with_id("pay:fund", l.fund, true, None),
-            spending: MenuItem::with_id("pay:spend-status", &l.spending, false, None),
-            earning: MenuItem::with_id("pay:earn-status", &l.earning, false, None),
-            price: MenuItem::with_id("pay:price", "Set price…", l.can_price, None),
-        };
-        items
-            .menu
-            .append_items(&[
-                &items.balance,
-                &items.fund,
-                &PredefinedMenuItem::separator(),
-                &items.spending,
-                &MenuItem::with_id("pay:spending", "Pay for inference…", true, None),
-                &PredefinedMenuItem::separator(),
-                &items.earning,
-                &items.price,
-            ])
-            .map_err(|e| e.to_string())?;
-        let menu = items.menu.clone();
-        self.items = Some(items);
-        self.shown = Some(l);
+        self.shown = title(self.wallet(), self.balance);
+        let menu = Submenu::new(&self.shown, true);
+        menu.append_items(&[
+            &MenuItem::with_id("pay:pay", "Pay…", true, None),
+            &MenuItem::with_id("pay:earn", "Get paid…", true, None),
+            &MenuItem::with_id("pay:fund", "Add funds…", true, None),
+        ])
+        .map_err(|e| e.to_string())?;
+        self.menu = Some(menu.clone());
         Ok(menu)
     }
 
-    fn render(&mut self) {
-        let (Some(items), l) = (&self.items, labels(&self.view)) else {
-            return;
-        };
-        if self.shown.as_ref() == Some(&l) {
-            return;
-        }
-        items.menu.set_text(&l.title);
-        items.balance.set_text(&l.balance);
-        items.fund.set_text(l.fund);
-        items.spending.set_text(&l.spending);
-        items.earning.set_text(&l.earning);
-        items.price.set_enabled(l.can_price);
-        self.shown = Some(l);
-    }
-}
-
-fn run(client: Client, job: Job) -> Reply {
-    match job {
-        Job::Refresh { wallet } => Reply::Refreshed {
-            balance: wallet.then(|| client.execute(&Command::Balance)),
-            policy: client.execute(&Command::Policy { value: None }),
-            pricing: client.execute(&Command::Pricing),
-        },
-        Job::Run(command) => Reply::Done(client.execute(&command)),
-        Job::Invoice(amount_msat) => Reply::Invoice(client.execute(&Command::Fund { amount_msat })),
-        Job::Receipt(hash) => Reply::Receipt(
-            client
-                .execute::<Vec<Transaction>>(&Command::Transactions { limit: 200 })
-                .map(|txs| payments::receipt(&txs, &hash)),
-        ),
-    }
-}
-
-impl Payments {
-    /// `target` is (console port, runtime pid) only while our own runtime is
-    /// ready; with no target nothing is sent and last answers stay visible.
-    pub fn tick(&mut self, target: Option<(u16, u32)>, models: &[String]) {
-        if self.view.models != models {
-            self.view.models = models.to_vec();
-        }
-        self.set_ready(target.is_some(), Instant::now());
+    /// `target` is (console port, runtime pid) only while our own runtime is ready.
+    pub fn tick(&mut self, target: Option<(u16, u32)>) {
+        let now = Instant::now();
+        self.set_ready(target.is_some(), now);
         while let Ok(reply) = self.replies.try_recv() {
-            self.busy = false;
             self.handle(reply, target);
         }
         if let Some(t) = target {
-            if !self.busy && Instant::now() >= self.next_refresh {
-                self.send(
-                    t,
-                    Job::Refresh {
-                        wallet: self.view.wallet,
-                    },
-                );
-                self.next_refresh = Instant::now() + REFRESH;
+            if !self.refreshing && now >= self.next_refresh && self.wallet() {
+                self.refreshing = self.jobs.send((t.0, t.1, Job::Balance)).is_ok();
+                self.next_refresh = now + REFRESH;
             }
         }
-        self.render();
+        let text = title(self.wallet(), self.balance);
+        if text != self.shown {
+            if let Some(menu) = &self.menu {
+                menu.set_text(&text);
+            }
+            self.shown = text;
+        }
     }
 
-    fn send(&mut self, (port, pid): (u16, u32), job: Job) {
-        self.busy = self.jobs.send((port, pid, job)).is_ok();
-    }
-
-    /// Edge-triggered: becoming ready reads immediately; losing readiness
-    /// forgets every answer so nothing stale stays on screen.
+    /// Becoming ready reads the balance at once instead of on the timer.
     fn set_ready(&mut self, ready: bool, now: Instant) {
-        if ready == self.view.ready {
+        if ready == self.ready_since.is_some() {
             return;
         }
-        self.view.ready = ready;
-        self.view.balance = None;
-        self.view.policy = None;
-        self.view.pricing = None;
         self.ready_since = ready.then_some(now);
         self.next_refresh = now;
     }
 
-    fn in_startup_grace(&self, now: Instant) -> bool {
-        self.ready_since
-            .is_some_and(|since| now.duration_since(since) < STARTUP_GRACE)
-    }
-
-    fn refresh_soon(&mut self) {
-        self.next_refresh = Instant::now();
+    fn send(&mut self, (port, pid): (u16, u32), job: Job) {
+        let _ = self.jobs.send((port, pid, job));
     }
 
     fn handle(&mut self, reply: Reply, target: Option<(u16, u32)>) {
         match reply {
-            Reply::Refreshed {
-                balance,
-                policy,
-                pricing,
-            } => {
-                if !self.view.ready {
-                    return; // answer from before readiness was lost
+            Reply::Balance(result) => {
+                self.refreshing = false;
+                match result {
+                    Ok(b) => self.balance = Some(b.spendable_msat),
+                    Err(_) => {
+                        let now = Instant::now();
+                        if self
+                            .ready_since
+                            .is_some_and(|since| now.duration_since(since) < STARTUP_GRACE)
+                        {
+                            self.next_refresh = now + STARTUP_RETRY;
+                        }
+                    }
                 }
-                let failed = balance.as_ref().is_some_and(|b| b.is_err())
-                    || policy.is_err()
-                    || pricing.is_err();
-                let now = Instant::now();
-                if failed && self.in_startup_grace(now) {
-                    self.next_refresh = now + STARTUP_RETRY;
-                    return; // keep "checking…"; Mesh's wallet side is still coming up
-                }
-                if let Some(b) = balance {
-                    self.view.balance = Some(b.map(|b| b.spendable_msat).map_err(|e| describe(&e)));
-                }
-                self.view.policy = Some(policy.map_err(|e| describe(&e)));
-                self.view.pricing = Some(pricing.map_err(|e| describe(&e)));
             }
-            Reply::Done(Ok(_)) => self.refresh_soon(),
-            Reply::Done(Err(e)) => {
-                self.refresh_soon();
-                ui::notice(
-                    "Mesh did not save that",
-                    &format!(
-                        "{}. Nothing was changed; the menu shows what Mesh reports.",
-                        describe(&e)
-                    ),
-                );
+            Reply::Policy(Ok(status)) => {
+                if let Some(t) = target {
+                    self.edit_pay(t, &status);
+                }
             }
+            Reply::Policy(Err(e)) => {
+                ui::notice("Could not read your payment setting", &describe(&e))
+            }
+            Reply::Pricing(model, Ok(prices)) => {
+                if let Some(t) = target {
+                    let current = prices.get(&model).cloned();
+                    self.edit_earn(t, model, current);
+                }
+            }
+            Reply::Pricing(_, Err(e)) => ui::notice("Could not read your price", &describe(&e)),
+            Reply::Done(Ok(_)) => self.next_refresh = Instant::now(),
+            Reply::Done(Err(e)) => ui::notice(
+                "Mesh did not save that",
+                &format!("{}. Nothing was changed.", describe(&e)),
+            ),
             Reply::Invoice(Ok(inv)) => {
+                self.next_refresh = Instant::now();
                 let amount = inv
                     .amount_msat
                     .map(format_sats)
                     .unwrap_or_else(|| "any amount (payer chooses)".into());
                 let minutes = inv.expires_at_ms.saturating_sub(now_ms()) / 60_000;
-                let detail = format!("Amount: {amount}\nExpires in about {minutes} min.\n\nScan with a Lightning wallet, or copy the invoice. Your balance updates once the payment arrives.");
+                let balance = self
+                    .balance
+                    .map(|b| format!("Balance: {}\n\n", format_sats(b)))
+                    .unwrap_or_default();
+                let detail = format!("{balance}Amount: {amount}\nExpires in about {minutes} min.\n\nScan with a Lightning wallet, or copy the invoice. Your balance updates once the payment arrives.");
                 match crate::qr::png(&crate::qr::lightning_uri(&inv.bolt11), 6) {
                     Ok(png) => {
                         self.last_invoice =
@@ -365,7 +224,7 @@ impl Payments {
                     Ok(Receipt::Unknown) => "No payment for this invoice yet.".into(),
                     Err(e) => format!("Could not check: {}", describe(&e)),
                 };
-                self.refresh_soon();
+                self.next_refresh = Instant::now();
                 ui::notice("Payment status", &text);
                 if !text.starts_with("Received") {
                     self.show_invoice(target);
@@ -399,37 +258,24 @@ impl Payments {
         }
     }
 
-    /// Returns true when `id` belonged to Payments.
-    pub fn click(&mut self, id: &str, target: Option<(u16, u32)>) -> bool {
+    /// Returns true when `id` belonged to Payments. Every item reads Mesh now.
+    pub fn click(&mut self, id: &str, target: Option<(u16, u32)>, models: &[String]) -> bool {
         if !id.starts_with("pay:") {
             return false;
         }
         let Some(t) = target else {
-            ui::notice(
-                "Mesh is still starting",
-                "Payments become available once Mesh is running.",
-            );
+            ui::notice("Mesh is still starting", "Try again in a moment.");
             return true;
         };
-        if self.busy {
-            ui::notice(
-                "One moment",
-                "Mesh is still answering the last payments request.",
-            );
-            return true;
-        }
         match id {
-            "pay:fund" if !self.view.wallet => {
-                if ui::confirm(
-                    "Enable wallet?",
-                    "Mesh sets up a Bitcoin Lightning wallet in your Mesh profile. It only holds what you add. Nothing is spent unless you turn on Pay for inference.",
-                    "Enable wallet",
-                ) {
-                    self.view.wallet = true;
-                    self.view.balance = None;
-                    self.send(t, Job::Refresh { wallet: true });
-                }
-            }
+            "pay:pay" => self.send(t, Job::ReadPolicy),
+            "pay:earn" => match models.first() {
+                Some(model) => self.send(t, Job::ReadPricing(model.clone())),
+                None => ui::notice(
+                    "Not serving a model yet",
+                    "Get paid sets a price for the model this node serves. Try again once a model is loaded.",
+                ),
+            },
             "pay:fund" => {
                 let Some(text) = ui::fund_amount() else {
                     return true;
@@ -444,38 +290,29 @@ impl Payments {
                 };
                 self.send(t, Job::Invoice(amount));
             }
-            "pay:spending" => self.edit_spending(t),
-            "pay:price" => {
-                if let Some(model) = self.view.models.first().cloned() {
-                    self.edit_price(t, model);
-                }
-            }
             _ => {}
         }
         true
     }
 
-    fn edit_spending(&mut self, t: (u16, u32)) {
-        let (enabled, budget, usage) = match &self.view.policy {
-            Some(Ok(p)) => (
-                p.mode == Mode::Automatic,
-                p.daily_budget_msat
-                    .map(|b| (b / 1000).to_string())
-                    .unwrap_or_default(),
-                format!(
-                    "Today: {} spent · {} held for running requests · {} left.",
-                    format_sats(p.spent_today_msat),
-                    format_sats(p.reserved_msat),
-                    format_sats(p.remaining_daily_budget_msat)
-                ),
-            ),
-            _ => (
-                false,
-                String::new(),
-                "Current usage not available yet.".into(),
-            ),
-        };
-        let Some((on, text)) = ui::spending(enabled, &budget, &usage) else {
+    fn edit_pay(&mut self, t: (u16, u32), p: &PolicyStatus) {
+        let budget = p
+            .daily_budget_msat
+            .map(|b| (b / 1000).to_string())
+            .unwrap_or_default();
+        let usage = format!(
+            "Today: {} spent · {} left.",
+            format_sats(p.spent_today_msat),
+            format_sats(p.remaining_daily_budget_msat)
+        );
+        let Some((on, text)) = ui::toggle_amount(
+            "Pay",
+            &format!("When on, Mesh may pay other nodes for models it can't use for free, up to this limit per UTC day. Turning it off stops new paid requests.\n\n{usage}"),
+            "Pay for models",
+            p.mode == Mode::Automatic,
+            "Daily limit (sats)",
+            &budget,
+        ) else {
             return;
         };
         let policy = if on {
@@ -490,7 +327,7 @@ impl Payments {
                 }
             }
         } else {
-            // Keep the allowance so turning it back on is one click.
+            // Keep the limit so turning it back on is one click.
             Policy {
                 mode: Mode::FreeOnly,
                 daily_budget_msat: sats_to_msat(&text).ok(),
@@ -504,40 +341,36 @@ impl Payments {
         );
     }
 
-    fn edit_price(&mut self, t: (u16, u32), model: String) {
-        let current = self
-            .view
-            .pricing
+    fn edit_earn(&mut self, t: (u16, u32), model: String, current: Option<Pricing>) {
+        let price = current
             .as_ref()
-            .and_then(|p| p.as_ref().ok())
-            .and_then(|p| p.get(&model))
-            .map(|p| {
-                [
-                    p.input_msat_per_million,
-                    p.output_msat_per_million,
-                    p.minimum_invoice_msat,
-                ]
-                .map(|m| (m / 1000).to_string())
-            })
-            .unwrap_or_else(|| [String::new(), String::new(), "10".into()]);
-        let Some(fields) = ui::price(&model, current) else {
+            .map(|p| (p.output_msat_per_million / 1000).to_string())
+            .unwrap_or_default();
+        let Some((on, text)) = ui::toggle_amount(
+            "Get paid",
+            &format!("When on, other nodes pay you to use {model}. Off serves it for free."),
+            "Charge for this model",
+            current.is_some(),
+            "Price (sats per M tokens)",
+            &price,
+        ) else {
             return;
         };
-        if fields[..2].iter().all(|f| f.trim().is_empty()) {
-            // No input/output price = serve for free: remove the price, keep serving.
+        if !on {
             self.send(t, Job::Run(Command::SetPricing { model, value: None }));
             return;
         }
-        let parsed: Result<Vec<u64>, _> = fields.iter().map(|f| sats_to_msat(f)).collect();
-        match parsed {
-            Ok(v) => self.send(
+        match sats_to_msat(&text) {
+            Ok(msat) => self.send(
                 t,
                 Job::Run(Command::SetPricing {
                     model,
                     value: Some(Pricing {
-                        input_msat_per_million: v[0],
-                        output_msat_per_million: v[1],
-                        minimum_invoice_msat: v[2],
+                        input_msat_per_million: msat,
+                        output_msat_per_million: msat,
+                        minimum_invoice_msat: current
+                            .map(|p| p.minimum_invoice_msat)
+                            .unwrap_or(DEFAULT_MINIMUM_MSAT),
                     }),
                 }),
             ),
@@ -545,6 +378,21 @@ impl Payments {
                 invalid(&e);
             }
         }
+    }
+}
+
+fn run(client: Client, job: Job) -> Reply {
+    match job {
+        Job::Balance => Reply::Balance(client.execute(&Command::Balance)),
+        Job::ReadPolicy => Reply::Policy(client.execute(&Command::Policy { value: None })),
+        Job::ReadPricing(model) => Reply::Pricing(model, client.execute(&Command::Pricing)),
+        Job::Run(command) => Reply::Done(client.execute(&command)),
+        Job::Invoice(amount_msat) => Reply::Invoice(client.execute(&Command::Fund { amount_msat })),
+        Job::Receipt(hash) => Reply::Receipt(
+            client
+                .execute::<Vec<Transaction>>(&Command::Transactions { limit: 200 })
+                .map(|txs| payments::receipt(&txs, &hash)),
+        ),
     }
 }
 
@@ -564,131 +412,35 @@ fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
-    fn status(mode: Mode, remaining: u64) -> PolicyStatus {
-        PolicyStatus {
-            mode,
-            daily_budget_msat: Some(10_000),
-            spent_today_msat: 2_000,
-            reserved_msat: 3_000,
-            remaining_daily_budget_msat: remaining,
-        }
-    }
-
-    fn view() -> View {
-        View {
-            ready: true,
-            wallet: true,
-            ..View::default()
-        }
-    }
-
-    fn failed_refresh() -> Reply {
-        Reply::Refreshed {
-            balance: Some(Err(payments::Error::Transport)),
-            policy: Err(payments::Error::Transport),
-            pricing: Err(payments::Error::Transport),
-        }
+    #[test]
+    fn title_shows_balance_only_with_a_wallet() {
+        assert_eq!(title(false, Some(1_234_000)), "Payments");
+        assert_eq!(title(true, None), "Payments");
+        assert_eq!(title(true, Some(1_234_000)), "Payments · 1,234 sats");
     }
 
     #[test]
-    fn not_ready_shows_waiting_never_a_stale_answer() {
-        let mut p = Payments::new(true);
-        let t0 = Instant::now();
-        p.set_ready(true, t0);
-        p.view.policy = Some(Err("Mesh not reachable".into()));
-        p.set_ready(false, t0);
-        let l = labels(&p.view);
-        assert_eq!(l.spending, "Spending: waiting for Mesh…");
-        assert!(!l.can_price);
-    }
-
-    #[test]
-    fn becoming_ready_reads_immediately_and_early_failures_are_retried_not_shown() {
-        let mut p = Payments::new(true);
-        p.next_refresh = Instant::now() + Duration::from_secs(3600);
-        p.set_ready(true, Instant::now());
-        assert!(p.next_refresh <= Instant::now(), "ready edge must read now");
-        p.handle(failed_refresh(), None);
-        assert_eq!(labels(&p.view).spending, "Spending: checking…");
-        assert!(p.next_refresh <= Instant::now() + STARTUP_RETRY);
-        // After the grace window a failure is real and shown.
-        p.ready_since = Some(Instant::now() - STARTUP_GRACE);
-        p.handle(failed_refresh(), None);
-        assert_eq!(
-            labels(&p.view).spending,
-            "Spending unavailable — Mesh not reachable"
-        );
-    }
-
-    #[test]
-    fn answer_arriving_after_readiness_is_lost_is_discarded() {
-        let mut p = Payments::new(true);
+    fn failed_read_keeps_last_good_balance() {
+        let mut p = Payments::new(None);
         p.handle(
-            Reply::Refreshed {
-                balance: None,
-                policy: Ok(status(Mode::FreeOnly, 0)),
-                pricing: Ok(BTreeMap::new()),
-            },
+            Reply::Balance(Ok(Balance {
+                spendable_msat: 5_000,
+                available_for_inference_msat: 5_000,
+            })),
             None,
         );
-        assert_eq!(labels(&p.view).spending, "Spending: waiting for Mesh…");
+        p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
+        assert_eq!(p.balance, Some(5_000));
     }
 
     #[test]
-    fn no_wallet_keeps_the_same_items_and_offers_enable() {
-        let l = labels(&View {
-            ready: true,
-            ..View::default()
-        });
-        assert_eq!(l.title, "Payments");
-        assert_eq!(l.balance, "Wallet not enabled");
-        assert_eq!(l.fund, "Enable wallet…");
-        assert!(!l.can_price);
-    }
-
-    #[test]
-    fn balance_is_in_the_title_and_errors_are_not_zero() {
-        let mut v = view();
-        assert_eq!(labels(&v).balance, "Balance: checking…");
-        v.balance = Some(Ok(1_234_000));
-        let l = labels(&v);
-        assert_eq!(l.title, "Payments · 1,234 sats");
-        assert_eq!(l.balance, "Balance: 1,234 sats");
-        assert_eq!(l.fund, "Add funds…");
-        v.balance = Some(Err("Mesh not reachable".into()));
-        let l = labels(&v);
-        assert_eq!(l.title, "Payments");
-        assert!(l.balance.contains("unavailable"));
-    }
-
-    #[test]
-    fn spending_label_reflects_mesh_policy() {
-        let mut v = view();
-        v.policy = Some(Ok(status(Mode::FreeOnly, 0)));
-        assert_eq!(labels(&v).spending, "Spending: free only");
-        v.policy = Some(Ok(status(Mode::Automatic, 5_000)));
-        assert_eq!(labels(&v).spending, "Spending: on · 5 sats left today");
-    }
-
-    #[test]
-    fn earning_describes_the_served_model_price() {
-        let mut v = view();
-        assert_eq!(labels(&v).earning, "Earning: no model being served");
-        v.models = vec!["m".into()];
-        assert!(labels(&v).can_price);
-        v.pricing = Some(Ok(BTreeMap::new()));
-        assert_eq!(labels(&v).earning, "Earning: free");
-        v.pricing = Some(Ok(BTreeMap::from([(
-            "m".to_string(),
-            Pricing {
-                input_msat_per_million: 10_000,
-                output_msat_per_million: 20_000,
-                minimum_invoice_msat: 1_000,
-            },
-        )])));
-        assert_eq!(
-            labels(&v).earning,
-            "Earning: 10 sats in · 20 sats out per M tokens"
-        );
+    fn becoming_ready_reads_now_and_startup_failures_retry_fast() {
+        let mut p = Payments::new(None);
+        p.next_refresh = Instant::now() + Duration::from_secs(3600);
+        p.set_ready(true, Instant::now());
+        assert!(p.next_refresh <= Instant::now());
+        p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
+        assert!(p.next_refresh <= Instant::now() + STARTUP_RETRY);
+        assert_eq!(p.balance, None);
     }
 }

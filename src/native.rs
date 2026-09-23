@@ -209,32 +209,29 @@ pub fn fund_amount() -> Option<String> {
     (a.runModal() == 1000).then(|| f.stringValue().to_string())
 }
 
-/// Returns (pay automatically, daily allowance text).
-pub fn spending(enabled: bool, allowance: &str, usage: &str) -> Option<(bool, String)> {
+/// One on/off checkbox and one amount. Returns (checked, amount text).
+pub fn toggle_amount(
+    title: &str,
+    detail: &str,
+    check_label: &str,
+    checked: bool,
+    field_label: &str,
+    value: &str,
+) -> Option<(bool, String)> {
     let mtm = MainThreadMarker::new()?;
-    let a = alert(
-        mtm,
-        "Pay for inference",
-        &format!("When on, Mesh may pay other nodes for requests it can't serve for free, up to this allowance per UTC day. Turning it off stops new paid requests; it does not cancel ones already running.\n\n{usage}"),
-        &["Save", "Cancel"],
-    );
+    let a = alert(mtm, title, detail, &["Save", "Cancel"]);
     let view = NSView::initWithFrame(
         mtm.alloc(),
-        NSRect::new(NSPoint::new(0., 0.), NSSize::new(320., 62.)),
+        NSRect::new(NSPoint::new(0., 0.), NSSize::new(340., 62.)),
     );
     let check = unsafe {
-        NSButton::checkboxWithTitle_target_action(
-            &NSString::from_str("Pay automatically when needed"),
-            None,
-            None,
-            mtm,
-        )
+        NSButton::checkboxWithTitle_target_action(&NSString::from_str(check_label), None, None, mtm)
     };
-    check.setFrame(NSRect::new(NSPoint::new(0., 36.), NSSize::new(320., 24.)));
-    check.setState(if enabled { 1 } else { 0 });
+    check.setFrame(NSRect::new(NSPoint::new(0., 36.), NSSize::new(340., 24.)));
+    check.setState(if checked { 1 } else { 0 });
     view.addSubview(&check);
-    view.addSubview(&label(mtm, 0., 2., 170., "Daily allowance (sats)"));
-    let f = field(mtm, 180., 2., 140., allowance);
+    view.addSubview(&label(mtm, 0., 2., 190., field_label));
+    let f = field(mtm, 200., 2., 140., value);
     view.addSubview(&f);
     a.setAccessoryView(Some(&view));
     foreground_dialog(mtm);
@@ -242,44 +239,6 @@ pub fn spending(enabled: bool, allowance: &str, usage: &str) -> Option<(bool, St
         return None;
     }
     Some((check.state() == 1, f.stringValue().to_string()))
-}
-
-/// Returns [input, output, minimum] as typed, in sats.
-pub fn price(model: &str, current: [String; 3]) -> Option<[String; 3]> {
-    let mtm = MainThreadMarker::new()?;
-    let a = alert(
-        mtm,
-        &format!("Price for {model}"),
-        "Sats per million tokens. Other nodes pay this when they use your model; Mesh bills them in invoices of at least the minimum. Leave input and output blank to serve it for free.",
-        &["Save price", "Cancel"],
-    );
-    let view = NSView::initWithFrame(
-        mtm.alloc(),
-        NSRect::new(NSPoint::new(0., 0.), NSSize::new(340., 96.)),
-    );
-    let mut fields = Vec::new();
-    for (i, (title, value)) in [
-        "Input (sats / M tokens)",
-        "Output (sats / M tokens)",
-        "Minimum invoice (sats)",
-    ]
-    .iter()
-    .zip(current.iter())
-    .enumerate()
-    {
-        let y = 68. - i as f64 * 32.;
-        view.addSubview(&label(mtm, 0., y, 190., title));
-        let f = field(mtm, 200., y, 140., value);
-        view.addSubview(&f);
-        fields.push(f);
-    }
-    a.setAccessoryView(Some(&view));
-    a.window().setInitialFirstResponder(Some(&fields[0]));
-    foreground_dialog(mtm);
-    if a.runModal() != 1000 {
-        return None;
-    }
-    Some([0, 1, 2].map(|i| fields[i].stringValue().to_string()))
 }
 
 pub fn invoice(detail: &str, bolt11: &str, png: &[u8]) -> InvoiceAction {

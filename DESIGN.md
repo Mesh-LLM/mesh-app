@@ -86,26 +86,27 @@ There is no runtime choice between two engines and no version setting for users.
 A thin controller over Mesh's wallet (mesh-llm #1926). Mesh owns the wallet,
 ledger, prices, budget and settlement; the tray sends local operator API
 requests (`POST /api/wallet`, pinned to the retained runtime's PID) from a
-worker thread and shows the last answer. An error reads "unavailable", never
-zero. The SDK has no typed wallet operations yet; when it does, the calls move
-there and the menu does not change.
+worker thread. The SDK has no typed wallet operations yet; when it does, the
+calls move there and the menu does not change.
 
-The submenu is built once, like the rest of the menu. Polling (every 20s, only
-while this app's runtime is ready) updates text and enabled state only:
+Three fixed items. The only thing that changes is the submenu title, which
+shows the last good balance once a wallet exists (read when the runtime becomes
+ready, then every 20s; a failed read keeps the last value, never shows an
+error or zero). Every item reads Mesh fresh when clicked, so no menu text can
+go stale:
 
 ```text
-Payments · <balance>
-  Balance: <balance>        (Wallet not enabled)
-  Add funds…                (Enable wallet… until a wallet exists)
-  Spending: free only       (on · N sats left today)
-  Pay for inference…        one form: on/off + daily allowance (UTC day)
-  Earning: free             (price of the served model)
-  Set price…                in/out sats per M tokens + minimum; blank = free
+Payments · <balance>        ("Payments" until a wallet exists)
+  Pay…                      [x] Pay for models + daily limit (UTC day)
+  Get paid…                 [x] Charge for the served model + one price per M tokens
+  Add funds…                balance + Lightning invoice
 ```
 
+The wallet is created lazily by Mesh (first Add funds, or when paying needs
+it); there is no enable step, and the tray never creates one by reading.
 Add funds takes an optional amount (blank lets the payer choose) and shows the
 BOLT11 invoice as a `LIGHTNING:` QR with Copy and Check payment. Check matches
 this invoice's payment hash in the wallet's transactions; balance growth is not
 treated as receipt. Funding never enables spending. The tray serves one model,
-so Earning prices that model. No send/withdraw UI. Forms are AppKit only;
+so Get paid prices that model (same price for input and output). No send/withdraw UI. Forms are AppKit only;
 other platforms say so.
