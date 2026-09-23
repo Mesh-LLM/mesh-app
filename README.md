@@ -151,10 +151,11 @@ covered by unit tests.
 
 Candidate-specific menu-bar verification is separate from engine restart coverage.
 For durable private restart with an engine containing #1896, see [DESIGN.md](DESIGN.md).
-Windows is launch-gated;
+Windows is no longer launch-gated: CI starts and stops the real embedded engine
+on Windows, macOS and Linux (isolated, no network, no model) and publishes
+`mesh-tray.exe` as an artifact. Hand-testing the Windows tray UI is still pending.
 Linux support is deferred: its existing code is experimental and not natively
-verified. Windows product support is also deferred; CI compilation/tests do not
-remove the launch gate.
+verified.
 
 ### Testing an unreleased engine fix
 
