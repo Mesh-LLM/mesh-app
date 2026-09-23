@@ -8,3 +8,5 @@ pub mod reset;
 
 pub mod runtime_config;
 pub mod startup_log;
+
+pub mod payments;

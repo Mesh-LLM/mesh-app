@@ -6,6 +6,8 @@ pub struct Snapshot {
     pub running: bool,
     pub pid: Option<u32>,
     pub private_owner: Option<String>,
+    /// Models this node itself serves; Earning prices are keyed on these.
+    pub serving_models: Vec<String>,
 }
 
 fn agent() -> ureq::Agent {
@@ -53,6 +55,15 @@ pub fn snapshot(port: u16) -> Snapshot {
     Snapshot {
         pid,
         running: true,
+        serving_models: value["serving_models"]
+            .as_array()
+            .map(|models| {
+                models
+                    .iter()
+                    .filter_map(|m| m.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
         private_owner: value["owner"]["owner_id"]
             .as_str()
             .filter(|_| {

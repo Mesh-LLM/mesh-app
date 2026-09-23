@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 # Immutable upstream revision; no dependency on another local checkout.
-mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d2fc780f670e603c0ea78e0b39150ef8a2c9e8b5", features = ["host-io"] }
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d2fc780f670e603c0ea78e0b39150ef8a2c9e8b5", default-features = false, features = ["serving", "console"] }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d2fc780f670e603c0ea78e0b39150ef8a2c9e8b5", default-features = false }
+mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "606e8ada46123587e3bf907338781a9e7d49f80f", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "606e8ada46123587e3bf907338781a9e7d49f80f", default-features = false, features = ["serving", "console", "payments"] }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "606e8ada46123587e3bf907338781a9e7d49f80f", default-features = false, features = ["wallet-lexe"] }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
@@ -19,6 +19,8 @@ ureq = { version = "2", default-features = false }
 tempfile = "3"
 fs2 = "0.4"
 rfd = "0.16"
+qrcode = { version = "0.14", default-features = false }
+png = "0.17"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 winit = "0.30"

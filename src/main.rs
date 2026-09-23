@@ -7,6 +7,9 @@ mod native;
 #[cfg(not(target_os = "macos"))]
 #[path = "native_portable.rs"]
 mod native;
+mod pay_menu;
+mod pay_native;
+mod qr;
 mod status;
 
 use lifecycle::Engine;
@@ -43,6 +46,7 @@ struct App {
     log_mark: u64,
     open_when_ready: Option<&'static str>,
     exit: bool,
+    pay: pay_menu::Payments,
 }
 
 fn icon() -> Icon {
@@ -97,6 +101,12 @@ impl App {
             log_mark: 0,
             open_when_ready: None,
             exit: false,
+            // Side-effect free file check; the wallet itself is Mesh's.
+            pay: pay_menu::Payments::new(
+                settings::mesh_profile()
+                    .map(|p| mesh_tray::payments::wallet_exists(&p))
+                    .unwrap_or(false),
+            ),
         }
     }
 
@@ -118,12 +128,14 @@ impl App {
             ])
             .map_err(|e| e.to_string())?;
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
+        let payments = self.pay.submenu();
         menu.append_items(&[
             &chat,
             &PredefinedMenuItem::separator(),
             &public,
             &private,
             &people,
+            &payments,
             &PredefinedMenuItem::separator(),
             &retry,
             &quit,
@@ -300,8 +312,19 @@ impl App {
         }
     }
 
+    /// Our own runtime's management port and pid, only once it is ready.
+    fn pay_target(&self) -> Option<(u16, u32)> {
+        let child = self.child.as_ref()?;
+        (self.snapshot.running && self.stopping.is_none() && self.pending_settings.is_none())
+            .then(|| (self.settings.console_port, child.id()))
+    }
+
     fn tick(&mut self) {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            let target = self.pay_target();
+            if self.pay.click(event.id.as_ref(), target) {
+                continue;
+            }
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
                 "public" => self.change_mode(settings::Connection::Automatic),
@@ -376,6 +399,9 @@ impl App {
                     .into(),
             );
         }
+        let target = self.pay_target();
+        let models = self.snapshot.serving_models.clone();
+        self.pay.tick(target, &models);
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(()).is_ok();
             self.next_poll = Instant::now() + POLL;
@@ -679,13 +705,20 @@ fn main() {
         // The engine invokes its built-in blobstore through current_exe().
         // Dispatch before profile locking or UI setup; this is not another node.
         let args: Vec<String> = std::env::args().skip(1).collect();
-        if args == ["--log-format", "json", "--plugin", "blobstore"] {
+        // Same for the built-in Lexe wallet (PR #1926): Mesh launches it as
+        // `current_exe --plugin wallet-lexe` and owns it; the tray only dispatches.
+        if let ["--log-format", "json", "--plugin", name @ ("blobstore" | "wallet-lexe")] = args
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
             return tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| e.to_string())?
                 .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
-                    "blobstore".into(),
+                    (*name).into(),
                 ))
                 .map_err(|e| format!("{e:#}"));
         }
