@@ -28,6 +28,10 @@ restart requires an engine containing mesh-llm #1896; see DESIGN.md.
   no longer match the flags.
 - Existing Mesh QUIC and ownership enforcement stay intact. The tray adds no
   trust decisions of its own and writes nothing to the user's trust store.
+- Payments (engine with mesh-llm #1926): balance on the menu, Add funds as a
+  Lightning invoice with an optional amount, a daily allowance for paying other
+  nodes (off by default), and a price for the model this node serves. Mesh keeps
+  all money state; the tray only asks and displays. See DESIGN.md.
 - Keep native jellyfish menu, optional Chat and existing console Settings. No
   automatic chat opening. Stop only this app's retained child.
 - One machine identity: the child runs as the user against `~/.mesh-llm`, the

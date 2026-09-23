@@ -10,9 +10,9 @@ Public/Private ticks are initialized from saved settings and synchronized only
 on mode clicks and committed settings changes, never periodically while polling. Runtime guards
 handle unavailable/busy actions; process supervision continues independently.
 
-OS-native jellyfish status menu: Public/Private, Invites, Chat, Retry startup, Quit.
-Invites contains exactly two items — copy an invite, or
-join with one. No roster, no per-person controls, no extra settings website,
+OS-native jellyfish status menu: Public/Private, Invites, Payments, Chat, Retry
+startup, Quit. Invites contains exactly two items — copy an invite, or
+join with one. Payments is a fixed submenu (see below). No roster, no per-person controls, no extra settings website,
 wizard, Buzz UI/runtime, custom typography or webview.
 
 ## One code, both directions
@@ -80,3 +80,32 @@ release containing the required fixes, with its matching native runtime. The
 preview packager's historical official-release pins are still 0.76.2, which
 predates #1896; its explicit source option supports newer source candidates.
 There is no runtime choice between two engines and no version setting for users.
+
+## Payments
+
+A thin controller over Mesh's wallet (mesh-llm #1926). Mesh owns the wallet,
+ledger, prices, budget and settlement; the tray sends local operator API
+requests (`POST /api/wallet`, pinned to the retained runtime's PID) from a
+worker thread and shows the last answer. An error reads "unavailable", never
+zero. The SDK has no typed wallet operations yet; when it does, the calls move
+there and the menu does not change.
+
+The submenu is built once, like the rest of the menu. Polling (every 20s, only
+while this app's runtime is ready) updates text and enabled state only:
+
+```text
+Payments · <balance>
+  Balance: <balance>        (Wallet not enabled)
+  Add funds…                (Enable wallet… until a wallet exists)
+  Spending: free only       (on · N sats left today)
+  Pay for inference…        one form: on/off + daily allowance (UTC day)
+  Earning: free             (price of the served model)
+  Set price…                in/out sats per M tokens + minimum; blank = free
+```
+
+Add funds takes an optional amount (blank lets the payer choose) and shows the
+BOLT11 invoice as a `LIGHTNING:` QR with Copy and Check payment. Check matches
+this invoice's payment hash in the wallet's transactions; balance growth is not
+treated as receipt. Funding never enables spending. The tray serves one model,
+so Earning prices that model. No send/withdraw UI. Forms are AppKit only;
+other platforms say so.

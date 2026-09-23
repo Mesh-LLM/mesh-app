@@ -3,12 +3,12 @@
 //! Mesh owns the wallet, ledger, prices, budgets and settlement. This file
 //! only turns clicks into `/api/wallet` commands on a worker thread and shows
 //! the last answer Mesh gave. Nothing here computes or stores money state.
-use crate::pay_native::{self as ui, InvoiceAction};
+use crate::native::{self as ui, InvoiceAction};
 use mesh_tray::payments::{
     self, format_sats, sats_to_msat, Balance, Client, Command, FundingInvoice, Mode, Policy,
     PolicyStatus, Pricing, Receipt, Transaction,
 };
-use muda::{IsMenuItem, MenuItem, PredefinedMenuItem, Submenu};
+use muda::{MenuItem, PredefinedMenuItem, Submenu};
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -55,32 +55,29 @@ fn describe(error: &payments::Error) -> String {
     }
 }
 
-/// Menu rows as (id, label, enabled); `None` id = separator, `Some("sub:<m>")`
-/// opens a model submenu. Pure so the layout is testable without AppKit.
-pub fn title(view: &View) -> String {
-    match &view.balance {
-        Some(Ok(msat)) if view.wallet => format!("Payments · {}", format_sats(*msat)),
-        _ => "Payments".into(),
-    }
+/// The Payments menu text, derived from the last answers only. Pure so the
+/// labels are testable without AppKit; the items themselves never change.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Labels {
+    pub title: String,
+    pub balance: String,
+    pub fund: &'static str,
+    pub spending: String,
+    pub earning: String,
+    pub can_price: bool,
 }
 
-pub fn wallet_rows(view: &View) -> Vec<(&'static str, String, bool)> {
-    if !view.wallet {
-        return vec![("pay:enable", "Enable wallet…".into(), true)];
-    }
-    let balance = match &view.balance {
-        None => "Balance: checking…".into(),
-        Some(Ok(msat)) => format!("Balance: {}", format_sats(*msat)),
-        Some(Err(e)) => format!("Balance unavailable — {e}"),
+pub fn labels(view: &View) -> Labels {
+    let (title, balance) = match (&view.balance, view.wallet) {
+        (_, false) => ("Payments".into(), "Wallet not enabled".into()),
+        (None, true) => ("Payments".into(), "Balance: checking…".into()),
+        (Some(Ok(msat)), true) => (
+            format!("Payments · {}", format_sats(*msat)),
+            format!("Balance: {}", format_sats(*msat)),
+        ),
+        (Some(Err(e)), true) => ("Payments".into(), format!("Balance unavailable — {e}")),
     };
-    vec![
-        ("pay:balance", balance, false),
-        ("pay:fund", "Add funds…".into(), true),
-    ]
-}
-
-pub fn spending_label(view: &View) -> String {
-    match &view.policy {
+    let spending = match &view.policy {
         None => "Spending: checking…".into(),
         Some(Err(e)) => format!("Spending unavailable — {e}"),
         Some(Ok(p)) if p.mode == Mode::FreeOnly => "Spending: free only".into(),
@@ -88,29 +85,53 @@ pub fn spending_label(view: &View) -> String {
             "Spending: on · {} left today",
             format_sats(p.remaining_daily_budget_msat)
         ),
+    };
+    let earning = match (view.models.first(), &view.pricing) {
+        (None, _) => "Earning: no model being served".into(),
+        (Some(_), None) => "Earning: checking…".into(),
+        (Some(_), Some(Err(e))) => format!("Earning unavailable — {e}"),
+        (Some(m), Some(Ok(prices))) => match prices.get(m) {
+            None => "Earning: free".into(),
+            Some(p) => format!(
+                "Earning: {} in · {} out per M tokens",
+                format_sats(p.input_msat_per_million),
+                format_sats(p.output_msat_per_million)
+            ),
+        },
+    };
+    Labels {
+        title,
+        balance,
+        fund: if view.wallet {
+            "Add funds…"
+        } else {
+            "Enable wallet…"
+        },
+        spending,
+        earning,
+        can_price: !view.models.is_empty(),
     }
 }
 
-pub fn price_label(pricing: Option<&Pricing>) -> String {
-    match pricing {
-        None => "Free".into(),
-        Some(p) => format!(
-            "{} in · {} out per M tokens",
-            format_sats(p.input_msat_per_million),
-            format_sats(p.output_msat_per_million)
-        ),
-    }
+/// Built once with the tray; polling only updates text and enabled state.
+struct Items {
+    menu: Submenu,
+    balance: MenuItem,
+    fund: MenuItem,
+    spending: MenuItem,
+    earning: MenuItem,
+    price: MenuItem,
 }
 
 pub struct Payments {
     pub view: View,
     /// Created with the tray on the main thread; AppKit menus are main-thread only.
-    menu: Option<Submenu>,
+    items: Option<Items>,
+    shown: Option<Labels>,
     jobs: Sender<(u16, u32, Job)>,
     replies: Receiver<Reply>,
     busy: bool,
     next_refresh: Instant,
-    signature: String,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
 }
 
@@ -133,103 +154,60 @@ impl Payments {
                 wallet,
                 ..View::default()
             },
-            menu: None,
+            items: None,
+            shown: None,
             jobs,
             replies,
             busy: false,
             next_refresh: Instant::now(),
-            signature: String::new(),
             last_invoice: None,
         }
     }
 
-    /// Main thread only. Creates the submenu on first use and fills it.
-    pub fn submenu(&mut self) -> Submenu {
-        let menu = self
+    /// Main thread only, called once from `App::build`.
+    pub fn submenu(&mut self) -> Result<Submenu, String> {
+        let l = labels(&self.view);
+        let items = Items {
+            menu: Submenu::new(&l.title, true),
+            balance: MenuItem::with_id("pay:balance", &l.balance, false, None),
+            fund: MenuItem::with_id("pay:fund", l.fund, true, None),
+            spending: MenuItem::with_id("pay:spend-status", &l.spending, false, None),
+            earning: MenuItem::with_id("pay:earn-status", &l.earning, false, None),
+            price: MenuItem::with_id("pay:price", "Set price…", l.can_price, None),
+        };
+        items
             .menu
-            .get_or_insert_with(|| Submenu::new("Payments", true))
-            .clone();
-        self.signature.clear();
-        self.render();
-        menu
+            .append_items(&[
+                &items.balance,
+                &items.fund,
+                &PredefinedMenuItem::separator(),
+                &items.spending,
+                &MenuItem::with_id("pay:spending", "Pay for inference…", true, None),
+                &PredefinedMenuItem::separator(),
+                &items.earning,
+                &items.price,
+            ])
+            .map_err(|e| e.to_string())?;
+        let menu = items.menu.clone();
+        self.items = Some(items);
+        self.shown = Some(l);
+        Ok(menu)
     }
 
-    /// Rebuild only when the rendered text changed, so an open menu is not
-    /// torn down every poll.
-    pub fn render(&mut self) {
-        let mut sig = title(&self.view);
-        let wallet = wallet_rows(&self.view);
-        let spending = spending_label(&self.view);
-        let prices = self.view.pricing.as_ref().and_then(|p| p.as_ref().ok());
-        let models: Vec<(String, String, bool)> = self
-            .view
-            .models
-            .iter()
-            .map(|m| {
-                let p = prices.and_then(|p| p.get(m));
-                (m.clone(), price_label(p), p.is_some())
-            })
-            .collect();
-        for (_, l, _) in &wallet {
-            sig.push_str(l);
-        }
-        sig.push_str(&spending);
-        for (m, l, _) in &models {
-            sig.push_str(m);
-            sig.push_str(l);
-        }
-        let Some(menu) = self.menu.clone() else {
+    fn render(&mut self) {
+        let (Some(items), l) = (&self.items, labels(&self.view)) else {
             return;
         };
-        if sig == self.signature {
+        if self.shown.as_ref() == Some(&l) {
             return;
         }
-        self.signature = sig;
-        while menu.remove_at(0).is_some() {}
-        menu.set_text(title(&self.view));
-        let mut items: Vec<Box<dyn IsMenuItem>> = Vec::new();
-        for (id, label, enabled) in wallet {
-            items.push(Box::new(MenuItem::with_id(id, label, enabled, None)));
-        }
-        items.push(Box::new(PredefinedMenuItem::separator()));
-        items.push(Box::new(MenuItem::with_id(
-            "pay:spend-status",
-            spending,
-            false,
-            None,
-        )));
-        items.push(Box::new(MenuItem::with_id(
-            "pay:spending",
-            "Pay for inference…",
-            true,
-            None,
-        )));
-        items.push(Box::new(PredefinedMenuItem::separator()));
-        let earning = Submenu::new("Earning", true);
-        if models.is_empty() {
-            let _ = earning.append(&MenuItem::new("No model being served", false, None));
-        }
-        for (model, label, priced) in models {
-            let sub = Submenu::new(format!("{model} — {label}"), true);
-            let _ = sub.append(&MenuItem::with_id(
-                format!("pay:price:{model}"),
-                "Set price…",
-                true,
-                None,
-            ));
-            if priced {
-                let _ = sub.append(&MenuItem::with_id(
-                    format!("pay:free:{model}"),
-                    "Serve for free",
-                    true,
-                    None,
-                ));
-            }
-            let _ = earning.append(&sub);
-        }
-        items.push(Box::new(earning));
-        let refs: Vec<&dyn IsMenuItem> = items.iter().map(|i| i.as_ref()).collect();
-        let _ = menu.append_items(&refs);
+        items.menu.set_text(&l.title);
+        items.balance.set_text(&l.balance);
+        items.fund.set_text(l.fund);
+        items.spending.set_text(&l.spending);
+        items.earning.set_text(&l.earning);
+        items.price.set_enabled(l.can_price);
+        self.shown = Some(l);
     }
 }
 
@@ -299,7 +277,7 @@ impl Payments {
             Reply::Done(Ok(_)) => self.refresh_soon(),
             Reply::Done(Err(e)) => {
                 self.refresh_soon();
-                crate::native::notice(
+                ui::notice(
                     "Mesh did not save that",
                     &format!(
                         "{}. Nothing was changed; the menu shows what Mesh reports.",
@@ -320,12 +298,10 @@ impl Payments {
                             Some((inv.bolt11.clone(), detail, png, inv.payment_hash.clone()));
                         self.show_invoice(target);
                     }
-                    Err(e) => crate::native::notice("Could not draw the QR code", &e),
+                    Err(e) => ui::notice("Could not draw the QR code", &e),
                 }
             }
-            Reply::Invoice(Err(e)) => {
-                crate::native::notice("Could not create an invoice", &describe(&e))
-            }
+            Reply::Invoice(Err(e)) => ui::notice("Could not create an invoice", &describe(&e)),
             Reply::Receipt(result) => {
                 let text = match result {
                     Ok(Receipt::Received(msat)) => format!("Received {}.", format_sats(msat)),
@@ -335,7 +311,7 @@ impl Payments {
                     Err(e) => format!("Could not check: {}", describe(&e)),
                 };
                 self.refresh_soon();
-                crate::native::notice("Payment status", &text);
+                ui::notice("Payment status", &text);
                 if !text.starts_with("Received") {
                     self.show_invoice(target);
                 }
@@ -351,7 +327,7 @@ impl Payments {
             match ui::invoice(&detail, &bolt11, &png) {
                 InvoiceAction::Copy => {
                     if let Err(e) = ui::copy_text(&bolt11) {
-                        crate::native::notice("Could not copy", &e);
+                        ui::notice("Could not copy", &e);
                     }
                 }
                 InvoiceAction::Check => {
@@ -374,22 +350,22 @@ impl Payments {
             return false;
         }
         let Some(t) = target else {
-            crate::native::notice(
+            ui::notice(
                 "Mesh is still starting",
                 "Payments become available once Mesh is running.",
             );
             return true;
         };
         if self.busy {
-            crate::native::notice(
+            ui::notice(
                 "One moment",
                 "Mesh is still answering the last payments request.",
             );
             return true;
         }
         match id {
-            "pay:enable" => {
-                if crate::native::confirm(
+            "pay:fund" if !self.view.wallet => {
+                if ui::confirm(
                     "Enable wallet?",
                     "Mesh sets up a Bitcoin Lightning wallet in your Mesh profile. It only holds what you add. Nothing is spent unless you turn on Pay for inference.",
                     "Enable wallet",
@@ -400,7 +376,9 @@ impl Payments {
                 }
             }
             "pay:fund" => {
-                let Some(text) = ui::fund_amount() else { return true };
+                let Some(text) = ui::fund_amount() else {
+                    return true;
+                };
                 let amount = if text.trim().is_empty() {
                     None
                 } else {
@@ -412,19 +390,12 @@ impl Payments {
                 self.send(t, Job::Invoice(amount));
             }
             "pay:spending" => self.edit_spending(t),
-            _ => {
-                if let Some(model) = id.strip_prefix("pay:price:") {
-                    self.edit_price(t, model.to_string());
-                } else if let Some(model) = id.strip_prefix("pay:free:") {
-                    if crate::native::confirm(
-                        &format!("Serve {model} for free?"),
-                        "Removes its price. The model keeps serving; work already agreed is still billed.",
-                        "Serve for free",
-                    ) {
-                        self.send(t, Job::Run(Command::SetPricing { model: model.into(), value: None }));
-                    }
+            "pay:price" => {
+                if let Some(model) = self.view.models.first().cloned() {
+                    self.edit_price(t, model);
                 }
             }
+            _ => {}
         }
         true
     }
@@ -497,6 +468,11 @@ impl Payments {
         let Some(fields) = ui::price(&model, current) else {
             return;
         };
+        if fields[..2].iter().all(|f| f.trim().is_empty()) {
+            // No input/output price = serve for free: remove the price, keep serving.
+            self.send(t, Job::Run(Command::SetPricing { model, value: None }));
+            return;
+        }
         let parsed: Result<Vec<u64>, _> = fields.iter().map(|f| sats_to_msat(f)).collect();
         match parsed {
             Ok(v) => self.send(
@@ -518,7 +494,7 @@ impl Payments {
 }
 
 fn invalid(error: &payments::Error) -> bool {
-    crate::native::notice("Check the amount", &describe(error));
+    ui::notice("Check the amount", &describe(error));
     true
 }
 
@@ -551,47 +527,57 @@ mod tests {
     }
 
     #[test]
-    fn no_wallet_offers_only_enable_and_hides_balance() {
-        let v = View::default();
-        assert_eq!(title(&v), "Payments");
-        let rows = wallet_rows(&v);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].0, "pay:enable");
+    fn no_wallet_keeps_the_same_items_and_offers_enable() {
+        let l = labels(&View::default());
+        assert_eq!(l.title, "Payments");
+        assert_eq!(l.balance, "Wallet not enabled");
+        assert_eq!(l.fund, "Enable wallet…");
+        assert!(!l.can_price);
     }
 
     #[test]
     fn balance_is_in_the_title_and_errors_are_not_zero() {
         let mut v = view();
-        assert_eq!(wallet_rows(&v)[0].1, "Balance: checking…");
+        assert_eq!(labels(&v).balance, "Balance: checking…");
         v.balance = Some(Ok(1_234_000));
-        assert_eq!(title(&v), "Payments · 1,234 sats");
-        assert_eq!(wallet_rows(&v)[0].1, "Balance: 1,234 sats");
-        assert_eq!(wallet_rows(&v)[1].0, "pay:fund");
+        let l = labels(&v);
+        assert_eq!(l.title, "Payments · 1,234 sats");
+        assert_eq!(l.balance, "Balance: 1,234 sats");
+        assert_eq!(l.fund, "Add funds…");
         v.balance = Some(Err("Mesh not reachable".into()));
-        assert_eq!(title(&v), "Payments");
-        assert!(wallet_rows(&v)[0].1.contains("unavailable"));
+        let l = labels(&v);
+        assert_eq!(l.title, "Payments");
+        assert!(l.balance.contains("unavailable"));
     }
 
     #[test]
     fn spending_label_reflects_mesh_policy() {
         let mut v = view();
         v.policy = Some(Ok(status(Mode::FreeOnly, 0)));
-        assert_eq!(spending_label(&v), "Spending: free only");
+        assert_eq!(labels(&v).spending, "Spending: free only");
         v.policy = Some(Ok(status(Mode::Automatic, 5_000)));
-        assert_eq!(spending_label(&v), "Spending: on · 5 sats left today");
+        assert_eq!(labels(&v).spending, "Spending: on · 5 sats left today");
     }
 
     #[test]
-    fn price_label_is_free_without_pricing() {
-        assert_eq!(price_label(None), "Free");
-        let p = Pricing {
-            input_msat_per_million: 10_000,
-            output_msat_per_million: 20_000,
-            minimum_invoice_msat: 1_000,
-        };
+    fn earning_describes_the_served_model_price() {
+        let mut v = view();
+        assert_eq!(labels(&v).earning, "Earning: no model being served");
+        v.models = vec!["m".into()];
+        assert!(labels(&v).can_price);
+        v.pricing = Some(Ok(BTreeMap::new()));
+        assert_eq!(labels(&v).earning, "Earning: free");
+        v.pricing = Some(Ok(BTreeMap::from([(
+            "m".to_string(),
+            Pricing {
+                input_msat_per_million: 10_000,
+                output_msat_per_million: 20_000,
+                minimum_invoice_msat: 1_000,
+            },
+        )])));
         assert_eq!(
-            price_label(Some(&p)),
-            "10 sats in · 20 sats out per M tokens"
+            labels(&v).earning,
+            "Earning: 10 sats in · 20 sats out per M tokens"
         );
     }
 }

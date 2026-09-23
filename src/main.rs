@@ -8,7 +8,6 @@ mod native;
 #[path = "native_portable.rs"]
 mod native;
 mod pay_menu;
-mod pay_native;
 mod qr;
 mod status;
 
@@ -128,7 +127,7 @@ impl App {
             ])
             .map_err(|e| e.to_string())?;
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
-        let payments = self.pay.submenu();
+        let payments = self.pay.submenu()?;
         menu.append_items(&[
             &chat,
             &PredefinedMenuItem::separator(),
