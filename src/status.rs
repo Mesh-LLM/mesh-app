@@ -8,6 +8,8 @@ pub struct Snapshot {
     pub private_owner: Option<String>,
     /// Models this node itself serves; Earning prices are keyed on these.
     pub serving_models: Vec<String>,
+    /// Requests this node is handling right now (`inflight_requests`).
+    pub inflight: u64,
 }
 
 fn agent() -> ureq::Agent {
@@ -55,6 +57,7 @@ pub fn snapshot(port: u16) -> Snapshot {
     Snapshot {
         pid,
         running: true,
+        inflight: value["inflight_requests"].as_u64().unwrap_or(0),
         serving_models: value["serving_models"]
             .as_array()
             .map(|models| {

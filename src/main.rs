@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use mesh_tray::{identity, settings};
+mod activity;
 mod compute_menu;
 mod invites;
 mod lifecycle;
@@ -25,7 +26,7 @@ struct Ui {
     compute: compute_menu::ComputeMenu,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
-    _tray: TrayIcon,
+    tray: TrayIcon,
 }
 
 struct App {
@@ -48,17 +49,16 @@ struct App {
     open_when_ready: Option<&'static str>,
     exit: bool,
     pay: pay_menu::Payments,
+    activity: activity::Activity,
+    shown: activity::State,
 }
+
+const JELLYFISH: &[u8] = include_bytes!("../assets/mesh-jellyfish.rgba");
 
 fn icon() -> Icon {
     // Mesh's existing jellyfish artwork, rasterized at tray resolution.
     // macOS uses its alpha silhouette as a template on light and dark menu bars.
-    Icon::from_rgba(
-        include_bytes!("../assets/mesh-jellyfish.rgba").to_vec(),
-        32,
-        32,
-    )
-    .expect("valid bundled jellyfish icon")
+    Icon::from_rgba(JELLYFISH.to_vec(), 32, 32).expect("valid bundled jellyfish icon")
 }
 
 #[cfg(test)]
@@ -66,6 +66,13 @@ mod icon_tests {
     #[test]
     fn bundled_jellyfish_has_transparency_and_visible_pixels() {
         super::icon();
+        for state in [
+            super::activity::State::InUse,
+            super::activity::State::Earning,
+        ] {
+            let (rgba, _) = super::activity::artwork(super::JELLYFISH, state);
+            tray_icon::Icon::from_rgba(rgba, 32, 32).unwrap();
+        }
         let rgba = include_bytes!("../assets/mesh-jellyfish.rgba");
         assert_eq!(rgba.len(), 32 * 32 * 4);
         assert!(rgba.as_chunks::<4>().0.iter().any(|pixel| pixel[3] == 0));
@@ -104,6 +111,8 @@ impl App {
             exit: false,
             // Side-effect free file check; the wallet itself is Mesh's.
             pay: pay_menu::Payments::new(settings::mesh_profile().ok()),
+            activity: activity::Activity::default(),
+            shown: activity::State::Idle,
         }
     }
 
@@ -151,7 +160,7 @@ impl App {
             compute,
             public,
             private,
-            _tray: tray,
+            tray,
         });
         self.start();
         Ok(())
@@ -350,6 +359,11 @@ impl App {
                 status::Snapshot::default()
             };
             if self.snapshot.running {
+                self.activity.busy(self.snapshot.inflight, Instant::now());
+            } else {
+                self.activity.reset();
+            }
+            if self.snapshot.running {
                 self.started = None;
                 if let Some(path) = self.open_when_ready.take() {
                     self.open(path);
@@ -406,11 +420,33 @@ impl App {
         }
         let target = self.pay_target();
         self.pay.tick(target);
+        self.activity.balance(self.pay.balance(), Instant::now());
+        self.sync_icon();
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(()).is_ok();
             self.next_poll = Instant::now() + POLL;
         }
     }
+    /// Swap the menu-bar artwork only when the activity state changes.
+    fn sync_icon(&mut self) {
+        let state = self.activity.state(Instant::now());
+        let Some(ui) = &self.ui else { return };
+        if state == self.shown {
+            return;
+        }
+        let (rgba, template) = activity::artwork(JELLYFISH, state);
+        let Ok(icon) = Icon::from_rgba(rgba, 32, 32) else {
+            return;
+        };
+        if ui
+            .tray
+            .set_icon_with_as_template(Some(icon), template)
+            .is_ok()
+        {
+            self.shown = state;
+        }
+    }
+
     // Only called for a mode click or a successfully committed settings change.
     // Never refresh menu state from the periodic polling/render path.
     fn sync_mode_checks(&self) {

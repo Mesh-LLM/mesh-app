@@ -140,6 +140,11 @@ impl Payments {
         }
     }
 
+    /// Last good spendable balance, in msat.
+    pub fn balance(&self) -> Option<u64> {
+        self.balance
+    }
+
     fn send(&mut self, (port, pid): (u16, u32), job: Job) {
         let _ = self.jobs.send((port, pid, job));
     }
