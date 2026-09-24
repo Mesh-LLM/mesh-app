@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use mesh_tray::{identity, settings};
+mod compute_menu;
 mod invites;
 mod lifecycle;
 #[cfg(target_os = "macos")]
@@ -7,6 +8,8 @@ mod native;
 #[cfg(not(target_os = "macos"))]
 #[path = "native_portable.rs"]
 mod native;
+mod pay_menu;
+mod qr;
 mod status;
 
 use lifecycle::Engine;
@@ -19,6 +22,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
+    compute: compute_menu::ComputeMenu,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
     _tray: TrayIcon,
@@ -43,6 +47,7 @@ struct App {
     log_mark: u64,
     open_when_ready: Option<&'static str>,
     exit: bool,
+    pay: pay_menu::Payments,
 }
 
 fn icon() -> Icon {
@@ -97,6 +102,8 @@ impl App {
             log_mark: 0,
             open_when_ready: None,
             exit: false,
+            // Side-effect free file check; the wallet itself is Mesh's.
+            pay: pay_menu::Payments::new(settings::mesh_profile().ok()),
         }
     }
 
@@ -118,12 +125,16 @@ impl App {
             ])
             .map_err(|e| e.to_string())?;
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
+        let payments = self.pay.submenu()?;
+        let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
         menu.append_items(&[
             &chat,
+            compute.item(),
             &PredefinedMenuItem::separator(),
             &public,
             &private,
             &people,
+            &payments,
             &PredefinedMenuItem::separator(),
             &retry,
             &quit,
@@ -137,6 +148,7 @@ impl App {
             .build()
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
+            compute,
             public,
             private,
             _tray: tray,
@@ -222,7 +234,9 @@ impl App {
         }
         // Their `[[models]]` wins: a `--model` flag would beat the file, so when
         // the file names models the tray passes none and stays out of the way.
-        let model = if mesh_tray::runtime_config::config_declares_models(&profile) {
+        let model = if !self.settings.share_compute {
+            None
+        } else if mesh_tray::runtime_config::config_declares_models(&profile) {
             use std::io::Write;
             writeln!(
                 &log,
@@ -239,7 +253,7 @@ impl App {
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
         let config = lifecycle::config(&self.settings, &profile, model);
-        Engine::start(config)
+        Engine::start(config, self.settings.share_compute)
     }
 
     fn open(&mut self, path: &'static str) {
@@ -297,10 +311,23 @@ impl App {
         }
     }
 
+    /// Our own runtime's management port and pid, only once it is ready.
+    fn pay_target(&self) -> Option<(u16, u32)> {
+        let child = self.child.as_ref()?;
+        (self.snapshot.running && self.stopping.is_none() && self.pending_settings.is_none())
+            .then(|| (self.settings.console_port, child.id()))
+    }
+
     fn tick(&mut self) {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            let target = self.pay_target();
+            let models = self.snapshot.serving_models.clone();
+            if self.pay.click(event.id.as_ref(), target, &models) {
+                continue;
+            }
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
+                "compute" => self.toggle_compute(),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite" => self.invite(),
@@ -373,6 +400,12 @@ impl App {
                     .into(),
             );
         }
+        let (sharing, busy) = self.compute_view();
+        if let Some(ui) = &self.ui {
+            ui.compute.sync(sharing, busy);
+        }
+        let target = self.pay_target();
+        self.pay.tick(target);
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(()).is_ok();
             self.next_poll = Instant::now() + POLL;
@@ -391,6 +424,33 @@ impl App {
         }
         if ui.private.is_checked() != private {
             ui.private.set_checked(private);
+        }
+    }
+
+    /// Requested sharing state, and whether an engine restart is in flight.
+    fn compute_view(&self) -> (bool, bool) {
+        let busy =
+            self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some();
+        let sharing = self
+            .pending_settings
+            .as_ref()
+            .map_or(self.settings.share_compute, |next| next.share_compute);
+        (sharing, busy)
+    }
+
+    fn toggle_compute(&mut self) {
+        // muda auto-toggles the check before dispatch; queue first, then
+        // render the requested state with its transition label.
+        let busy =
+            self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some();
+        if !busy {
+            let mut next = self.settings.clone();
+            next.share_compute = !next.share_compute;
+            self.queue_settings(next);
+        }
+        let (sharing, busy) = self.compute_view();
+        if let Some(ui) = &self.ui {
+            ui.compute.sync(sharing, busy);
         }
     }
 
@@ -676,13 +736,20 @@ fn main() {
         // The engine invokes its built-in blobstore through current_exe().
         // Dispatch before profile locking or UI setup; this is not another node.
         let args: Vec<String> = std::env::args().skip(1).collect();
-        if args == ["--log-format", "json", "--plugin", "blobstore"] {
+        // Same for the built-in Lexe wallet (PR #1926): Mesh launches it as
+        // `current_exe --plugin wallet-lexe` and owns it; the tray only dispatches.
+        if let ["--log-format", "json", "--plugin", name @ ("blobstore" | "wallet-lexe")] = args
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .as_slice()
+        {
             return tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| e.to_string())?
                 .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
-                    "blobstore".into(),
+                    (*name).into(),
                 ))
                 .map_err(|e| format!("{e:#}"));
         }
@@ -732,6 +799,26 @@ mod transaction_tests {
     fn app(root: &std::path::Path) -> App {
         App::new(root.into(), settings::Settings::default())
     }
+    #[cfg(unix)]
+    #[test]
+    fn compute_toggle_stops_owned_engine_and_preserves_mesh_until_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.settings.accept_seed("selected-mesh").unwrap();
+        app.settings.save(root.path()).unwrap();
+        let (engine, mut stop, _done) = Engine::fixture();
+        app.child = Some(engine);
+        app.toggle_compute();
+        assert_eq!(stop.try_recv(), Ok(()));
+        assert!(app.settings.share_compute);
+        assert!(settings::Settings::load(root.path()).unwrap().share_compute);
+        let pending = app.pending_settings.as_ref().unwrap();
+        assert!(!pending.share_compute);
+        assert_eq!(pending.connection, app.settings.connection);
+        app.toggle_compute();
+        assert!(!app.pending_settings.as_ref().unwrap().share_compute);
+    }
+
     #[test]
     fn failed_save_leaves_current_memory_and_disk_unchanged() {
         let root = tempfile::tempdir().unwrap();

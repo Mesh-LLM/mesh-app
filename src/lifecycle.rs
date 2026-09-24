@@ -1,7 +1,7 @@
 //! In-process engine ownership. A pending stop never cancels the SDK
 //! startup future: the worker retains it, then stops the resulting handle before
 //! reporting completion. No replacement may start until completion is observed.
-use mesh_llm_sdk::{serve, TrustPolicy};
+use mesh_llm_sdk::{client, serve, TrustPolicy};
 use mesh_tray::settings::{Connection, Settings, MIN_NODE_VERSION};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +59,19 @@ pub fn config(
     builder.build()
 }
 
+// Transfer connection, identity and HTTP settings unchanged; client mode has no
+// serving config, so turning compute off cannot pass a tray-selected model.
+fn client_config(config: serve::EmbeddedServeConfig) -> client::EmbeddedClientConfig {
+    client::EmbeddedClientConfig {
+        http: config.http,
+        network: config.network,
+        admission: config.admission,
+        storage: config.storage,
+        log_format: config.log_format,
+        startup_timeout: config.startup_timeout,
+    }
+}
+
 pub struct Engine {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     done: Receiver<Result<(), String>>,
@@ -66,7 +79,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn start(config: serve::EmbeddedServeConfig) -> Result<Self, String> {
+    pub fn start(config: serve::EmbeddedServeConfig, share_compute: bool) -> Result<Self, String> {
         check_restart(&RESTART_UNSAFE)?;
         // Environment filtering can be per-child but not per embedded thread.
         // Fail closed rather than mutate the process environment after threads start.
@@ -88,7 +101,12 @@ impl Engine {
                         .build()
                         .map_err(|e| e.to_string())?;
                     runtime.block_on(async {
-                        let handle = serve::start(config).await.map_err(|e| format!("{e:#}"))?;
+                        let handle = if share_compute {
+                            serve::start(config).await
+                        } else {
+                            client::start(client_config(config)).await
+                        }
+                        .map_err(|e| format!("{e:#}"))?;
                         // Dropping the UI owner also requests cooperative shutdown.
                         let _ = requested.await;
                         handle.stop().await.map_err(|e| format!("{e:#}"))
@@ -155,6 +173,25 @@ pub fn request_stop(engine: &mut Engine) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn client_keeps_mesh_and_profile_without_serving_configuration() {
+        let settings = Settings {
+            share_compute: false,
+            connection: Connection::Private {
+                invite: Some("selected-mesh".into()),
+            },
+            ..Default::default()
+        };
+        let serving = config(&settings, Path::new("/test-profile"), Some("model".into()));
+        let client = client_config(serving);
+        assert_eq!(client.network.join_tokens, vec!["selected-mesh"]);
+        assert_eq!(client.http.api_port, settings.api_port);
+        assert_eq!(
+            client.storage.config_path,
+            Some(Path::new("/test-profile/config.toml").into())
+        );
+    }
+
     #[test]
     fn private_origin_and_join_never_fall_back_to_public_or_allowlist() {
         for invite in [None, Some("their-token".into())] {
@@ -266,75 +303,5 @@ mod tests {
         finished.send(Ok(())).unwrap();
         assert_eq!(engine.try_wait().unwrap().as_deref(), Some("stopped"));
         assert_eq!(engine.try_wait().unwrap().as_deref(), Some("stopped"));
-    }
-
-    /// Real embedded engine start/stop, isolated from the user's profile and
-    /// from any network: temp config, no relays, no auto-join, no model.
-    /// Ignored by default; CI runs it explicitly on every OS.
-    #[test]
-    #[ignore]
-    fn embedded_engine_starts_answers_status_and_stops() {
-        use std::time::{Duration, Instant};
-        let free = || {
-            std::net::TcpListener::bind("127.0.0.1:0")
-                .unwrap()
-                .local_addr()
-                .unwrap()
-                .port()
-        };
-        let (api, console) = (free(), free());
-        let dir = tempfile::tempdir().unwrap();
-        let config = serve::EmbeddedServeConfig::builder()
-            .api_port(api)
-            .console_port(console)
-            .console_ui(true)
-            .config_path(dir.path().join("config.toml"))
-            .isolated_config(true)
-            .auto_join(false)
-            .publish(false)
-            .disable_iroh_relays(true)
-            .startup_timeout(Duration::from_secs(120))
-            .build();
-        // Embedded startup never downloads a native runtime; CI installs the
-        // released one for this OS first, exactly as the error message asks.
-        {
-            use mesh_llm_sdk::native_runtime::*;
-            tokio::runtime::Runtime::new()
-                .unwrap()
-                .block_on(install_native_runtime(NativeRuntimeInstallOptions {
-                    mesh_version: CURRENT_MESH_VERSION.to_string(),
-                    skippy_abi_version: Some(current_skippy_abi_version()),
-                    ..Default::default()
-                }))
-                .expect("install native runtime");
-        }
-        let mut engine = Engine::start(config).expect("engine thread");
-        let deadline = Instant::now() + Duration::from_secs(150);
-        loop {
-            if let Some(result) = engine.try_wait().unwrap() {
-                panic!("engine exited before answering status: {result}");
-            }
-            let snapshot = crate::status::snapshot(console);
-            if snapshot.running {
-                assert_eq!(
-                    snapshot.pid,
-                    Some(std::process::id()),
-                    "status is from this process"
-                );
-                break;
-            }
-            assert!(Instant::now() < deadline, "no /api/status within 150s");
-            std::thread::sleep(Duration::from_millis(500));
-        }
-        request_stop(&mut engine).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(60);
-        let result = loop {
-            if let Some(result) = engine.try_wait().unwrap() {
-                break result;
-            }
-            assert!(Instant::now() < deadline, "engine did not stop within 60s");
-            std::thread::sleep(Duration::from_millis(200));
-        };
-        assert_eq!(result, "stopped");
     }
 }

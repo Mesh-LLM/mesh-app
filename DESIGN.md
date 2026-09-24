@@ -10,9 +10,9 @@ Public/Private ticks are initialized from saved settings and synchronized only
 on mode clicks and committed settings changes, never periodically while polling. Runtime guards
 handle unavailable/busy actions; process supervision continues independently.
 
-OS-native jellyfish status menu: Public/Private, Invites, Chat, Retry startup, Quit.
-Invites contains exactly two items — copy an invite, or
-join with one. No roster, no per-person controls, no extra settings website,
+OS-native jellyfish status menu: Public/Private, Invites, Payments, Chat, Retry
+startup, Quit. Invites contains exactly two items — copy an invite, or
+join with one. Payments is a fixed submenu (see below). No roster, no per-person controls, no extra settings website,
 wizard, Buzz UI/runtime, custom typography or webview.
 
 ## One code, both directions
@@ -80,3 +80,49 @@ release containing the required fixes, with its matching native runtime. The
 preview packager's historical official-release pins are still 0.76.2, which
 predates #1896; its explicit source option supports newer source candidates.
 There is no runtime choice between two engines and no version setting for users.
+
+## Payments
+
+A thin controller over Mesh's wallet (mesh-llm #1926). Mesh owns the wallet,
+ledger, prices, budget and settlement; the tray sends local operator API
+requests (`POST /api/wallet`, pinned to the retained runtime's PID) from a
+worker thread. The SDK has no typed wallet operations yet; when it does, the
+calls move there and the menu does not change.
+
+Three fixed items. The only thing that changes is the submenu title, which
+shows the last good balance once a wallet exists (read when the runtime becomes
+ready, then every 20s; a failed read keeps the last value, never shows an
+error or zero). Every item reads Mesh fresh when clicked, so no menu text can
+go stale:
+
+```text
+Payments · <balance>        ("Payments" until a wallet exists)
+  Pay…                      [x] Pay for models + daily limit (UTC day)
+  Get paid…                 [x] Charge for the served model + one price per M tokens
+  Add funds…                balance + Lightning invoice
+```
+
+The wallet is created lazily by Mesh (first Add funds, or when paying needs
+it); there is no enable step, and the tray never creates one by reading.
+Add funds takes an optional amount (blank lets the payer choose) and shows the
+BOLT11 invoice as a `LIGHTNING:` QR with Copy and Check payment. Check matches
+this invoice's payment hash in the wallet's transactions; balance growth is not
+treated as receipt. Funding never enables spending. The tray serves one model,
+so Get paid prices that model (same price for input and output). No send/withdraw UI. Forms are AppKit only;
+other platforms say so.
+
+## Share compute
+
+One persisted launcher preference, defaulting on to preserve existing behaviour.
+The macOS menu row uses an AppKit NSSwitch forwarding to the existing muda
+menu action; other platforms use a checked item. No model picker or payment
+policy is added. The switch reflects the saved serving preference, not proof
+that a model is healthy.
+
+Changing it cooperatively stops the retained embedded engine, waits for exit,
+saves the preference, and restarts via the SDK serve/client entry point. Off
+skips automatic model selection and uses client mode, not an empty serve-model
+list (which could still load configured models). Connection, invites, identity,
+ports and payment policy are unchanged. Active requests can be interrupted by
+the restart. No live engine or Keychain-touching validation is automated here;
+menu interaction, accessibility and actual unload/rejoin need a human trial.

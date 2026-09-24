@@ -20,6 +20,7 @@ use crate::settings::{Connection, Settings};
 pub fn switching_to(current: &Settings, connection: Connection) -> Settings {
     Settings {
         connection,
+        share_compute: current.share_compute,
         console_port: current.console_port,
         api_port: current.api_port,
     }
@@ -34,6 +35,7 @@ mod tests {
             connection: Connection::Private {
                 invite: Some("invite".into()),
             },
+            share_compute: false,
             console_port: 4242,
             api_port: 4243,
         }
@@ -44,6 +46,7 @@ mod tests {
         let after = switching_to(&joined(), Connection::Automatic);
         after.validate().unwrap();
         assert_eq!(after.connection, Connection::Automatic);
+        assert!(!after.share_compute);
         assert!(after.joins().is_empty());
         assert_eq!((after.console_port, after.api_port), (4242, 4243));
     }

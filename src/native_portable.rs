@@ -112,6 +112,43 @@ fn confirmation_result(result: rfd::MessageDialogResult, action: &str) -> bool {
     matches!(result, rfd::MessageDialogResult::Ok)
         || result == rfd::MessageDialogResult::Custom(action.into())
 }
+/// Payments forms are native AppKit only for now. Elsewhere say so instead of
+/// pretending a form was cancelled.
+// Gated off macOS: there this file is only a test module and the real forms
+// live in `native.rs`.
+#[cfg(not(target_os = "macos"))]
+mod payments {
+    use super::notice;
+    // Mirrors the macOS enum; this stub only ever returns Done.
+    #[allow(dead_code)]
+    #[derive(Debug, PartialEq, Eq)]
+    pub enum InvoiceAction {
+        Done,
+        Copy,
+        Check,
+    }
+    const PAYMENTS_MAC_ONLY: &str = "Payments controls are macOS-only in this build.";
+    pub fn fund_amount() -> Option<String> {
+        notice("Payments", PAYMENTS_MAC_ONLY);
+        None
+    }
+    pub fn toggle_amount(
+        _: &str,
+        _: &str,
+        _: &str,
+        _: bool,
+        _: &str,
+        _: &str,
+    ) -> Option<(bool, String)> {
+        notice("Payments", PAYMENTS_MAC_ONLY);
+        None
+    }
+    pub fn invoice(_: &str, _: &str, _: &[u8]) -> InvoiceAction {
+        InvoiceAction::Done
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub use payments::*;
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -7,6 +7,7 @@ compute without managing a command-line server.
 - **Public or private:** use the public Mesh or create a private Mesh with people you trust.
 - **Invite with a code:** copy an invite and send it, or paste one to join.
 - **Chat:** open the Mesh console in your browser from the tray menu.
+- **Payments:** pay for models over Lightning, get paid for the one you serve, and add funds with a QR code.
 
 ## Get started
 
@@ -34,7 +35,7 @@ just clean
 ```
 
 See [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) for product and invite
-semantics. The [macOS release workflow](.github/workflows/release-macos.yml)
+semantics, and [TESTING.md](TESTING.md) for the real-engine wallet test. The [macOS release workflow](.github/workflows/release-macos.yml)
 builds the pinned engine's matching Metal runtime and packages, signs and
 notarizes the app. Packaging does not require a separately published engine
 release.

@@ -5,9 +5,10 @@ edition = "2021"
 
 [dependencies]
 # Immutable upstream revision; no dependency on another local checkout.
-mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a0c1e66b0ac037dd56544b9e2d94969ea43d694f", features = ["host-io"] }
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a0c1e66b0ac037dd56544b9e2d94969ea43d694f", default-features = false, features = ["serving", "console"] }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "a0c1e66b0ac037dd56544b9e2d94969ea43d694f", default-features = false }
+mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb", default-features = false, features = ["serving", "console", "payments"] }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb", default-features = false, features = ["wallet-lexe"] }
+mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
@@ -19,6 +20,8 @@ ureq = { version = "2", default-features = false }
 tempfile = "3"
 fs2 = "0.4"
 rfd = "0.16"
+qrcode = { version = "0.14", default-features = false }
+png = "0.17"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 winit = "0.30"
@@ -38,6 +41,12 @@ objc2-app-kit = "0.3"
 [target.'cfg(target_os = "windows")'.dependencies]
 clipboard-win = "5"
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
+
+# Manual, real-engine wallet check in a throwaway profile. harness = false so
+# it can serve the engine's `current_exe --plugin wallet-lexe` re-exec itself.
+[[test]]
+name = "isolated_wallet"
+harness = false
 
 [profile.release]
 strip = true

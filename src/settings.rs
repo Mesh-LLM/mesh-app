@@ -34,6 +34,7 @@ pub enum Connection {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Settings {
+    pub share_compute: bool,
     pub connection: Connection,
     pub console_port: u16,
     pub api_port: u16,
@@ -43,6 +44,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             connection: Connection::Automatic,
+            share_compute: true,
             console_port: 3232,
             api_port: 9447,
         }
@@ -99,6 +101,7 @@ impl Settings {
             connection: Connection::Private {
                 invite: Some(seed.into()),
             },
+            share_compute: self.share_compute,
             console_port: self.console_port,
             api_port: self.api_port,
         };
@@ -159,6 +162,17 @@ pub fn looks_like_invite(text: &str) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn compute_defaults_on_and_off_survives_join_and_restart() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.share_compute);
+        settings.share_compute = false;
+        settings.accept_seed("invite").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        settings.save(root.path()).unwrap();
+        assert!(!Settings::load(root.path()).unwrap().share_compute);
+    }
+
+    #[test]
     fn removed_seeds_are_neither_joined_nor_saved() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(
@@ -182,6 +196,7 @@ mod tests {
             connection: Connection::Private {
                 invite: Some("original".into()),
             },
+            share_compute: false,
             console_port: 4242,
             api_port: 4243,
         };
