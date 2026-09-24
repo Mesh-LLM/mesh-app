@@ -21,7 +21,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       CARGO_TERM_COLOR: always
     steps:
@@ -37,3 +37,15 @@ jobs:
       - run: cargo build --locked
       - run: cargo test --locked
       - run: cargo clippy --locked --all-targets -- -D warnings
+      # Real embedded engine start/stop: isolated temp config, no network,
+      # no model. Installs the released native runtime for this OS first.
+      - name: Embedded engine smoke test
+        run: cargo test --locked --bin mesh-tray embedded_engine -- --ignored --nocapture
+      - name: Windows tray executable
+        if: runner.os == 'Windows'
+        run: cargo build --locked --release
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: mesh-tray-windows-x86_64
+          path: target/release/mesh-tray.exe

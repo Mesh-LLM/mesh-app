@@ -304,4 +304,74 @@ mod tests {
         assert_eq!(engine.try_wait().unwrap().as_deref(), Some("stopped"));
         assert_eq!(engine.try_wait().unwrap().as_deref(), Some("stopped"));
     }
+
+    /// Real embedded engine start/stop, isolated from the user's profile and
+    /// from any network: temp config, no relays, no auto-join, no model.
+    /// Ignored by default; CI runs it explicitly on every OS.
+    #[test]
+    #[ignore]
+    fn embedded_engine_starts_answers_status_and_stops() {
+        use std::time::{Duration, Instant};
+        let free = || {
+            std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port()
+        };
+        let (api, console) = (free(), free());
+        let dir = tempfile::tempdir().unwrap();
+        let config = serve::EmbeddedServeConfig::builder()
+            .api_port(api)
+            .console_port(console)
+            .console_ui(true)
+            .config_path(dir.path().join("config.toml"))
+            .isolated_config(true)
+            .auto_join(false)
+            .publish(false)
+            .disable_iroh_relays(true)
+            .startup_timeout(Duration::from_secs(120))
+            .build();
+        // Embedded startup never downloads a native runtime; CI installs the
+        // released one for this OS first, exactly as the error message asks.
+        {
+            use mesh_llm_sdk::native_runtime::*;
+            tokio::runtime::Runtime::new()
+                .unwrap()
+                .block_on(install_native_runtime(NativeRuntimeInstallOptions {
+                    mesh_version: CURRENT_MESH_VERSION.to_string(),
+                    skippy_abi_version: Some(current_skippy_abi_version()),
+                    ..Default::default()
+                }))
+                .expect("install native runtime");
+        }
+        let mut engine = Engine::start(config, true).expect("engine thread");
+        let deadline = Instant::now() + Duration::from_secs(150);
+        loop {
+            if let Some(result) = engine.try_wait().unwrap() {
+                panic!("engine exited before answering status: {result}");
+            }
+            let snapshot = crate::status::snapshot(console);
+            if snapshot.running {
+                assert_eq!(
+                    snapshot.pid,
+                    Some(std::process::id()),
+                    "status is from this process"
+                );
+                break;
+            }
+            assert!(Instant::now() < deadline, "no /api/status within 150s");
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        request_stop(&mut engine).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let result = loop {
+            if let Some(result) = engine.try_wait().unwrap() {
+                break result;
+            }
+            assert!(Instant::now() < deadline, "engine did not stop within 60s");
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        assert_eq!(result, "stopped");
+    }
 }
