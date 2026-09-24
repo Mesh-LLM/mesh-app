@@ -1,7 +1,7 @@
 //! In-process engine ownership. A pending stop never cancels the SDK
 //! startup future: the worker retains it, then stops the resulting handle before
 //! reporting completion. No replacement may start until completion is observed.
-use mesh_llm_sdk::{serve, TrustPolicy};
+use mesh_llm_sdk::{client, serve, TrustPolicy};
 use mesh_tray::settings::{Connection, Settings, MIN_NODE_VERSION};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +59,19 @@ pub fn config(
     builder.build()
 }
 
+// Transfer connection, identity and HTTP settings unchanged; client mode has no
+// serving config, so turning compute off cannot pass a tray-selected model.
+fn client_config(config: serve::EmbeddedServeConfig) -> client::EmbeddedClientConfig {
+    client::EmbeddedClientConfig {
+        http: config.http,
+        network: config.network,
+        admission: config.admission,
+        storage: config.storage,
+        log_format: config.log_format,
+        startup_timeout: config.startup_timeout,
+    }
+}
+
 pub struct Engine {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     done: Receiver<Result<(), String>>,
@@ -66,7 +79,7 @@ pub struct Engine {
 }
 
 impl Engine {
-    pub fn start(config: serve::EmbeddedServeConfig) -> Result<Self, String> {
+    pub fn start(config: serve::EmbeddedServeConfig, share_compute: bool) -> Result<Self, String> {
         check_restart(&RESTART_UNSAFE)?;
         // Environment filtering can be per-child but not per embedded thread.
         // Fail closed rather than mutate the process environment after threads start.
@@ -88,7 +101,12 @@ impl Engine {
                         .build()
                         .map_err(|e| e.to_string())?;
                     runtime.block_on(async {
-                        let handle = serve::start(config).await.map_err(|e| format!("{e:#}"))?;
+                        let handle = if share_compute {
+                            serve::start(config).await
+                        } else {
+                            client::start(client_config(config)).await
+                        }
+                        .map_err(|e| format!("{e:#}"))?;
                         // Dropping the UI owner also requests cooperative shutdown.
                         let _ = requested.await;
                         handle.stop().await.map_err(|e| format!("{e:#}"))
@@ -155,6 +173,25 @@ pub fn request_stop(engine: &mut Engine) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn client_keeps_mesh_and_profile_without_serving_configuration() {
+        let settings = Settings {
+            share_compute: false,
+            connection: Connection::Private {
+                invite: Some("selected-mesh".into()),
+            },
+            ..Default::default()
+        };
+        let serving = config(&settings, Path::new("/test-profile"), Some("model".into()));
+        let client = client_config(serving);
+        assert_eq!(client.network.join_tokens, vec!["selected-mesh"]);
+        assert_eq!(client.http.api_port, settings.api_port);
+        assert_eq!(
+            client.storage.config_path,
+            Some(Path::new("/test-profile/config.toml").into())
+        );
+    }
+
     #[test]
     fn private_origin_and_join_never_fall_back_to_public_or_allowlist() {
         for invite in [None, Some("their-token".into())] {

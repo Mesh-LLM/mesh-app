@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use mesh_tray::{identity, settings};
+mod compute_menu;
 mod invites;
 mod lifecycle;
 #[cfg(target_os = "macos")]
@@ -21,6 +22,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
+    compute: compute_menu::ComputeMenu,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
     _tray: TrayIcon,
@@ -124,8 +126,10 @@ impl App {
             .map_err(|e| e.to_string())?;
         let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
         let payments = self.pay.submenu()?;
+        let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
         menu.append_items(&[
             &chat,
+            compute.item(),
             &PredefinedMenuItem::separator(),
             &public,
             &private,
@@ -136,6 +140,7 @@ impl App {
             &quit,
         ])
         .map_err(|e| e.to_string())?;
+        compute.attach(&menu)?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon())
@@ -144,6 +149,7 @@ impl App {
             .build()
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
+            compute,
             public,
             private,
             _tray: tray,
@@ -232,7 +238,9 @@ impl App {
         }
         // Their `[[models]]` wins: a `--model` flag would beat the file, so when
         // the file names models the tray passes none and stays out of the way.
-        let model = if mesh_tray::runtime_config::config_declares_models(&profile) {
+        let model = if !self.settings.share_compute {
+            None
+        } else if mesh_tray::runtime_config::config_declares_models(&profile) {
             use std::io::Write;
             writeln!(
                 &log,
@@ -249,7 +257,7 @@ impl App {
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
         let config = lifecycle::config(&self.settings, &profile, model);
-        Engine::start(config)
+        Engine::start(config, self.settings.share_compute)
     }
 
     fn open(&mut self, path: &'static str) {
@@ -323,6 +331,7 @@ impl App {
             }
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
+                "compute" => self.toggle_compute(),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite" => self.invite(),
@@ -395,6 +404,14 @@ impl App {
                     .into(),
             );
         }
+        if let Some(ui) = &self.ui {
+            ui.compute.sync(
+                self.settings.share_compute,
+                self.stopping.is_none()
+                    && self.pending_settings.is_none()
+                    && self.started.is_none(),
+            );
+        }
         let target = self.pay_target();
         self.pay.tick(target);
         if !self.polling && Instant::now() >= self.next_poll {
@@ -416,6 +433,18 @@ impl App {
         if ui.private.is_checked() != private {
             ui.private.set_checked(private);
         }
+    }
+
+    fn toggle_compute(&mut self) {
+        if let Some(ui) = &self.ui {
+            ui.compute.sync(self.settings.share_compute, false);
+        }
+        if self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some() {
+            return;
+        }
+        let mut next = self.settings.clone();
+        next.share_compute = !next.share_compute;
+        self.queue_settings(next);
     }
 
     fn change_mode(&mut self, connection: settings::Connection) {
@@ -760,6 +789,26 @@ mod transaction_tests {
     fn app(root: &std::path::Path) -> App {
         App::new(root.into(), settings::Settings::default())
     }
+    #[cfg(unix)]
+    #[test]
+    fn compute_toggle_stops_owned_engine_and_preserves_mesh_until_exit() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.settings.accept_seed("selected-mesh").unwrap();
+        app.settings.save(root.path()).unwrap();
+        let (engine, mut stop, _done) = Engine::fixture();
+        app.child = Some(engine);
+        app.toggle_compute();
+        assert_eq!(stop.try_recv(), Ok(()));
+        assert!(app.settings.share_compute);
+        assert!(settings::Settings::load(root.path()).unwrap().share_compute);
+        let pending = app.pending_settings.as_ref().unwrap();
+        assert!(!pending.share_compute);
+        assert_eq!(pending.connection, app.settings.connection);
+        app.toggle_compute();
+        assert!(!app.pending_settings.as_ref().unwrap().share_compute);
+    }
+
     #[test]
     fn failed_save_leaves_current_memory_and_disk_unchanged() {
         let root = tempfile::tempdir().unwrap();

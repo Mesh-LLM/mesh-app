@@ -110,3 +110,19 @@ this invoice's payment hash in the wallet's transactions; balance growth is not
 treated as receipt. Funding never enables spending. The tray serves one model,
 so Get paid prices that model (same price for input and output). No send/withdraw UI. Forms are AppKit only;
 other platforms say so.
+
+## Share compute
+
+One persisted launcher preference, defaulting on to preserve existing behaviour.
+The macOS menu row uses an AppKit NSSwitch forwarding to the existing muda
+menu action; other platforms use a checked item. No model picker or payment
+policy is added. The switch reflects the saved serving preference, not proof
+that a model is healthy.
+
+Changing it cooperatively stops the retained embedded engine, waits for exit,
+saves the preference, and restarts via the SDK serve/client entry point. Off
+skips automatic model selection and uses client mode, not an empty serve-model
+list (which could still load configured models). Connection, invites, identity,
+ports and payment policy are unchanged. Active requests can be interrupted by
+the restart. No live engine or Keychain-touching validation is automated here;
+menu interaction, accessibility and actual unload/rejoin need a human trial.
