@@ -178,7 +178,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -189,7 +189,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1327,7 +1327,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1895,7 +1895,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2107,7 +2107,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3763,9 +3763,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "lexe"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb3657aa142452c1b350b61588449c0ea8b4b4bc75527e6e206094bf439f08f4"
+checksum = "9041fa825aa3378695ee22be046c5b98874a25c283eafbead8f66c8aaa8ea289"
 dependencies = [
  "anyhow",
  "bip39",
@@ -3792,9 +3792,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-api"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5b924047fb26f5e54362949a7e1d102da60bcb250e4bb607b06c60ffb06c4ed"
+checksum = "3b10a8f1fcc9c66c4e11d92a5e79e9ef301f99022b49086a08f41f52ae139c12"
 dependencies = [
  "anyhow",
  "axum",
@@ -3828,9 +3828,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-api-core"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282524a6e3ffc8a95f489356d203d5b8a01300566a54ac7320a9a2d627e6019b"
+checksum = "12b523e83abbd852e41cc4f86597c4ae5c38983a366391b6fe1a8c0bf2e047fc"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3866,18 +3866,18 @@ dependencies = [
 
 [[package]]
 name = "lexe-byte-array"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c0d43a535c6bfa2577e2fc6c81d3f8fb68a0685bed8f2c4cee3e209cb7dc44f"
+checksum = "f3f176b1edbff11c64167b7d65de34cdd5e70eee49ce2154f427f37f7314ff81"
 dependencies = [
  "lexe-hex",
 ]
 
 [[package]]
 name = "lexe-common"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a0de8680b6813a6face532e8731d70fd42bd79c94e2f924a3f41cde99d15f1e"
+checksum = "4695648cadf142033eb6ed3038794730c5fbc0ed6d8e039dae732f213fb51b99"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3917,9 +3917,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-crypto"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f5438ca82fcc04e52e47131156622cb9ad46a89e99c42cc0b2e4e99df4ed476"
+checksum = "90689d4153a1b2548f3318e0dc5aef90aacf4eb8ec21da3906db8e707ae3b7e6"
 dependencies = [
  "bcs",
  "lexe-byte-array",
@@ -3936,9 +3936,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-enclave"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7e3d9c3ee3c61f9fcb11e9369fdddbfb3a56754438443a62a1c801b3710bcc3"
+checksum = "30da157e5db181644565b8d587ada4c183abe382fbc985c66dd8d12b2c2848b4"
 dependencies = [
  "cfg-if",
  "lexe-byte-array",
@@ -3953,15 +3953,15 @@ dependencies = [
 
 [[package]]
 name = "lexe-hex"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7603f69e20d49c6eb86483a78179ead7dac25694f8dc54e3424e76548e7cc15f"
+checksum = "22c4eb0eb5fd77dcb5945dd8807e79c50a6649181bd1447e7d58a87d0791d2f7"
 
 [[package]]
 name = "lexe-logger"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee74f94dfc4c429d1072f2fecac81a9c1d2f63e65fa5ff7a7106b5848c16da1f"
+checksum = "12d4c51401b9f88b52a9fa128dc559f6bf7975f0f2127a871744343460079919"
 dependencies = [
  "anyhow",
  "lexe-api",
@@ -3971,9 +3971,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-node-client"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "304007c1af743feb6fc2ef4710b48efea237b406a6ffcb55a72471bba03ac63d"
+checksum = "cd42ba866b5437a707ee8c1d3aab2004820b532b44dacd8f446648d8dd5e55f6"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -3991,9 +3991,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-payment-uri"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60f326fccb64e9297fd77a6f92f29dea3869fc27e1927adc1af8924e4e231bce"
+checksum = "585b58dd1c7002d874c4cbf965622eec8a2c59e509d2ca568d3a91296a29aa19"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -4015,9 +4015,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-payment-uri-core"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b73fe31370a667d71e5d1035e04d4f3afef0b813d90842793b06e8bdcbcf410"
+checksum = "9bb4c7f47dddab3b3961966668db2324553d67efd15e33b9749f037d29400231"
 dependencies = [
  "anyhow",
  "bech32 0.11.1",
@@ -4035,9 +4035,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-serde"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f27dbe3d8fecf44991c2b2d08b01479022711560a16f03e7cab64e84eb3e8af"
+checksum = "57b5574f3f7a8ba8cc5dd6e49f60aacebc297a511b8e012cad6525c736b33cdc"
 dependencies = [
  "base64 0.21.7",
  "lexe-hex",
@@ -4046,9 +4046,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-sha256"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a5581341bdcdfeabb02bef8ca9a7b458bf26a069f3d476cebabab29d55cc7d3"
+checksum = "b17ef0252799bef939b89858cf302810c7544ecd7486ef2233edb4ff2f45fe49"
 dependencies = [
  "lexe-byte-array",
  "lexe-std",
@@ -4058,18 +4058,18 @@ dependencies = [
 
 [[package]]
 name = "lexe-std"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df529accd920b01c63ff5cb2035a27ca61b83302d4c5b52da10ede50b0dafb30"
+checksum = "0482c1ee6470fd41a92162e6ae938f41e71bd3a4e587d13724a9c747c190ee3c"
 dependencies = [
  "ref-cast",
 ]
 
 [[package]]
 name = "lexe-tls"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7db1647e4bb09b7e7cb03e8ff66f69bc497a89d2f106a700fe95fa661311512e"
+checksum = "59b3bc0d9220d6fca46a471be8e9fdcf5bb89a36634417dc8d91f4a72b1d8bc5"
 dependencies = [
  "anyhow",
  "asn1-rs",
@@ -4101,9 +4101,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-tls-core"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4eefba04f51f0160125afd77964e9f59dedd7608ae3f6a1ce47151ef2d99b9a"
+checksum = "63b88bd8fa971de49327c1c4d6b957268a62f209e4ad981f3f60170ec1c9b5cc"
 dependencies = [
  "rustls",
  "rustls-webpki",
@@ -4112,9 +4112,9 @@ dependencies = [
 
 [[package]]
 name = "lexe-tokio"
-version = "0.1.23"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fefbbf610cb8e9c43a8ae59ea5f1308c877963e88bb16ec4e292bb82ee379508"
+checksum = "7bf09dfe95d8662898fdd49b5c580568c17021e7b9928a1bc94b9462b29ef82d"
 dependencies = [
  "futures",
  "thiserror 2.0.20",
@@ -4455,7 +4455,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-analytics"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4473,7 +4473,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-api-client"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "hex",
  "mesh-llm-client",
@@ -4483,7 +4483,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-api-server"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "mesh-llm-api-client",
@@ -4494,12 +4494,12 @@ dependencies = [
 [[package]]
 name = "mesh-llm-build-info"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 
 [[package]]
 name = "mesh-llm-client"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4525,7 +4525,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-config"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4542,7 +4542,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-console-server"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "mesh-llm-ui",
@@ -4552,7 +4552,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-embedded-runtime"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "mesh-llm-host-runtime",
 ]
@@ -4560,7 +4560,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-events"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4577,7 +4577,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-gpu-bench"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "serde",
  "serde_json",
@@ -4587,7 +4587,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-guardrails"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "serde_json",
 ]
@@ -4595,7 +4595,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-hardware-profile"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "mesh-llm-native-runtime",
 ]
@@ -4632,7 +4632,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-host-runtime"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4726,7 +4726,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-identity"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "apple-native-keyring-store",
  "argon2",
@@ -4749,7 +4749,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-log-store"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "chrono",
  "data-encoding",
@@ -4766,7 +4766,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-native-runtime"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "hex",
@@ -4778,7 +4778,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-node"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "mesh-llm-types",
@@ -4792,7 +4792,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-payments"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4807,7 +4807,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-plugin"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4824,7 +4824,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-plugin-manager"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4844,7 +4844,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-protocol"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "hex",
@@ -4857,7 +4857,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-release-footer"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "hex",
  "sha2 0.11.0",
@@ -4866,7 +4866,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-routing"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "blake3",
  "iroh",
@@ -4877,7 +4877,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-runtime-event-contracts"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "uuid",
 ]
@@ -4885,7 +4885,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-runtime-install"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4909,7 +4909,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-sdk"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "mesh-llm-api-client",
@@ -4925,7 +4925,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-skills"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "dirs",
@@ -4936,7 +4936,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-system"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4965,7 +4965,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-types"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "hex",
  "serde",
@@ -4976,7 +4976,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-ui"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "include_dir",
 ]
@@ -4984,7 +4984,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-wallet"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5002,7 +5002,7 @@ dependencies = [
 [[package]]
 name = "mesh-mixture-of-agents"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "async-trait",
  "mesh-llm-guardrails",
@@ -5016,12 +5016,12 @@ dependencies = [
 [[package]]
 name = "mesh-native-serving-plugin-api"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 
 [[package]]
 name = "mesh-native-serving-plugin-host"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "libloading 0.9.0",
@@ -5065,7 +5065,7 @@ dependencies = [
 [[package]]
 name = "mesh-wallet-lexe"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5136,7 +5136,7 @@ dependencies = [
 [[package]]
 name = "model-artifact"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5147,7 +5147,7 @@ dependencies = [
 [[package]]
 name = "model-hf"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5169,7 +5169,7 @@ dependencies = [
 [[package]]
 name = "model-ref"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "serde",
 ]
@@ -5177,7 +5177,7 @@ dependencies = [
 [[package]]
 name = "model-resolver"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "model-artifact",
@@ -5725,7 +5725,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5833,7 +5833,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 1.3.1",
+ "proc-macro-crate 2.0.2",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -6310,7 +6310,7 @@ dependencies = [
 [[package]]
 name = "openai-frontend"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "async-trait",
  "axum",
@@ -7086,7 +7086,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools",
  "log",
  "multimap",
@@ -7263,7 +7263,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7889,7 +7889,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7957,7 +7957,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8502,7 +8502,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 [[package]]
 name = "skippy-cache"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "blake3",
@@ -8512,7 +8512,7 @@ dependencies = [
 [[package]]
 name = "skippy-coordinator"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "thiserror 2.0.20",
 ]
@@ -8520,7 +8520,7 @@ dependencies = [
 [[package]]
 name = "skippy-ffi"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "libloading 0.9.0",
 ]
@@ -8528,12 +8528,12 @@ dependencies = [
 [[package]]
 name = "skippy-metrics"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 
 [[package]]
 name = "skippy-model"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "clap",
@@ -8547,7 +8547,7 @@ dependencies = [
 [[package]]
 name = "skippy-package-format"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "serde",
  "serde_json",
@@ -8557,7 +8557,7 @@ dependencies = [
 [[package]]
 name = "skippy-protocol"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "prost",
  "prost-build",
@@ -8569,7 +8569,7 @@ dependencies = [
 [[package]]
 name = "skippy-runtime"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "anyhow",
  "crossbeam-queue",
@@ -8587,7 +8587,7 @@ dependencies = [
 [[package]]
 name = "skippy-scheduler"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "skippy-runtime",
  "thiserror 2.0.20",
@@ -8596,7 +8596,7 @@ dependencies = [
 [[package]]
 name = "skippy-server"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "ahash",
  "anyhow",
@@ -8631,7 +8631,7 @@ dependencies = [
 [[package]]
 name = "skippy-tokenizer"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "serde",
 ]
@@ -8639,7 +8639,7 @@ dependencies = [
 [[package]]
 name = "skippy-topology"
 version = "0.76.1"
-source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=5b2f3dac7ad9b5e5e8c3227c9756880d50acb909#5b2f3dac7ad9b5e5e8c3227c9756880d50acb909"
+source = "git+https://github.com/Mesh-LLM/mesh-llm?rev=4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb#4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb"
 dependencies = [
  "serde",
  "serde_json",
@@ -8709,7 +8709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9007,7 +9007,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9020,7 +9020,7 @@ dependencies = [
  "parking_lot",
  "rustix 1.1.4",
  "signal-hook",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9734,7 +9734,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10310,7 +10310,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
