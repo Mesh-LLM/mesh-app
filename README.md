@@ -103,7 +103,7 @@ installed RAM minus max(2 GiB, 25%). Recipe budgets include upstream's 64K
 context/runtime estimate, not just weights. References pin upstream GGUF revisions.
 Only Apple Silicon is currently positively identified as unified GPU memory;
 Linux and Intel Macs use the CPU recipe (4B), never host RAM as discrete VRAM.
-Windows retains its existing launch gate. Dedicated GPU discovery is not implemented.
+Windows starts the embedded engine (see CI below). Dedicated GPU discovery is not implemented.
 Linux reads MemAvailable and the root cgroup-v2 memory limit; nested/cgroup-v1
 limits are not comprehensively detected. Disk-space admission is left to the
 engine downloader, unlike upstream setup's disk preflight.
@@ -151,10 +151,11 @@ covered by unit tests.
 
 Candidate-specific menu-bar verification is separate from engine restart coverage.
 For durable private restart with an engine containing #1896, see [DESIGN.md](DESIGN.md).
-Windows is launch-gated;
+Windows is no longer launch-gated: CI starts and stops the real embedded engine
+on Windows, macOS and Linux (isolated, no network, no model) and publishes
+`mesh-tray.exe` as an artifact. Hand-testing the Windows tray UI is still pending.
 Linux support is deferred: its existing code is experimental and not natively
-verified. Windows product support is also deferred; CI compilation/tests do not
-remove the launch gate.
+verified.
 
 ### Testing an unreleased engine fix
 

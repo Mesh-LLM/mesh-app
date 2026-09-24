@@ -163,9 +163,6 @@ impl App {
     }
 
     fn spawn(&self) -> Result<Engine, String> {
-        if cfg!(windows) {
-            return Err("Windows is not supported by this tray yet. Your existing Mesh state was not touched.".into());
-        }
         for port in [self.settings.console_port, self.settings.api_port] {
             if std::net::TcpStream::connect_timeout(
                 &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -697,10 +694,13 @@ fn main() {
         let _profile_lock = identity::lock_profile(&root)?;
         // Process environment is configured before App creates any threads.
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let runtimes = exe
-            .parent()
-            .ok_or("Cannot locate app executable")?
-            .join("../Resources/engine/native-runtimes");
+        let exe_dir = exe.parent().ok_or("Cannot locate app executable")?;
+        // macOS: inside the .app bundle. Windows: beside mesh-tray.exe.
+        let runtimes = if cfg!(windows) {
+            exe_dir.join("native-runtimes")
+        } else {
+            exe_dir.join("../Resources/engine/native-runtimes")
+        };
         if runtimes.is_dir() {
             std::env::set_var("MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR", runtimes);
         }
