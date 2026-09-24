@@ -1,7 +1,10 @@
-//! One serving preference, shown as a standard checkmark menu item whose
-//! title states the current state. (An `NSSwitch` embedded in an `NSMenu`
-//! breaks menu tracking and renders grey, so macOS uses a check here too.)
+//! One serving preference, shown as a standard checkmark menu item with a
+//! fixed title; the checkmark alone carries state (macOS menu idiom, like
+//! "Show Sidebar"). An `NSSwitch` embedded in an `NSMenu` breaks menu
+//! tracking and renders grey, so macOS uses a check here too.
 use muda::CheckMenuItem;
+
+pub const TITLE: &str = "Share compute";
 
 pub struct ComputeMenu {
     item: CheckMenuItem,
@@ -10,7 +13,7 @@ pub struct ComputeMenu {
 impl ComputeMenu {
     pub fn new(enabled: bool) -> Self {
         Self {
-            item: CheckMenuItem::with_id("compute", title(enabled), true, enabled, None),
+            item: CheckMenuItem::with_id("compute", TITLE, true, enabled, None),
         }
     }
 
@@ -21,32 +24,11 @@ impl ComputeMenu {
     /// `busy` briefly disables the item while the engine restarts, so
     /// overlapping start/stop requests cannot be queued.
     pub fn sync(&self, sharing: bool, busy: bool) {
-        let text = title(sharing);
-        if self.item.text() != text {
-            self.item.set_text(text);
-        }
         if self.item.is_checked() != sharing {
             self.item.set_checked(sharing);
         }
         if self.item.is_enabled() == busy {
             self.item.set_enabled(!busy);
         }
-    }
-}
-
-pub fn title(sharing: bool) -> &'static str {
-    if sharing {
-        "Sharing compute"
-    } else {
-        "Not sharing compute"
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn title_states_current_state() {
-        assert_eq!(super::title(true), "Sharing compute");
-        assert_eq!(super::title(false), "Not sharing compute");
     }
 }
