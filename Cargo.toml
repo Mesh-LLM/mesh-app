@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 # Immutable upstream revision; no dependency on another local checkout.
-mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "5b2f3dac7ad9b5e5e8c3227c9756880d50acb909", features = ["host-io"] }
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "5b2f3dac7ad9b5e5e8c3227c9756880d50acb909", default-features = false, features = ["serving", "console", "payments"] }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "5b2f3dac7ad9b5e5e8c3227c9756880d50acb909", default-features = false, features = ["wallet-lexe"] }
-mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "5b2f3dac7ad9b5e5e8c3227c9756880d50acb909" }
+mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb", default-features = false, features = ["serving", "console", "payments"] }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb", default-features = false, features = ["wallet-lexe"] }
+mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "4a97a874fc3f645da7a8ce2c1913a4975bd1f2fb" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
