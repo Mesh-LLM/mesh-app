@@ -140,7 +140,6 @@ impl App {
             &quit,
         ])
         .map_err(|e| e.to_string())?;
-        compute.attach(&menu)?;
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon())
@@ -404,13 +403,9 @@ impl App {
                     .into(),
             );
         }
+        let (sharing, busy) = self.compute_view();
         if let Some(ui) = &self.ui {
-            ui.compute.sync(
-                self.settings.share_compute,
-                self.stopping.is_none()
-                    && self.pending_settings.is_none()
-                    && self.started.is_none(),
-            );
+            ui.compute.sync(sharing, busy);
         }
         let target = self.pay_target();
         self.pay.tick(target);
@@ -435,16 +430,31 @@ impl App {
         }
     }
 
+    /// Requested sharing state, and whether an engine restart is in flight.
+    fn compute_view(&self) -> (bool, bool) {
+        let busy =
+            self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some();
+        let sharing = self
+            .pending_settings
+            .as_ref()
+            .map_or(self.settings.share_compute, |next| next.share_compute);
+        (sharing, busy)
+    }
+
     fn toggle_compute(&mut self) {
+        // muda auto-toggles the check before dispatch; queue first, then
+        // render the requested state with its transition label.
+        let busy =
+            self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some();
+        if !busy {
+            let mut next = self.settings.clone();
+            next.share_compute = !next.share_compute;
+            self.queue_settings(next);
+        }
+        let (sharing, busy) = self.compute_view();
         if let Some(ui) = &self.ui {
-            ui.compute.sync(self.settings.share_compute, false);
+            ui.compute.sync(sharing, busy);
         }
-        if self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some() {
-            return;
-        }
-        let mut next = self.settings.clone();
-        next.share_compute = !next.share_compute;
-        self.queue_settings(next);
     }
 
     fn change_mode(&mut self, connection: settings::Connection) {
