@@ -213,6 +213,9 @@ impl Client {
             agent: ureq::AgentBuilder::new()
                 .timeout(Duration::from_secs(10))
                 .redirects(0)
+                // Reusing a pooled connection to the console failed the next
+                // request with Transport (tests/isolated_wallet.rs). One per call.
+                .max_idle_connections(0)
                 .build(),
         }
     }

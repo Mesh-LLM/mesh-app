@@ -41,5 +41,11 @@ objc2-app-kit = "0.3"
 clipboard-win = "5"
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 
+# Manual, real-engine wallet check in a throwaway profile. harness = false so
+# it can serve the engine's `current_exe --plugin wallet-lexe` re-exec itself.
+[[test]]
+name = "isolated_wallet"
+harness = false
+
 [profile.release]
 strip = true
