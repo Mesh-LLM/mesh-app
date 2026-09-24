@@ -5041,6 +5041,7 @@ dependencies = [
  "libc",
  "mesh-llm-host-runtime",
  "mesh-llm-identity",
+ "mesh-llm-payments",
  "mesh-llm-sdk",
  "muda",
  "objc2 0.6.4",

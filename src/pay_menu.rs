@@ -15,10 +15,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-const REFRESH: Duration = Duration::from_secs(20);
-/// Mesh's wallet side can lag its status endpoint; retry quickly for a while.
-const STARTUP_GRACE: Duration = Duration::from_secs(30);
-const STARTUP_RETRY: Duration = Duration::from_secs(2);
+/// Balance poll while Mesh is ready. Any action refreshes at once; a failed
+/// read just waits for the next tick and keeps the last good balance.
+const REFRESH: Duration = Duration::from_secs(10);
 /// Minimum invoice used when a price is first set; Mesh bills at least this.
 const DEFAULT_MINIMUM_MSAT: u64 = 10_000;
 
@@ -66,7 +65,6 @@ pub struct Payments {
     shown: String,
     /// Last good balance; a failed read never clears it.
     balance: Option<u64>,
-    ready_since: Option<Instant>,
     next_refresh: Instant,
     refreshing: bool,
     jobs: Sender<(u16, u32, Job)>,
@@ -93,7 +91,6 @@ impl Payments {
             menu: None,
             shown: String::new(),
             balance: None,
-            ready_since: None,
             next_refresh: Instant::now(),
             refreshing: false,
             jobs,
@@ -125,7 +122,6 @@ impl Payments {
     /// `target` is (console port, runtime pid) only while our own runtime is ready.
     pub fn tick(&mut self, target: Option<(u16, u32)>) {
         let now = Instant::now();
-        self.set_ready(target.is_some(), now);
         while let Ok(reply) = self.replies.try_recv() {
             self.handle(reply, target);
         }
@@ -144,15 +140,6 @@ impl Payments {
         }
     }
 
-    /// Becoming ready reads the balance at once instead of on the timer.
-    fn set_ready(&mut self, ready: bool, now: Instant) {
-        if ready == self.ready_since.is_some() {
-            return;
-        }
-        self.ready_since = ready.then_some(now);
-        self.next_refresh = now;
-    }
-
     fn send(&mut self, (port, pid): (u16, u32), job: Job) {
         let _ = self.jobs.send((port, pid, job));
     }
@@ -161,17 +148,8 @@ impl Payments {
         match reply {
             Reply::Balance(result) => {
                 self.refreshing = false;
-                match result {
-                    Ok(b) => self.balance = Some(b.spendable_msat),
-                    Err(_) => {
-                        let now = Instant::now();
-                        if self
-                            .ready_since
-                            .is_some_and(|since| now.duration_since(since) < STARTUP_GRACE)
-                        {
-                            self.next_refresh = now + STARTUP_RETRY;
-                        }
-                    }
+                if let Ok(b) = result {
+                    self.balance = Some(b.spendable_msat);
                 }
             }
             Reply::Policy(Ok(status)) => {
@@ -599,16 +577,5 @@ mod tests {
         );
         p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
         assert_eq!(p.balance, Some(5_000));
-    }
-
-    #[test]
-    fn becoming_ready_reads_now_and_startup_failures_retry_fast() {
-        let mut p = Payments::new(None);
-        p.next_refresh = Instant::now() + Duration::from_secs(3600);
-        p.set_ready(true, Instant::now());
-        assert!(p.next_refresh <= Instant::now());
-        p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
-        assert!(p.next_refresh <= Instant::now() + STARTUP_RETRY);
-        assert_eq!(p.balance, None);
     }
 }

@@ -66,7 +66,7 @@ fn disabling_price_removes_it_instead_of_sending_zero() {
         model: "canonical-model".into(),
         value: None,
     };
-    assert!(command.validate().is_ok());
+    assert!(validate(&command).is_ok());
     assert_eq!(
         serde_json::to_value(command).unwrap(),
         serde_json::json!({"command":"set_pricing","model":"canonical-model","value":null})

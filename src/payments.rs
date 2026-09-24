@@ -1,31 +1,20 @@
 //! Local operator contract. Constructing this client performs no wallet calls.
 //! Wallet reads/funding must follow an explicit user setup/action, never polling
 //! on first mount. The engine ledger, not launcher preferences, owns policy.
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io::Read;
 use std::time::Duration;
 
 const MAX_RESPONSE: u64 = 2 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    FreeOnly,
-    Automatic,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Policy {
-    pub mode: Mode,
-    pub daily_budget_msat: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Pricing {
-    pub input_msat_per_million: u64,
-    pub output_msat_per_million: u64,
-    pub minimum_invoice_msat: u64,
-}
+// Request/response types come from the engine crates so the tray cannot drift
+// from the contract the CLI uses. Only the two JSON-object replies that the
+// engine builds inline (policy status, balance) are declared here.
+pub use mesh_llm_payments::control::ControlCommand as Command;
+pub use mesh_llm_payments::invoice::Invoice as FundingInvoice;
+pub use mesh_llm_payments::ledger::{ApprovalMode as Mode, Policy};
+pub use mesh_llm_payments::pricing::Pricing;
+pub use mesh_llm_payments::wallet::{PaymentStatus, Transaction};
 
 #[derive(Debug, Deserialize)]
 pub struct PolicyStatus {
@@ -40,32 +29,6 @@ pub struct PolicyStatus {
 pub struct Balance {
     pub spendable_msat: u64,
     pub available_for_inference_msat: u64,
-}
-
-// Deliberately not Debug: invoices should not leak through diagnostic dumps.
-#[derive(Deserialize)]
-pub struct FundingInvoice {
-    pub bolt11: String,
-    pub payment_hash: String,
-    pub payee: String,
-    pub amount_msat: Option<u64>,
-    pub expires_at_ms: u64,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PaymentStatus {
-    Pending,
-    Succeeded,
-    Failed,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Transaction {
-    pub payment_hash: Option<String>,
-    pub inbound: bool,
-    pub amount_msat: u64,
-    pub status: PaymentStatus,
 }
 
 /// What the wallet reports for one funding invoice. Absence from a bounded
@@ -114,57 +77,34 @@ pub fn format_sats(msat: u64) -> String {
     format!("{out} {}", if msat / 1000 == 1 { "sat" } else { "sats" })
 }
 
-#[derive(Serialize)]
-#[serde(tag = "command", rename_all = "snake_case")]
-pub enum Command {
-    Policy {
-        value: Option<Policy>,
-    },
-    Pricing,
-    SetPricing {
-        model: String,
-        value: Option<Pricing>,
-    },
-    Balance,
-    /// `None` asks the payer's wallet to choose the amount.
-    Fund {
-        amount_msat: Option<u64>,
-    },
-    Transactions {
-        limit: usize,
-    },
-}
-
-impl Command {
-    fn validate(&self) -> Result<(), Error> {
-        match self {
-            Self::Policy {
-                value: Some(policy),
-            } if policy.mode == Mode::Automatic
-                && !policy.daily_budget_msat.is_some_and(valid_amount) =>
-            {
-                Err(Error::InvalidInput("Enter a positive daily allowance"))
-            }
-            Self::SetPricing { model, value } => {
-                if model.trim().is_empty() {
-                    return Err(Error::InvalidInput("Select a served model"));
-                }
-                if value.as_ref().is_some_and(|price| {
-                    !valid_amount(price.input_msat_per_million)
-                        || !valid_amount(price.output_msat_per_million)
-                        || !valid_amount(price.minimum_invoice_msat)
-                }) {
-                    return Err(Error::InvalidInput("Paid prices must be positive"));
-                }
-                Ok(())
-            }
-            Self::Fund {
-                amount_msat: Some(amount_msat),
-            } if !valid_amount(*amount_msat) => {
-                Err(Error::InvalidInput("Enter a positive funding amount"))
-            }
-            _ => Ok(()),
+fn validate(command: &Command) -> Result<(), Error> {
+    match command {
+        Command::Policy {
+            value: Some(policy),
+        } if policy.mode == Mode::Automatic
+            && !policy.daily_budget_msat.is_some_and(valid_amount) =>
+        {
+            Err(Error::InvalidInput("Enter a positive daily allowance"))
         }
+        Command::SetPricing { model, value } => {
+            if model.trim().is_empty() {
+                return Err(Error::InvalidInput("Select a served model"));
+            }
+            if value.as_ref().is_some_and(|price| {
+                !valid_amount(price.input_msat_per_million)
+                    || !valid_amount(price.output_msat_per_million)
+                    || !valid_amount(price.minimum_invoice_msat)
+            }) {
+                return Err(Error::InvalidInput("Paid prices must be positive"));
+            }
+            Ok(())
+        }
+        Command::Fund {
+            amount_msat: Some(amount_msat),
+        } if !valid_amount(*amount_msat) => {
+            Err(Error::InvalidInput("Enter a positive funding amount"))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -221,7 +161,7 @@ impl Client {
     }
 
     pub fn execute<T: serde::de::DeserializeOwned>(&self, command: &Command) -> Result<T, Error> {
-        command.validate()?;
+        validate(command)?;
         let mut body =
             serde_json::to_value(command).map_err(|_| Error::InvalidInput("Invalid command"))?;
         body["expected_pid"] = self.expected_pid.into();
