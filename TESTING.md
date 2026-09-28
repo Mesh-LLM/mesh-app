@@ -35,4 +35,25 @@ Use a clean macOS user or move `~/.mesh-llm` and `~/.mesh-app` aside first.
    form. If funds are available, send a small payment between two machines and
    confirm it is received.
 4. Quit and relaunch: no second keychain prompt, and settings persist.
-5. Reset: the profile is removed and the next launch is a first run.
+5. Reset: paying/charging are off, launcher defaults are restored, and private
+   policy/membership are retired. Owner credentials, wallet/history, config and
+   models remain. Create a new private mesh and verify old members cannot enter;
+   separately accept a new invite after Reset. Never remove the real profile as
+   part of agent validation.
+
+## Private reset regression evidence
+
+The pinned v0.77.0 (`4ae1ace57`) engine has a separate test-only proof on
+[`dario/private-reset-proof`](https://github.com/Mesh-LLM/mesh-llm/commit/5ce1ff824d353588d3f6f5779549c8a632877a44):
+`mesh/tests/admission/requirements.rs::assert_private_reset_retires_old_members_and_invites`.
+It deletes the same four files with a fixed in-memory test owner and temporary
+HOME, then exercises real peer admission: a new policy/mesh ID, old-member
+`MeshPolicyMismatch`, stale invite rejection and fresh invite acceptance.
+It does not touch Keychain or prove the native menu journey. Tray package tests
+separately assert byte-preservation of credential/wallet/config fixtures,
+interrupted retirement, invalid file types, failed settings save, payment-off
+verification, failed shutdown and Quit while a transition is pending.
+
+Dario ran the full host-runtime package at `5ce1ff824`: 4072 library tests
+passed, 11 ignored, plus all integration binaries (25 tests) passed. This is
+the release source plus the test-only proof, not a new engine dependency.

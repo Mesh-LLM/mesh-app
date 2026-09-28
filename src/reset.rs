@@ -1,16 +1,6 @@
-//! Changing mode forgets this Mesh. There is one concept, not two.
-//!
-//! Everything the tray remembers about a private Mesh is the invites that put
-//! this node in it. That set belongs to the Mesh you were running, so leaving
-//! it — going Public, or starting a new Private one — forgets it. Public trusts
-//! nobody in particular, so there is nothing left over to reset separately.
-//!
-//! Forgetting is complete on the tray's side: the next start declares no
-//! invite, so it creates its own Mesh rather than rejoining theirs. It is not a
-//! revocation, and nothing claims it is: people who hold a valid invite to a
-//! Mesh you created can still use it, because the engine has no mesh-wide
-//! eviction. The machine's Mesh identity, the engine config and downloaded
-//! models are never touched.
+//! Connection changes only replace launcher preferences.
+//! Explicit Reset additionally retires engine membership through `private_reset`
+//! after verified shutdown; this function alone does not revoke membership.
 use crate::settings::{Connection, Settings};
 
 /// The settings to start in `connection`, having forgotten the Mesh you were in.
@@ -52,7 +42,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_private_mesh_is_its_own_mesh_not_the_one_just_left() {
+    fn switching_private_clears_the_launcher_invite() {
         let after = switching_to(&joined(), Connection::Private { invite: None });
         after.validate().unwrap();
         assert_eq!(after.connection, Connection::Private { invite: None });

@@ -64,3 +64,35 @@ The tray build carrying it is covered by unit tests, fmt/check/Clippy `-D
 warnings`, and is **not yet clicked through in the menu bar by a human**. The engine-level expiry/restart behavior is implemented and was exercised by
 the #1896 live matrix; see DESIGN.md. Candidate-specific UI behavior, including
 the expired-token message for a new joiner, still needs human verification.
+
+## Private automatic model tiers
+
+On Apple Silicon, Qwen3.8-27B requires at least 128 GiB total RAM and
+22 GiB of available-memory budget. Gemma 4 12B is the default on 64-GiB
+machines; its floor remains 24 GiB with a 12-GiB budget. Qwen3.5-4B is the
+16-GiB tier with a 6-GiB budget. Memory pressure can select a smaller tier.
+Non-accelerated platforms retain the small-model recipe.
+
+This is the tray's Private-mode policy only. Public still delegates model
+selection to the engine's `serve --auto` policy. An explicit `[[models]]`
+configuration takes precedence over the tray's automatic selection.
+
+## Reset contract (supersedes the earlier mode-only reset)
+
+Reset settings is an explicit menu action. It disables paying/charging, waits
+for this app's engine to stop successfully, retires private mesh policy and
+membership, and restores launcher defaults. Afterwards the user can accept a
+new invite or originate a fresh private mesh; old membership is not admission
+to that new mesh. Owner credentials, funds/history, config and models survive.
+Public remains open discovery. Custom node-key configurations fail
+closed rather than resetting another namespace. Keep other apps using the
+shared engine profile stopped while resetting. See DESIGN.md for interruption
+and failure semantics.
+
+A full Reset requires a healthy owned engine to verify payments are off. If
+startup fails, quit/reopen and repair startup first; Reset does not claim a
+partial success with spending potentially enabled. An interrupted retirement
+marker can be resumed without starting the engine.
+
+The embedded SDK, payment types and matching packaged native runtime are pinned
+to the Mesh v0.77.0 release commit `4ae1ace57dbbe28d0c3d10a05ee542328e8e64e7`.

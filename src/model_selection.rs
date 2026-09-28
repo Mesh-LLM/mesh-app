@@ -31,7 +31,7 @@ fn choose(total: u64, available: u64, accelerated: bool) -> Result<Option<&'stat
     }
     let budget = available.min(total.saturating_sub((2 * GIB).max(total / 4)));
     for (model, floor, required, gpu) in [
-        (LARGE, 32, 22, true),
+        (LARGE, 128, 22, true),
         (GEMMA, 24, 12, true),
         (SMALL, 16, 6, false),
     ] {
@@ -102,12 +102,21 @@ mod tests {
 
     #[test]
     fn recipes_reserve_context_and_host_headroom() {
-        for (size, expected) in [(16, SMALL), (24, GEMMA), (32, LARGE), (128, LARGE)] {
+        for (size, expected) in [
+            (16, SMALL),
+            (24, GEMMA),
+            (32, GEMMA),
+            (64, GEMMA),
+            (96, GEMMA),
+            (128, LARGE),
+        ] {
             assert_eq!(
                 choose(size * GIB, size * GIB, true).unwrap(),
                 Some(expected)
             );
         }
+        assert_eq!(choose(127 * GIB, 127 * GIB, true).unwrap(), Some(GEMMA));
+        assert_eq!(choose(128 * GIB, 12 * GIB, true).unwrap(), Some(GEMMA));
         assert_eq!(choose(128 * GIB, 128 * GIB, false).unwrap(), Some(SMALL));
         assert_eq!(choose(32 * GIB, 12 * GIB, true).unwrap(), Some(GEMMA));
         assert_eq!(choose(32 * GIB, 10 * GIB, true).unwrap(), Some(SMALL));

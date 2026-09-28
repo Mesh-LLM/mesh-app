@@ -9,7 +9,9 @@ mod native;
 #[path = "native_portable.rs"]
 mod native;
 mod pay_menu;
+mod payment_reset;
 mod qr;
+mod settings_actions;
 mod status;
 
 use lifecycle::Engine;
@@ -31,11 +33,13 @@ struct Ui {
 struct App {
     settings: settings::Settings,
     pending_settings: Option<settings::Settings>,
+    resetting: bool,
+    retire_private: bool,
     root: PathBuf,
     ui: Option<Ui>,
     child: Option<Engine>,
     rx: Receiver<status::Snapshot>,
-    tx: Sender<()>,
+    tx: Sender<u16>,
     snapshot: status::Snapshot,
     next_poll: Instant,
     polling: bool,
@@ -75,11 +79,10 @@ mod icon_tests {
 
 impl App {
     fn new(root: PathBuf, settings: settings::Settings) -> Self {
-        let port = settings.console_port;
         let (tx, jobs) = mpsc::channel();
         let (results, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            while jobs.recv().is_ok() {
+            while let Ok(port) = jobs.recv() {
                 if results.send(status::snapshot(port)).is_err() {
                     break;
                 }
@@ -89,6 +92,8 @@ impl App {
             root,
             settings,
             pending_settings: None,
+            resetting: false,
+            retire_private: false,
             ui: None,
             child: None,
             rx,
@@ -124,7 +129,7 @@ impl App {
                 &MenuItem::with_id("join", "Join with an invite…", true, None),
             ])
             .map_err(|e| e.to_string())?;
-        let retry = MenuItem::with_id("retry", "Retry startup…", true, None);
+        let reset = MenuItem::with_id("reset", "Reset settings…", true, None);
         let payments = self.pay.submenu()?;
         let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
         menu.append_items(&[
@@ -136,7 +141,7 @@ impl App {
             &people,
             &payments,
             &PredefinedMenuItem::separator(),
-            &retry,
+            &reset,
             &quit,
         ])
         .map_err(|e| e.to_string())?;
@@ -198,6 +203,9 @@ impl App {
         // it exists without unlocking it; the runtime child unlocks the key, so
         // the user sees one credential prompt, not two.
         let profile = settings::mesh_profile()?;
+        if mesh_tray::private_reset::pending(&self.root) {
+            return Err("An interrupted reset must finish first. Choose Reset settings.".into());
+        }
         if matches!(
             self.settings.connection,
             settings::Connection::Private { .. }
@@ -276,7 +284,7 @@ impl App {
                 None => String::new(),
             };
             let body = format!(
-                "Mesh needs attention\n\n{message}\n\n{reason}Use Retry startup after fixing the installation.\nRuntime log: {}\n",
+                "Mesh needs attention\n\n{message}\n\n{reason}Quit and reopen Mesh after fixing the installation. Reset tray settings restores launcher defaults, not the engine installation.\nRuntime log: {}\n",
                 log.display()
             );
             if std::fs::write(&details, body).is_ok() {
@@ -297,10 +305,12 @@ impl App {
     }
 
     fn quit(&mut self) {
+        self.resetting = false;
+        self.pending_settings = None;
+        self.retire_private = false;
         if self.stopping.is_some() {
             return;
         }
-        self.pending_settings = None;
         let Some(child) = &mut self.child else {
             self.exit = true;
             return;
@@ -314,12 +324,18 @@ impl App {
     /// Our own runtime's management port and pid, only once it is ready.
     fn pay_target(&self) -> Option<(u16, u32)> {
         let child = self.child.as_ref()?;
-        (self.snapshot.running && self.stopping.is_none() && self.pending_settings.is_none())
-            .then(|| (self.settings.console_port, child.id()))
+        (self.snapshot.running
+            && !self.resetting
+            && self.stopping.is_none()
+            && self.pending_settings.is_none())
+        .then(|| (self.settings.console_port, child.id()))
     }
 
     fn tick(&mut self) {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
+            if self.resetting && event.id.as_ref() != "quit" {
+                continue;
+            }
             let target = self.pay_target();
             let models = self.snapshot.serving_models.clone();
             if self.pay.click(event.id.as_ref(), target, &models) {
@@ -332,7 +348,7 @@ impl App {
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
                 "invite" => self.invite(),
                 "join" => self.join(),
-                "retry" => self.start(),
+                "reset" => self.reset_settings(),
                 "quit" => self.quit(),
                 _ => {}
             }
@@ -364,14 +380,18 @@ impl App {
                     self.started = None;
                     self.snapshot = status::Snapshot::default();
                     if self.stopping.take().is_some() {
-                        if self.pending_settings.is_some() {
+                        if code != "stopped" {
+                            self.pending_settings = None;
+                            self.retire_private = false;
+                            self.error = Some(format!("Shutdown was not verified: {code}. Quit and reopen Mesh. Reset was not completed."));
+                        } else if self.pending_settings.is_some() {
                             self.apply_pending();
                         } else {
                             self.exit = true;
                         }
                     } else {
                         self.error = Some(format!(
-                            "Mesh exited ({code}). Choose Open Chat to see startup details, then Retry startup."
+                            "Mesh exited ({code}). Choose Open Chat to see startup details, then quit and reopen Mesh."
                         ));
                     }
                 }
@@ -383,10 +403,8 @@ impl App {
             .stopping
             .is_some_and(|at| at.elapsed() > Duration::from_secs(20))
         {
-            self.stopping = None;
-            self.pending_settings = None;
             self.error = Some(
-                "Mesh did not stop. App remains open; retry Quit. No other processes were stopped."
+                "Mesh is still stopping. App remains open and will finish the requested change when shutdown completes. No other processes were stopped."
                     .into(),
             );
         }
@@ -406,8 +424,13 @@ impl App {
         }
         let target = self.pay_target();
         self.pay.tick(target);
+        if let Some(result) = self.pay.take_reset_result() {
+            if self.resetting {
+                self.complete_reset(result);
+            }
+        }
         if !self.polling && Instant::now() >= self.next_poll {
-            self.polling = self.tx.send(()).is_ok();
+            self.polling = self.tx.send(self.settings.console_port).is_ok();
             self.next_poll = Instant::now() + POLL;
         }
     }
@@ -429,8 +452,10 @@ impl App {
 
     /// Requested sharing state, and whether an engine restart is in flight.
     fn compute_view(&self) -> (bool, bool) {
-        let busy =
-            self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some();
+        let busy = self.resetting
+            || self.stopping.is_some()
+            || self.pending_settings.is_some()
+            || self.started.is_some();
         let sharing = self
             .pending_settings
             .as_ref()
@@ -441,8 +466,10 @@ impl App {
     fn toggle_compute(&mut self) {
         // muda auto-toggles the check before dispatch; queue first, then
         // render the requested state with its transition label.
-        let busy =
-            self.stopping.is_some() || self.pending_settings.is_some() || self.started.is_some();
+        let busy = self.resetting
+            || self.stopping.is_some()
+            || self.pending_settings.is_some()
+            || self.started.is_some();
         if !busy {
             let mut next = self.settings.clone();
             next.share_compute = !next.share_compute;
@@ -451,96 +478,6 @@ impl App {
         let (sharing, busy) = self.compute_view();
         if let Some(ui) = &self.ui {
             ui.compute.sync(sharing, busy);
-        }
-    }
-
-    fn change_mode(&mut self, connection: settings::Connection) {
-        // muda auto-toggles the clicked item before dispatch. Restore the saved
-        // choice so cancellation, same-mode clicks and failures cannot lie.
-        self.sync_mode_checks();
-        if self.stopping.is_some()
-            || self.pending_settings.is_some()
-            || std::mem::discriminant(&self.settings.connection)
-                == std::mem::discriminant(&connection)
-        {
-            return;
-        }
-        let leaving_joined_mesh = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        ) && !self.settings.joins().is_empty();
-        let (title, body) = if leaving_joined_mesh {
-            (
-                "Leave this private Mesh?",
-                "Going Public forgets the invite that put you in it, and restarts Mesh. It does not remove you for anyone else: rejoining means pasting an invite again. Your identity, your models and your settings stay as they are.",
-            )
-        } else if matches!(connection, settings::Connection::Private { .. }) {
-            (
-                "Start a private Mesh?",
-                "Restarts Mesh as its own private Mesh, with nobody in it yet — copy an invite and send it to the people you want. Anyone who has it can join and pass it on.",
-            )
-        } else {
-            (
-                "Share with anyone?",
-                "Restarts Mesh in Public, where it serves whoever finds it. Anything outstanding is cancelled.",
-            )
-        };
-        if !native::confirm(title, body, "Change connection") {
-            return;
-        }
-        if matches!(connection, settings::Connection::Private { .. }) {
-            let profile = match settings::mesh_profile() {
-                Ok(profile) => profile,
-                Err(e) => {
-                    native::notice("Could not set up Private", &e);
-                    return;
-                }
-            };
-            if let Err(e) = identity::establish(&profile) {
-                native::notice("Could not set up Private", &e);
-                return;
-            }
-        }
-        // Switching Mesh *is* forgetting this one: the people, the outstanding
-        // invitations all belong to the Mesh being left, so there
-        // is no separate "start over" to find.
-        let next = mesh_tray::reset::switching_to(&self.settings, connection);
-        self.queue_settings(next);
-    }
-
-    fn queue_settings(&mut self, next: settings::Settings) {
-        if self.stopping.is_some() || self.pending_settings.is_some() {
-            return;
-        }
-        self.pending_settings = Some(next);
-        self.open_when_ready = None;
-        if let Some(child) = &mut self.child {
-            match lifecycle::request_stop(child) {
-                Ok(()) => self.stopping = Some(Instant::now()),
-                Err(e) => {
-                    self.error = Some(e);
-                    self.pending_settings = None;
-                }
-            }
-        } else {
-            self.apply_pending();
-        }
-    }
-
-    fn apply_pending(&mut self) {
-        if let Some(next) = self.pending_settings.take() {
-            match next.save(&self.root) {
-                Ok(()) => {
-                    self.settings = next;
-                    self.sync_mode_checks();
-                    self.snapshot = status::Snapshot::default();
-                    self.error = None;
-                    self.start();
-                }
-                Err(e) => {
-                    self.error = Some(format!("Could not save connection: {e}"));
-                }
-            }
         }
     }
 }
@@ -641,7 +578,7 @@ mod desktop {
                 ("Private", "private"),
                 ("Invite someone to your mesh", "invite"),
                 ("Join with an invite", "join"),
-                ("Retry startup", "retry"),
+                ("Reset settings…", "reset"),
             ] {
                 let button = gtk::Button::with_label(label);
                 let app = app.clone();
@@ -656,7 +593,7 @@ mod desktop {
                         }
                         "invite" => app.invite(),
                         "join" => app.join(),
-                        "retry" => app.start(),
+                        "reset" => app.reset_settings(),
                         _ => {}
                     }
                 });
@@ -887,7 +824,7 @@ mod transaction_tests {
             assert!(!app.snapshot.running);
             let error = app.error.clone().unwrap();
             assert!(error.starts_with("Mesh exited ("));
-            assert!(error.contains("Retry startup"));
+            assert!(error.contains("quit and reopen Mesh"));
             app.tick();
             assert_eq!(app.error.as_deref(), Some(error.as_str()));
         }
@@ -936,7 +873,7 @@ mod transaction_tests {
             .error
             .as_deref()
             .unwrap()
-            .starts_with("Could not save connection:"));
+            .starts_with("Could not save connection or finish reset:"));
     }
 
     #[cfg(unix)]

@@ -23,6 +23,7 @@ const DEFAULT_MINIMUM_MSAT: u64 = 10_000;
 
 enum Job {
     Balance,
+    Reset,
     ReadPolicy,
     ReadPricing(String),
     Run(Command),
@@ -31,6 +32,7 @@ enum Job {
 }
 
 enum Reply {
+    Reset(Result<(), String>),
     Balance(Result<Balance, payments::Error>),
     Policy(Result<PolicyStatus, payments::Error>),
     Pricing(String, Result<BTreeMap<String, Pricing>, payments::Error>),
@@ -69,6 +71,7 @@ pub struct Payments {
     refreshing: bool,
     jobs: Sender<(u16, u32, Job)>,
     replies: Receiver<Reply>,
+    reset_result: Option<Result<(), String>>,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
 }
 
@@ -96,7 +99,19 @@ impl Payments {
             jobs,
             replies,
             last_invoice: None,
+            reset_result: None,
         }
+    }
+
+    pub fn begin_reset(&mut self, target: (u16, u32)) -> Result<(), String> {
+        self.reset_result = None;
+        self.jobs
+            .send((target.0, target.1, Job::Reset))
+            .map_err(|_| "Payments worker is unavailable".into())
+    }
+
+    pub fn take_reset_result(&mut self) -> Option<Result<(), String>> {
+        self.reset_result.take()
     }
 
     /// Side-effect free file check; reading the balance of a missing wallet
@@ -146,6 +161,7 @@ impl Payments {
 
     fn handle(&mut self, reply: Reply, target: Option<(u16, u32)>) {
         match reply {
+            Reply::Reset(result) => self.reset_result = Some(result),
             Reply::Balance(result) => {
                 self.refreshing = false;
                 if let Ok(b) = result {
@@ -390,6 +406,7 @@ pub fn earn_command(
 
 fn run(client: Client, job: Job) -> Reply {
     match job {
+        Job::Reset => Reply::Reset(crate::payment_reset::disable(&client)),
         Job::Balance => Reply::Balance(client.execute(&Command::Balance)),
         Job::ReadPolicy => Reply::Policy(client.execute(&Command::Policy { value: None })),
         Job::ReadPricing(model) => Reply::Pricing(model, client.execute(&Command::Pricing)),
