@@ -76,3 +76,15 @@ Non-accelerated platforms retain the small-model recipe.
 This is the tray's Private-mode policy only. Public still delegates model
 selection to the engine's `serve --auto` policy. An explicit `[[models]]`
 configuration takes precedence over the tray's automatic selection.
+
+## Reset contract (supersedes the earlier mode-only reset)
+
+Reset settings is an explicit menu action. It disables paying/charging, waits
+for this app's engine to stop successfully, retires private mesh policy and
+membership, and restores launcher defaults. Afterwards the user can accept a
+new invite or originate a fresh private mesh; old membership is not admission
+to that new mesh. Owner credentials, funds/history, config and models survive.
+Public remains open discovery. Custom node-key configurations fail
+closed rather than resetting another namespace. Keep other apps using the
+shared engine profile stopped while resetting. See DESIGN.md for interruption
+and failure semantics.

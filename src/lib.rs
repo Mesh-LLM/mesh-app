@@ -10,3 +10,5 @@ pub mod runtime_config;
 pub mod startup_log;
 
 pub mod payments;
+
+pub mod private_reset;

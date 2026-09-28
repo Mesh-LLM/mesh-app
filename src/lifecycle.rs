@@ -79,6 +79,10 @@ pub struct Engine {
 }
 
 impl Engine {
+    pub fn verify_restart_safe() -> Result<(), String> {
+        check_restart(&RESTART_UNSAFE)
+    }
+
     pub fn start(config: serve::EmbeddedServeConfig, share_compute: bool) -> Result<Self, String> {
         check_restart(&RESTART_UNSAFE)?;
         // Environment filtering can be per-child but not per embedded thread.

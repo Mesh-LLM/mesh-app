@@ -28,7 +28,7 @@ impl App {
 
     /// Mint (or re-share) this node's signed bearer invite.
     fn mint_invite(&mut self) -> Result<String, String> {
-        if self.stopping.is_some() || self.pending_settings.is_some() {
+        if self.resetting || self.stopping.is_some() || self.pending_settings.is_some() {
             return Err("Wait for Mesh to finish restarting".into());
         }
         if !matches!(self.settings.connection, Connection::Private { .. }) {
@@ -58,7 +58,7 @@ impl App {
     /// to remember and nothing for the other person to confirm.
     pub(crate) fn join(&mut self) {
         let result = (|| {
-            if self.stopping.is_some() || self.pending_settings.is_some() {
+            if self.resetting || self.stopping.is_some() || self.pending_settings.is_some() {
                 return Err("Wait for Mesh to finish restarting".into());
             }
             let Some(pasted) = native::prompt_card(

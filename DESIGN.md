@@ -126,3 +126,35 @@ list (which could still load configured models). Connection, invites, identity,
 ports and payment policy are unchanged. Active requests can be interrupted by
 the restart. No live engine or Keychain-touching validation is automated here;
 menu interaction, accessibility and actual unload/rejoin need a human trial.
+
+## Explicit Reset settings
+
+Reset settings replaces Retry startup. This supersedes the earlier “no separate
+Start Over” design: Mic requested a genuinely fresh private membership boundary.
+It first disables paying, removes model prices and verifies both via the owned
+runtime's API. Then it requests shutdown and waits for successful completion,
+including past the warning deadline. An error is not evidence of shutdown.
+
+Only after a successful stop, Reset removes `mesh-id`,
+`mesh-genesis-policy.json`, `mesh-adopted-membership.json` and `last-mesh`.
+The owner keystore, ownership attestation, wallet/balance/history, node key,
+engine config and models are not deleted by this operation. The engine itself
+may rotate its transport identity on public/private transitions. Launcher
+settings become Public, compute on, ports 3232/9447, with no saved invite.
+The next originated private mesh gets a new genesis policy; accepting a new
+invite adopts that invitation's mesh instead. This does not evict members from
+the old mesh or exclude anyone from public service.
+
+A `private-reset-pending` marker is written before removal and retained until
+launcher defaults are saved. Startup refuses to run with that marker; Reset
+can resume retirement without a running engine. File-type errors fail closed.
+Custom node-key namespaces are not supported by
+Reset: the pinned SDK does not export its state-directory resolver. Windows Reset is unavailable because this engine does not hold runtime locks there. Reset also
+refuses a detected live runtime lock; users must keep other CLI/Buzz engines
+stopped during this shared-profile operation. There is no cross-application
+profile transaction lock in the pinned SDK, so concurrent external startup is
+not supported.
+
+Quit during a pending stop cancels the queued restart and waits for shutdown;
+it does not force-kill other processes. Payment errors may leave some preferences
+disabled, but never claim to have completed the reset.
