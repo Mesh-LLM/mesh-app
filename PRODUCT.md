@@ -64,3 +64,15 @@ The tray build carrying it is covered by unit tests, fmt/check/Clippy `-D
 warnings`, and is **not yet clicked through in the menu bar by a human**. The engine-level expiry/restart behavior is implemented and was exercised by
 the #1896 live matrix; see DESIGN.md. Candidate-specific UI behavior, including
 the expired-token message for a new joiner, still needs human verification.
+
+## Private automatic model tiers
+
+On Apple Silicon, Qwen3.8-27B requires at least 128 GiB total RAM and
+22 GiB of available-memory budget. Gemma 4 12B is the default on 64-GiB
+machines; its floor remains 24 GiB with a 12-GiB budget. Qwen3.5-4B is the
+16-GiB tier with a 6-GiB budget. Memory pressure can select a smaller tier.
+Non-accelerated platforms retain the small-model recipe.
+
+This is the tray's Private-mode policy only. Public still delegates model
+selection to the engine's `serve --auto` policy. An explicit `[[models]]`
+configuration takes precedence over the tray's automatic selection.
