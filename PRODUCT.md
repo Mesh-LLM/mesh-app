@@ -88,3 +88,11 @@ Public remains open discovery. Custom node-key configurations fail
 closed rather than resetting another namespace. Keep other apps using the
 shared engine profile stopped while resetting. See DESIGN.md for interruption
 and failure semantics.
+
+A full Reset requires a healthy owned engine to verify payments are off. If
+startup fails, quit/reopen and repair startup first; Reset does not claim a
+partial success with spending potentially enabled. An interrupted retirement
+marker can be resumed without starting the engine.
+
+The embedded SDK, payment types and matching packaged native runtime are pinned
+to the Mesh v0.77.0 release commit `4ae1ace57dbbe28d0c3d10a05ee542328e8e64e7`.

@@ -43,8 +43,8 @@ Use a clean macOS user or move `~/.mesh-llm` and `~/.mesh-app` aside first.
 
 ## Private reset regression evidence
 
-The pinned `d06600e` engine has a separate test-only proof on
-[`dario/private-reset-proof`](https://github.com/Mesh-LLM/mesh-llm/commit/25a65ac19):
+The pinned v0.77.0 (`4ae1ace57`) engine has a separate test-only proof on
+[`dario/private-reset-proof`](https://github.com/Mesh-LLM/mesh-llm/commit/5ce1ff824d353588d3f6f5779549c8a632877a44):
 `mesh/tests/admission/requirements.rs::assert_private_reset_retires_old_members_and_invites`.
 It deletes the same four files with a fixed in-memory test owner and temporary
 HOME, then exercises real peer admission: a new policy/mesh ID, old-member
@@ -53,3 +53,7 @@ It does not touch Keychain or prove the native menu journey. Tray package tests
 separately assert byte-preservation of credential/wallet/config fixtures,
 interrupted retirement, invalid file types, failed settings save, payment-off
 verification, failed shutdown and Quit while a transition is pending.
+
+Dario ran the full host-runtime package at `5ce1ff824`: 4072 library tests
+passed, 11 ignored, plus all integration binaries (25 tests) passed. This is
+the release source plus the test-only proof, not a new engine dependency.
