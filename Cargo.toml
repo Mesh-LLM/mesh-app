@@ -5,10 +5,10 @@ edition = "2021"
 
 [dependencies]
 # Mesh v0.77.0-based embedded profile/lifecycle correction; immutable source pin.
-mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f", features = ["host-io"] }
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f", default-features = false, features = ["serving", "console", "payments"] }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f", default-features = false, features = ["wallet-lexe"] }
-mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f" }
+mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "3df110254398a1753aae6d7a685d2143870334d5", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "3df110254398a1753aae6d7a685d2143870334d5", default-features = false, features = ["serving", "console", "payments"] }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "3df110254398a1753aae6d7a685d2143870334d5", default-features = false, features = ["wallet-lexe"] }
+mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "3df110254398a1753aae6d7a685d2143870334d5" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
