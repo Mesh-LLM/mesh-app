@@ -403,12 +403,14 @@ impl App {
                             self.exit = true;
                         }
                     } else {
-                        self.error = Some(format!(
-                            "Mesh exited ({code}). Choose Open Chat to see startup details, then quit and reopen Mesh."
-                        ));
                         if !self.restart_used && !self.resetting {
                             self.restart_used = true;
                             self.restart_at = Some(Instant::now() + POLL);
+                            self.error = Some("Mesh stopped, restarting…".into());
+                        } else {
+                            self.error = Some(format!(
+                                "Mesh exited ({code}). Choose Open Chat to see startup details, then quit and reopen Mesh."
+                            ));
                         }
                     }
                 }
@@ -771,6 +773,7 @@ mod transaction_tests {
         done.send(Ok(())).unwrap();
         app.tick();
         assert!(app.restart_used);
+        assert_eq!(app.error.as_deref(), Some("Mesh stopped, restarting…"));
         assert!(app.restart_at.is_some_and(|at| at > Instant::now()));
         app.quit();
         assert!(app.restart_at.is_none());
@@ -880,6 +883,7 @@ mod transaction_tests {
             let root = tempfile::tempdir().unwrap();
             let mut app = app(root.path());
             app.polling = true; // Exercise tick without issuing status requests.
+            app.restart_used = true; // Exhausted retries retain the exit details.
             app.child = Some(exited_child());
             app.started = Some(Instant::now() - startup_age);
             app.snapshot.running = true;

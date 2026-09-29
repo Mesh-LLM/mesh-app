@@ -1,9 +1,9 @@
 //! Payments submenu: a thin controller over Mesh's local wallet API.
 //!
 //! Mesh owns the wallet, ledger, prices, budgets and settlement. The menu is
-//! three fixed actions, plus a disabled status item when balance reads fail. The title
-//! which shows the last good balance once a wallet exists. Every form reads
-//! Mesh fresh when clicked, so there is no menu state to go stale.
+//! three fixed actions, plus a disabled status item when balance reads fail.
+//! The title shows a balance only after a successful read with a wallet present.
+//! Every form reads Mesh fresh when clicked.
 use crate::native::{self as ui, InvoiceAction};
 use mesh_tray::payments::{
     self, format_sats, sats_to_msat, Balance, Client, Command, FundingInvoice, Mode, Policy,
@@ -55,6 +55,8 @@ fn describe(error: &payments::Error) -> String {
 
 /// Submenu title: the balance only when a wallet exists and has been read.
 pub fn title(wallet: bool, balance: Option<u64>, failed: bool) -> String {
+    // Keep the last good value internally, but do not present a stale balance
+    // as current after a failed refresh. Unknown is distinct from known zero.
     if failed {
         return "Payments".into();
     }
