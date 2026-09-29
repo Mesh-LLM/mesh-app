@@ -1,29 +1,37 @@
-//! In-process engine ownership. A pending stop never cancels the SDK
-//! startup future: the worker retains it, then stops the resulting handle before
-//! reporting completion. No replacement may start until completion is observed.
+//! Engine ownership. Mesh runs as a child process of the tray
+//! (`current_exe --engine`), not on a thread inside it: a stop is a process
+//! exit, so the OS releases every file lock, socket and GPU allocation the
+//! engine held. The tray talks to it only over its local HTTP API.
+//!
+//! Stop protocol: the parent closes the child's stdin. The child then stops
+//! its SDK handle cooperatively and exits. The same EOF happens if the tray
+//! dies, so an orphaned engine shuts itself down.
 use crate::settings::{Connection, Settings, MIN_NODE_VERSION};
 use mesh_llm_sdk::{client, serve, TrustPolicy};
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use serde::{Deserialize, Serialize};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
-// The tested engine revision can return a startup error after its shutdown wait times out,
-// dropping (detaching) the native runtime thread. An error is not proof of exit.
-// Conservatively forbid another start in this process after any worker failure.
-static RESTART_UNSAFE: AtomicBool = AtomicBool::new(false);
+/// Argument that turns the tray binary into the engine process.
+pub const ENGINE_ARG: &str = "--engine";
+/// How long a cooperative stop may take before the child is killed.
+const STOP_GRACE: Duration = Duration::from_secs(60);
 
-fn check_restart(safety: &AtomicBool) -> Result<(), String> {
-    if safety.load(Ordering::Acquire) {
-        Err("Restart the Mesh app before retrying: the embedded SDK did not prove that its previous runtime exited. No replacement runtime was started.".into())
-    } else {
-        Ok(())
-    }
-}
-
-fn record_completion(safety: &AtomicBool, result: &Result<(), String>) {
-    if result.is_err() {
-        safety.store(true, Ordering::Release);
-    }
+/// Everything the child needs to build its SDK config, sent as one JSON line
+/// on stdin. The child builds the config with the same [`config`] function
+/// the tests cover, so there is one source of truth.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineSpec {
+    pub settings: Settings,
+    pub profile: PathBuf,
+    pub model: Option<String>,
+    pub share_compute: bool,
+    /// Tests only: no auto-join and no relays, so a run never touches a real mesh.
+    #[serde(default)]
+    pub isolated_network: bool,
 }
 
 pub fn config(
@@ -73,62 +81,60 @@ fn client_config(config: serve::EmbeddedServeConfig) -> client::EmbeddedClientCo
 }
 
 pub struct Engine {
+    pid: u32,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     done: Receiver<Result<(), String>>,
     result: Option<String>,
 }
 
 impl Engine {
+    /// A child process cannot leak state into the tray, so a replacement is
+    /// always safe to start once the previous child has exited.
     pub fn verify_restart_safe() -> Result<(), String> {
-        check_restart(&RESTART_UNSAFE)
+        Ok(())
     }
 
-    pub fn start(config: serve::EmbeddedServeConfig, share_compute: bool) -> Result<Self, String> {
-        check_restart(&RESTART_UNSAFE)?;
-        // Environment filtering can be per-child but not per embedded thread.
-        // Fail closed rather than mutate the process environment after threads start.
-        for name in ["MESH_LLM_EPHEMERAL_KEY", "MESH_LLM_OWNER_PASSPHRASE"] {
-            if std::env::var_os(name).is_some() {
-                return Err(format!(
-                    "Unset {name} before launching this embedded prototype"
-                ));
-            }
+    pub fn start(spec: EngineSpec) -> Result<Self, String> {
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let mut child = Command::new(exe)
+            .arg(ENGINE_ARG)
+            // Per-child filtering the in-process engine could not do: these
+            // must never reach the engine from the tray's environment.
+            .env_remove("MESH_LLM_EPHEMERAL_KEY")
+            .env_remove("MESH_LLM_OWNER_PASSPHRASE")
+            .stdin(Stdio::piped())
+            // Inherited: the tray already redirected these into mesh.log.
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("could not start the Mesh engine: {e}"))?;
+        let pid = child.id();
+        let line = serde_json::to_string(&spec).map_err(|e| e.to_string())?;
+        let mut stdin = child.stdin.take().ok_or("engine stdin unavailable")?;
+        if let Err(e) = writeln!(stdin, "{line}").and_then(|()| stdin.flush()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("could not configure the Mesh engine: {e}"));
         }
         let (stop, requested) = tokio::sync::oneshot::channel();
         let (finished, done) = mpsc::channel();
         std::thread::Builder::new()
-            .name("tray-engine".into())
+            .name("tray-engine-supervisor".into())
             .spawn(move || {
-                let result = (|| {
-                    let runtime = tokio::runtime::Builder::new_multi_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|e| e.to_string())?;
-                    runtime.block_on(async {
-                        let handle = if share_compute {
-                            serve::start(config).await
-                        } else {
-                            client::start(client_config(config)).await
-                        }
-                        .map_err(|e| format!("{e:#}"))?;
-                        // Dropping the UI owner also requests cooperative shutdown.
-                        let _ = requested.await;
-                        handle.stop().await.map_err(|e| format!("{e:#}"))
-                    })
-                })();
-                record_completion(&RESTART_UNSAFE, &result);
-                let _ = finished.send(result);
+                let _ = finished.send(supervise(child, stdin, requested));
             })
             .map_err(|e| e.to_string())?;
         Ok(Self {
+            pid,
             stop: Some(stop),
             done,
             result: None,
         })
     }
 
+    /// The engine's process id; `/api/status` reports the same pid.
     pub fn id(&self) -> u32 {
-        std::process::id()
+        self.pid
     }
 
     pub fn try_wait(&mut self) -> Result<Option<String>, String> {
@@ -136,10 +142,7 @@ impl Engine {
             self.result = match self.done.try_recv() {
                 Ok(Ok(())) => Some("stopped".into()),
                 Ok(Err(error)) => Some(error),
-                Err(TryRecvError::Disconnected) => {
-                    RESTART_UNSAFE.store(true, Ordering::Release);
-                    Some("embedded worker disconnected; restart the app before retrying".into())
-                }
+                Err(TryRecvError::Disconnected) => Some("engine supervisor exited".into()),
                 Err(TryRecvError::Empty) => None,
             };
         }
@@ -157,6 +160,7 @@ impl Engine {
         let (finished, done) = mpsc::channel();
         (
             Self {
+                pid: std::process::id(),
                 stop: Some(stop),
                 done,
                 result: None,
@@ -167,12 +171,91 @@ impl Engine {
     }
 }
 
+/// Own the child until it exits. A requested stop closes stdin, then kills
+/// the child if it has not exited within [`STOP_GRACE`].
+fn supervise(
+    mut child: Child,
+    stdin: std::process::ChildStdin,
+    mut requested: tokio::sync::oneshot::Receiver<()>,
+) -> Result<(), String> {
+    let mut stdin = Some(stdin);
+    let mut deadline = None;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if deadline.is_some() => {
+                return if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("Mesh engine stopped with {status}; see mesh.log"))
+                };
+            }
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "Mesh engine exited unexpectedly ({status}); see mesh.log"
+                ));
+            }
+            Ok(None) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        if deadline.is_none()
+            && !matches!(
+                requested.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            )
+        {
+            // Stop requested, or the UI owner dropped the engine.
+            drop(stdin.take());
+            deadline = Some(Instant::now() + STOP_GRACE);
+        }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 pub fn request_stop(engine: &mut Engine) -> Result<(), String> {
     if let Some(stop) = engine.stop.take() {
-        // If the receiver exited, try_wait will report the worker's result.
+        // If the supervisor exited, try_wait will report the result.
         let _ = stop.send(());
     }
     Ok(())
+}
+
+/// Child-process entry point: read one [`EngineSpec`] line, run the engine,
+/// and stop it cooperatively when stdin reaches EOF.
+pub fn run_engine_process() -> Result<(), String> {
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|e| e.to_string())?;
+    let spec: EngineSpec = serde_json::from_str(&line).map_err(|e| format!("engine spec: {e}"))?;
+    let mut config = config(&spec.settings, &spec.profile, spec.model);
+    if spec.isolated_network {
+        config.network.auto_join = false;
+        config.network.disable_iroh_relays = true;
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let handle = if spec.share_compute {
+            serve::start(config).await
+        } else {
+            client::start(client_config(config)).await
+        }
+        .map_err(|e| format!("{e:#}"))?;
+        // EOF: the tray asked us to stop, or the tray is gone.
+        tokio::task::spawn_blocking(move || {
+            let _ = std::io::stdin().read_to_end(&mut Vec::new());
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        handle.stop().await.map_err(|e| format!("{e:#}"))
+    })
 }
 
 #[cfg(test)]
@@ -274,29 +357,11 @@ mod tests {
         );
     }
     #[test]
-    fn worker_failure_blocks_replacement_even_after_later_success() {
-        let safety = AtomicBool::new(false);
-        assert!(check_restart(&safety).is_ok());
-        record_completion(&safety, &Err("startup cleanup timed out".into()));
-        assert!(check_restart(&safety)
-            .unwrap_err()
-            .contains("Restart the Mesh app"));
-        record_completion(&safety, &Ok(()));
-        assert!(check_restart(&safety).is_err());
-    }
-
-    #[test]
-    fn proven_stop_permits_restart() {
-        let safety = AtomicBool::new(false);
-        record_completion(&safety, &Ok(()));
-        assert!(check_restart(&safety).is_ok());
-    }
-
-    #[test]
     fn pending_stop_is_retained_until_worker_reports_completion() {
         let (stop, mut requested) = tokio::sync::oneshot::channel();
         let (finished, done) = mpsc::channel();
         let mut engine = Engine {
+            pid: 0,
             stop: Some(stop),
             done,
             result: None,
