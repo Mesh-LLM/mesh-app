@@ -1,7 +1,7 @@
 //! Payments submenu: a thin controller over Mesh's local wallet API.
 //!
 //! Mesh owns the wallet, ledger, prices, budgets and settlement. The menu is
-//! three fixed items; the only thing that ever changes is the submenu title,
+//! three fixed actions, plus a disabled status item when balance reads fail. The title
 //! which shows the last good balance once a wallet exists. Every form reads
 //! Mesh fresh when clicked, so there is no menu state to go stale.
 use crate::native::{self as ui, InvoiceAction};
@@ -56,7 +56,7 @@ fn describe(error: &payments::Error) -> String {
 /// Submenu title: the balance only when a wallet exists and has been read.
 pub fn title(wallet: bool, balance: Option<u64>, failed: bool) -> String {
     if failed {
-        return "Payments · balance unavailable".into();
+        return "Payments".into();
     }
     match (wallet, balance) {
         (true, Some(msat)) => format!("Payments · {}", format_sats(msat)),
@@ -68,6 +68,7 @@ pub struct Payments {
     profile: Option<PathBuf>,
     menu: Option<Submenu>,
     shown: String,
+    unavailable: Option<MenuItem>,
     /// Last good balance; a failed read never clears it.
     balance: Option<u64>,
     balance_failed: bool,
@@ -97,6 +98,7 @@ impl Payments {
             profile,
             menu: None,
             shown: String::new(),
+            unavailable: None,
             balance: None,
             balance_failed: false,
             next_refresh: Instant::now(),
@@ -149,6 +151,18 @@ impl Payments {
             if !self.refreshing && now >= self.next_refresh && self.wallet() {
                 self.refreshing = self.jobs.send((t.0, t.1, Job::Balance)).is_ok();
                 self.next_refresh = now + REFRESH;
+            }
+        }
+        if let Some(menu) = &self.menu {
+            if self.balance_failed && self.unavailable.is_none() {
+                let item = MenuItem::new("Balance unavailable", false, None);
+                if menu.append(&item).is_ok() {
+                    self.unavailable = Some(item);
+                }
+            } else if !self.balance_failed {
+                if let Some(item) = self.unavailable.take() {
+                    let _ = menu.remove(&item);
+                }
             }
         }
         let text = title(self.wallet(), self.balance, self.balance_failed);
@@ -585,6 +599,9 @@ mod tests {
     fn title_shows_balance_only_with_a_wallet() {
         assert_eq!(title(false, Some(1_234_000), false), "Payments");
         assert_eq!(title(true, None, false), "Payments");
+        assert_eq!(title(true, None, true), "Payments");
+        assert_eq!(title(true, Some(0), true), "Payments");
+        assert_eq!(title(true, Some(0), false), "Payments · 0 sats");
         assert_eq!(title(true, Some(1_234_000), false), "Payments · 1,234 sats");
     }
 
@@ -600,10 +617,7 @@ mod tests {
         );
         p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
         assert_eq!(p.balance, Some(5_000));
-        assert_eq!(
-            title(true, p.balance, p.balance_failed),
-            "Payments · balance unavailable"
-        );
+        assert_eq!(title(true, p.balance, p.balance_failed), "Payments");
         p.handle(
             Reply::Balance(Ok(Balance {
                 spendable_msat: 0,

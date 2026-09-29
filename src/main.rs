@@ -45,6 +45,8 @@ struct App {
     polling: bool,
     started: Option<Instant>,
     stopping: Option<Instant>,
+    restart_at: Option<Instant>,
+    restart_used: bool,
     error: Option<String>,
     /// Log length when the current run was started, so a fatal line from an
     /// earlier run is never quoted as this run's reason.
@@ -103,6 +105,8 @@ impl App {
             polling: false,
             started: None,
             stopping: None,
+            restart_at: None,
+            restart_used: false,
             error: None,
             log_mark: 0,
             open_when_ready: None,
@@ -166,6 +170,7 @@ impl App {
         if self.child.is_some() {
             return;
         }
+        self.restart_at = None;
         self.error = None;
         self.log_mark = std::fs::metadata(self.root.join("mesh.log"))
             .map(|m| m.len())
@@ -242,9 +247,10 @@ impl App {
         }
         // Their `[[models]]` wins: a `--model` flag would beat the file, so when
         // the file names models the tray passes none and stays out of the way.
+        let configured_models = mesh_tray::runtime_config::config_declares_models(&profile);
         let model = if !self.settings.share_compute {
             None
-        } else if mesh_tray::runtime_config::config_declares_models(&profile) {
+        } else if configured_models {
             use std::io::Write;
             writeln!(
                 &log,
@@ -260,8 +266,14 @@ impl App {
             use std::io::Write;
             writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
         }
+        // A private automatic no-fit must be client-only, not an empty serve
+        // list that can fall back to engine model selection. Explicit config wins.
+        let serve = self.settings.share_compute
+            && (configured_models
+                || model.is_some()
+                || matches!(self.settings.connection, settings::Connection::Automatic));
         let config = lifecycle::config(&self.settings, &profile, model);
-        Engine::start(config, self.settings.share_compute)
+        Engine::start(config, serve)
     }
 
     fn open(&mut self, path: &'static str) {
@@ -305,6 +317,7 @@ impl App {
     }
 
     fn quit(&mut self) {
+        self.restart_at = None;
         self.resetting = false;
         self.pending_settings = None;
         self.retire_private = false;
@@ -393,10 +406,22 @@ impl App {
                         self.error = Some(format!(
                             "Mesh exited ({code}). Choose Open Chat to see startup details, then quit and reopen Mesh."
                         ));
+                        if !self.restart_used && !self.resetting {
+                            self.restart_used = true;
+                            self.restart_at = Some(Instant::now() + POLL);
+                        }
                     }
                 }
                 Err(e) => self.error = Some(format!("Cannot check Mesh process: {e}")),
                 Ok(None) => {}
+            }
+        }
+        if self.restart_at.is_some_and(|at| Instant::now() >= at) && !self.exit {
+            self.restart_at = None;
+            // Never bypass the SDK's unproven-exit guard to start a second runtime.
+            match Engine::verify_restart_safe() {
+                Ok(()) => self.start(),
+                Err(e) => self.error = Some(e),
             }
         }
         if self
@@ -736,6 +761,48 @@ mod transaction_tests {
     fn app(root: &std::path::Path) -> App {
         App::new(root.into(), settings::Settings::default())
     }
+    #[cfg(unix)]
+    #[test]
+    fn unexpected_exit_schedules_only_one_retry_and_quit_cancels_it() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        let (engine, _stop, done) = Engine::fixture();
+        app.child = Some(engine);
+        done.send(Ok(())).unwrap();
+        app.tick();
+        assert!(app.restart_used);
+        assert!(app.restart_at.is_some_and(|at| at > Instant::now()));
+        app.quit();
+        assert!(app.restart_at.is_none());
+        assert!(app.exit);
+
+        app.exit = false;
+        let (engine, _stop, done) = Engine::fixture();
+        app.child = Some(engine);
+        done.send(Ok(())).unwrap();
+        app.tick();
+        assert!(app.restart_at.is_none());
+        assert!(app.error.as_deref().unwrap().starts_with("Mesh exited"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delayed_retry_reports_spawn_failure_without_starting_a_runtime() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        // The occupied port makes spawn fail before profile/credential access.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        app.settings.console_port = listener.local_addr().unwrap().port();
+        app.restart_used = true;
+        app.restart_at = Some(Instant::now());
+        app.tick();
+        assert!(app.restart_at.is_none());
+        assert!(app.child.is_none());
+        assert!(app.error.as_deref().unwrap().contains("already in use"));
+        app.tick();
+        assert!(app.child.is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn compute_toggle_stops_owned_engine_and_preserves_mesh_until_exit() {

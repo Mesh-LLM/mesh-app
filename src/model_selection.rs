@@ -39,7 +39,7 @@ fn choose(total: u64, available: u64, accelerated: bool) -> Result<Option<&'stat
             return Ok(Some(model));
         }
     }
-    Err("Not enough available memory for an automatic model with 64K context. Close other applications or configure a model explicitly.".into())
+    Ok(None)
 }
 
 #[cfg(target_os = "macos")]
@@ -121,14 +121,14 @@ mod tests {
         assert_eq!(choose(32 * GIB, 12 * GIB, true).unwrap(), Some(GEMMA));
         assert_eq!(choose(32 * GIB, 10 * GIB, true).unwrap(), Some(SMALL));
         assert_eq!(choose(32 * GIB, 6 * GIB, true).unwrap(), Some(SMALL));
-        assert!(choose(128 * GIB, 5 * GIB, true).is_err());
+        assert_eq!(choose(128 * GIB, 5 * GIB, true).unwrap(), None);
         for size in [0, 7, 8, 15] {
             for accelerated in [false, true] {
                 assert_eq!(choose(size * GIB, 0, accelerated).unwrap(), None);
                 assert_eq!(choose(size * GIB, size * GIB, accelerated).unwrap(), None);
             }
         }
-        assert!(choose(16 * GIB, 5 * GIB, true).is_err());
+        assert_eq!(choose(16 * GIB, 5 * GIB, true).unwrap(), None);
         assert_eq!(local_model(&Connection::Automatic).unwrap(), None);
     }
 }

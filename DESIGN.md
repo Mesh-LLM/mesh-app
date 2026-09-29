@@ -89,17 +89,19 @@ requests (`POST /api/wallet`, pinned to the retained runtime's PID) from a
 worker thread. The SDK has no typed wallet operations yet; when it does, the
 calls move there and the menu does not change.
 
-Three fixed items. The only thing that changes is the submenu title, which
-shows the last good balance once a wallet exists, or “balance unavailable” after a failed refresh (read when the runtime becomes
-ready, then every 20s; a failed read keeps the last value, never shows an
-error or zero). Every item reads Mesh fresh when clicked, so no menu text can
-go stale:
+Three fixed actions. The submenu title shows the balance only after a successful
+read with a wallet present; otherwise it is plain “Payments”. A failed refresh
+adds a disabled “Balance unavailable” item inside the submenu, removed after
+recovery. Reads happen when ready, then every 10s. The last good value is retained
+internally, never presented as a fresh balance after a failed read. Each action
+reads Mesh fresh when clicked.
 
 ```text
-Payments · <balance>        ("Payments" until a wallet exists)
+Payments · <balance>         (plain “Payments” while unknown or unavailable)
   Pay…                      [x] Pay for models + daily limit (UTC day)
   Get paid…                 [x] Charge for the served model + one price per M tokens
   Add funds…                balance + Lightning invoice
+  Balance unavailable       (disabled, only after a failed read)
 ```
 
 The wallet is created lazily by Mesh (first Add funds, or when paying needs
@@ -158,3 +160,11 @@ not supported.
 Quit during a pending stop cancels the queued restart and waits for shutdown;
 it does not force-kill other processes. Payment errors may leave some preferences
 disabled, but never claim to have completed the reset.
+
+## Unexpected embedded exit
+
+The tray schedules at most one automatic restart per app launch, after three
+seconds. Quit cancels it; intentional settings stops do not schedule it. The
+existing SDK safety guard still refuses replacement when worker failure leaves
+runtime exit unproven. An in-process abort kills the tray too and cannot be
+recovered by this timer.
