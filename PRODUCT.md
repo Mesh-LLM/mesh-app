@@ -95,4 +95,4 @@ partial success with spending potentially enabled. An interrupted retirement
 marker can be resumed without starting the engine.
 
 The embedded SDK, payment types and matching packaged native runtime are pinned
-to the Mesh v0.77.0 release commit `4ae1ace57dbbe28d0c3d10a05ee542328e8e64e7`.
+to source commit `f7e0ff9ab3ae2085b489d337981fbf873d40636f` (v0.77.0 plus subsequent main changes and the embedded payment-profile/restart corrections).

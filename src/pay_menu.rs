@@ -54,7 +54,10 @@ fn describe(error: &payments::Error) -> String {
 }
 
 /// Submenu title: the balance only when a wallet exists and has been read.
-pub fn title(wallet: bool, balance: Option<u64>) -> String {
+pub fn title(wallet: bool, balance: Option<u64>, failed: bool) -> String {
+    if failed {
+        return "Payments · balance unavailable".into();
+    }
     match (wallet, balance) {
         (true, Some(msat)) => format!("Payments · {}", format_sats(msat)),
         _ => "Payments".into(),
@@ -67,6 +70,7 @@ pub struct Payments {
     shown: String,
     /// Last good balance; a failed read never clears it.
     balance: Option<u64>,
+    balance_failed: bool,
     next_refresh: Instant,
     refreshing: bool,
     jobs: Sender<(u16, u32, Job)>,
@@ -94,6 +98,7 @@ impl Payments {
             menu: None,
             shown: String::new(),
             balance: None,
+            balance_failed: false,
             next_refresh: Instant::now(),
             refreshing: false,
             jobs,
@@ -122,7 +127,7 @@ impl Payments {
 
     /// Main thread only, called once from `App::build`.
     pub fn submenu(&mut self) -> Result<Submenu, String> {
-        self.shown = title(self.wallet(), self.balance);
+        self.shown = title(self.wallet(), self.balance, self.balance_failed);
         let menu = Submenu::new(&self.shown, true);
         menu.append_items(&[
             &MenuItem::with_id("pay:pay", "Pay…", true, None),
@@ -146,7 +151,7 @@ impl Payments {
                 self.next_refresh = now + REFRESH;
             }
         }
-        let text = title(self.wallet(), self.balance);
+        let text = title(self.wallet(), self.balance, self.balance_failed);
         if text != self.shown {
             if let Some(menu) = &self.menu {
                 menu.set_text(&text);
@@ -164,6 +169,7 @@ impl Payments {
             Reply::Reset(result) => self.reset_result = Some(result),
             Reply::Balance(result) => {
                 self.refreshing = false;
+                self.balance_failed = result.is_err();
                 if let Ok(b) = result {
                     self.balance = Some(b.spendable_msat);
                 }
@@ -577,9 +583,9 @@ mod tests {
 
     #[test]
     fn title_shows_balance_only_with_a_wallet() {
-        assert_eq!(title(false, Some(1_234_000)), "Payments");
-        assert_eq!(title(true, None), "Payments");
-        assert_eq!(title(true, Some(1_234_000)), "Payments · 1,234 sats");
+        assert_eq!(title(false, Some(1_234_000), false), "Payments");
+        assert_eq!(title(true, None, false), "Payments");
+        assert_eq!(title(true, Some(1_234_000), false), "Payments · 1,234 sats");
     }
 
     #[test]
@@ -594,5 +600,20 @@ mod tests {
         );
         p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
         assert_eq!(p.balance, Some(5_000));
+        assert_eq!(
+            title(true, p.balance, p.balance_failed),
+            "Payments · balance unavailable"
+        );
+        p.handle(
+            Reply::Balance(Ok(Balance {
+                spendable_msat: 0,
+                available_for_inference_msat: 0,
+            })),
+            None,
+        );
+        assert_eq!(
+            title(true, p.balance, p.balance_failed),
+            "Payments · 0 sats"
+        );
     }
 }

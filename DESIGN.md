@@ -90,7 +90,7 @@ worker thread. The SDK has no typed wallet operations yet; when it does, the
 calls move there and the menu does not change.
 
 Three fixed items. The only thing that changes is the submenu title, which
-shows the last good balance once a wallet exists (read when the runtime becomes
+shows the last good balance once a wallet exists, or “balance unavailable” after a failed refresh (read when the runtime becomes
 ready, then every 20s; a failed read keeps the last value, never shows an
 error or zero). Every item reads Mesh fresh when clicked, so no menu text can
 go stale:

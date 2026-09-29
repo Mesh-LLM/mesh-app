@@ -2,14 +2,14 @@
 use mesh_tray::{identity, settings};
 mod compute_menu;
 mod invites;
-mod lifecycle;
+use mesh_tray::lifecycle;
 #[cfg(target_os = "macos")]
 mod native;
 #[cfg(not(target_os = "macos"))]
 #[path = "native_portable.rs"]
 mod native;
 mod pay_menu;
-mod payment_reset;
+use mesh_tray::payment_reset;
 mod qr;
 mod settings_actions;
 mod status;
