@@ -1,8 +1,8 @@
 //! In-process engine ownership. A pending stop never cancels the SDK
 //! startup future: the worker retains it, then stops the resulting handle before
 //! reporting completion. No replacement may start until completion is observed.
+use crate::settings::{Connection, Settings, MIN_NODE_VERSION};
 use mesh_llm_sdk::{client, serve, TrustPolicy};
-use mesh_tray::settings::{Connection, Settings, MIN_NODE_VERSION};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -146,7 +146,8 @@ impl Engine {
         Ok(self.result.clone())
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(unix)]
+    #[doc(hidden)]
     pub fn fixture() -> (
         Self,
         tokio::sync::oneshot::Receiver<()>,

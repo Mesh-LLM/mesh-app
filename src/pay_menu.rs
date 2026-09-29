@@ -1,9 +1,9 @@
 //! Payments submenu: a thin controller over Mesh's local wallet API.
 //!
 //! Mesh owns the wallet, ledger, prices, budgets and settlement. The menu is
-//! three fixed items; the only thing that ever changes is the submenu title,
-//! which shows the last good balance once a wallet exists. Every form reads
-//! Mesh fresh when clicked, so there is no menu state to go stale.
+//! three fixed actions, plus a disabled status item when balance reads fail.
+//! The title shows a balance only after a successful read with a wallet present.
+//! Every form reads Mesh fresh when clicked.
 use crate::native::{self as ui, InvoiceAction};
 use mesh_tray::payments::{
     self, format_sats, sats_to_msat, Balance, Client, Command, FundingInvoice, Mode, Policy,
@@ -54,7 +54,12 @@ fn describe(error: &payments::Error) -> String {
 }
 
 /// Submenu title: the balance only when a wallet exists and has been read.
-pub fn title(wallet: bool, balance: Option<u64>) -> String {
+pub fn title(wallet: bool, balance: Option<u64>, failed: bool) -> String {
+    // Keep the last good value internally, but do not present a stale balance
+    // as current after a failed refresh. Unknown is distinct from known zero.
+    if failed {
+        return "Payments".into();
+    }
     match (wallet, balance) {
         (true, Some(msat)) => format!("Payments · {}", format_sats(msat)),
         _ => "Payments".into(),
@@ -65,8 +70,10 @@ pub struct Payments {
     profile: Option<PathBuf>,
     menu: Option<Submenu>,
     shown: String,
+    unavailable: Option<MenuItem>,
     /// Last good balance; a failed read never clears it.
     balance: Option<u64>,
+    balance_failed: bool,
     next_refresh: Instant,
     refreshing: bool,
     jobs: Sender<(u16, u32, Job)>,
@@ -93,7 +100,9 @@ impl Payments {
             profile,
             menu: None,
             shown: String::new(),
+            unavailable: None,
             balance: None,
+            balance_failed: false,
             next_refresh: Instant::now(),
             refreshing: false,
             jobs,
@@ -122,7 +131,7 @@ impl Payments {
 
     /// Main thread only, called once from `App::build`.
     pub fn submenu(&mut self) -> Result<Submenu, String> {
-        self.shown = title(self.wallet(), self.balance);
+        self.shown = title(self.wallet(), self.balance, self.balance_failed);
         let menu = Submenu::new(&self.shown, true);
         menu.append_items(&[
             &MenuItem::with_id("pay:pay", "Pay…", true, None),
@@ -146,7 +155,19 @@ impl Payments {
                 self.next_refresh = now + REFRESH;
             }
         }
-        let text = title(self.wallet(), self.balance);
+        if let Some(menu) = &self.menu {
+            if self.balance_failed && self.unavailable.is_none() {
+                let item = MenuItem::new("Balance unavailable", false, None);
+                if menu.append(&item).is_ok() {
+                    self.unavailable = Some(item);
+                }
+            } else if !self.balance_failed {
+                if let Some(item) = self.unavailable.take() {
+                    let _ = menu.remove(&item);
+                }
+            }
+        }
+        let text = title(self.wallet(), self.balance, self.balance_failed);
         if text != self.shown {
             if let Some(menu) = &self.menu {
                 menu.set_text(&text);
@@ -164,6 +185,7 @@ impl Payments {
             Reply::Reset(result) => self.reset_result = Some(result),
             Reply::Balance(result) => {
                 self.refreshing = false;
+                self.balance_failed = result.is_err();
                 if let Ok(b) = result {
                     self.balance = Some(b.spendable_msat);
                 }
@@ -577,9 +599,12 @@ mod tests {
 
     #[test]
     fn title_shows_balance_only_with_a_wallet() {
-        assert_eq!(title(false, Some(1_234_000)), "Payments");
-        assert_eq!(title(true, None), "Payments");
-        assert_eq!(title(true, Some(1_234_000)), "Payments · 1,234 sats");
+        assert_eq!(title(false, Some(1_234_000), false), "Payments");
+        assert_eq!(title(true, None, false), "Payments");
+        assert_eq!(title(true, None, true), "Payments");
+        assert_eq!(title(true, Some(0), true), "Payments");
+        assert_eq!(title(true, Some(0), false), "Payments · 0 sats");
+        assert_eq!(title(true, Some(1_234_000), false), "Payments · 1,234 sats");
     }
 
     #[test]
@@ -594,5 +619,17 @@ mod tests {
         );
         p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
         assert_eq!(p.balance, Some(5_000));
+        assert_eq!(title(true, p.balance, p.balance_failed), "Payments");
+        p.handle(
+            Reply::Balance(Ok(Balance {
+                spendable_msat: 0,
+                available_for_inference_msat: 0,
+            })),
+            None,
+        );
+        assert_eq!(
+            title(true, p.balance, p.balance_failed),
+            "Payments · 0 sats"
+        );
     }
 }

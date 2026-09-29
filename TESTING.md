@@ -57,3 +57,19 @@ verification, failed shutdown and Quit while a transition is pending.
 Dario ran the full host-runtime package at `5ce1ff824`: 4072 library tests
 passed, 11 ignored, plus all integration binaries (25 tests) passed. This is
 the release source plus the test-only proof, not a new engine dependency.
+
+## Embedded reset/restart regression
+
+`just verify` also runs `embedded_restart`, a real engine test using the tray's
+lifecycle, payment-reset and private-state retirement functions. It runs three
+start/reset/stop cycles in one process against a fresh profile, verifies the
+profile payment database, free-only policy and empty pricing, preserves a
+synthetic wallet-ID and seed-file fixtures byte-for-byte, and checks config-copy cleanup. It
+does not provision a wallet, access Keychain, or establish a real balance.
+
+For manual remote inference evidence, `MESH_TRAY_RESTART_MODEL` selects an
+already-cached local model and pauses each cycle for 20 seconds after reset.
+The test prints its API/console ports; join a separate node using its status
+invite and request the exact advertised model before and after restart. Use
+the matching packaged native runtime. This is additional evidence, not a
+claim that the native menu was clicked.

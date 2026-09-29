@@ -1,5 +1,5 @@
 //! Reset preferences through the engine API; never open or replace wallet files.
-use mesh_tray::payments::{Client, Command, Mode, Policy, PolicyStatus, Pricing};
+use crate::payments::{Client, Command, Mode, Policy, PolicyStatus, Pricing};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
