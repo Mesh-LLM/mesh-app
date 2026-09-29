@@ -1,4 +1,5 @@
 //! Real tray lifecycle and reset against an isolated, ledger-only engine.
+//! The engine runs as a child of this binary (`--engine`), exactly as in the app.
 use mesh_tray::{lifecycle, payment_reset};
 
 use mesh_tray::payments::{Client, Command, Mode, Policy, PolicyStatus, Pricing};
@@ -16,6 +17,13 @@ fn port() -> u16 {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == [lifecycle::ENGINE_ARG] {
+        let result = lifecycle::run_engine_process();
+        if let Err(e) = &result {
+            eprintln!("engine: {e}");
+        }
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     if let [a, b, c, name] = args.as_slice() {
         if (a.as_str(), b.as_str(), c.as_str()) == ("--log-format", "json", "--plugin") {
             let result = tokio::runtime::Runtime::new().unwrap().block_on(
@@ -52,11 +60,19 @@ fn main() {
     let seed_fixture = b"synthetic preservation fixture - not a valid wallet seed";
     std::fs::write(&seed, seed_fixture).unwrap();
     for cycle in 0..3 {
-        let mut config = lifecycle::config(&settings, &profile, model.clone());
-        config.network.auto_join = false;
-        config.network.disable_iroh_relays = true;
-        let mut engine =
-            lifecycle::Engine::start(config, settings.share_compute).expect("start tray engine");
+        let mut engine = lifecycle::Engine::start(lifecycle::EngineSpec {
+            settings: settings.clone(),
+            profile: profile.clone(),
+            model: model.clone(),
+            share_compute: settings.share_compute,
+            isolated_network: true,
+        })
+        .expect("start tray engine");
+        assert_ne!(
+            engine.id(),
+            std::process::id(),
+            "engine must be a child process"
+        );
         let client = Client::new(settings.console_port, engine.id());
         let deadline = Instant::now() + Duration::from_secs(60);
         let policy = loop {
@@ -103,6 +119,12 @@ fn main() {
             );
             std::thread::sleep(Duration::from_secs(20));
         }
+        let held = std::fs::File::open(profile.join("payments/service.lock")).unwrap();
+        assert!(
+            fs2::FileExt::try_lock_exclusive(&held).is_err(),
+            "running engine must hold service.lock (otherwise the release check proves nothing)"
+        );
+        drop(held);
         lifecycle::request_stop(&mut engine).unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
@@ -123,6 +145,11 @@ fn main() {
             }),
             "normal shutdown left a config snapshot"
         );
+        // The bug class this design removes: a stopped engine still holding
+        // the payments lock, so the next start in the same app cannot open it.
+        let lock = std::fs::File::open(profile.join("payments/service.lock")).unwrap();
+        fs2::FileExt::try_lock_exclusive(&lock).expect("stopped engine still holds service.lock");
+        fs2::FileExt::unlock(&lock).unwrap();
         mesh_tray::private_reset::retire(&profile, &home.path().join(".mesh-app")).unwrap();
         mesh_tray::private_reset::finish(&home.path().join(".mesh-app")).unwrap();
         assert_eq!(std::fs::read(&wallet).unwrap(), wallet_pin);

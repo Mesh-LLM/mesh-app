@@ -10,6 +10,15 @@ on:
         description: "Publish a prerelease on this repository"
         type: boolean
         default: false
+      runtime:
+        description: "Metal runtime: 'release' downloads a published mesh-llm runtime, 'source' compiles it (~2h)"
+        type: choice
+        options: [release, source]
+        default: release
+      runtime_release:
+        description: "mesh-llm release tag to take the runtime from (runtime=release only)"
+        type: string
+        default: v0.77.0
 
 permissions:
   contents: read
@@ -58,6 +67,7 @@ jobs:
           ref: ${{ steps.meta.outputs.engine_commit }}
           path: engine-src
           persist-credentials: false
+          fetch-depth: 0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -72,7 +82,34 @@ jobs:
           pnpm --version
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: Download released Metal runtime
+        if: inputs.runtime != 'source'
+        env:
+          ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
+          RUNTIME_RELEASE: ${{ inputs.runtime_release || 'v0.77.0' }}
+        run: |
+          set -euo pipefail
+          brew install just
+          cd engine-src
+          test "$(git rev-parse HEAD)" = "$ENGINE_COMMIT"
+          git fetch --no-tags origin "refs/tags/$RUNTIME_RELEASE:refs/tags/$RUNTIME_RELEASE"
+          # The runtime is llama.cpp + patch queue only. Refuse a release whose
+          # runtime inputs differ from the pinned engine; use runtime=source then.
+          git diff --exit-code --stat "$RUNTIME_RELEASE" HEAD -- \
+            third_party/llama.cpp scripts/prepare-llama.sh scripts/package-native-runtime.sh \
+            scripts/lib/macos-deployment-target.txt
+          echo "MACOSX_DEPLOYMENT_TARGET=$(cat scripts/lib/macos-deployment-target.txt)" >> "$GITHUB_ENV"
+          name=meshllm-native-runtime-darwin-aarch64-metal.tar.gz
+          mkdir -p "$RUNNER_TEMP/runtime" && cd "$RUNNER_TEMP/runtime"
+          gh release download "$RUNTIME_RELEASE" -R Mesh-LLM/mesh-llm -p "$name" -p "$name.sha256"
+          shasum -a 256 -c "$name.sha256"
+          {
+            echo "ENGINE_ARCHIVE=$PWD/$name"
+            echo "ENGINE_SHA256=$(shasum -a 256 "$name" | awk '{print $1}')"
+          } >> "$GITHUB_ENV"
+
       - name: Build matching Metal runtime
+        if: inputs.runtime == 'source'
         env:
           ENGINE_COMMIT: ${{ steps.meta.outputs.engine_commit }}
         run: |

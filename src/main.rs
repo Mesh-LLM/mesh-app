@@ -272,8 +272,13 @@ impl App {
             && (configured_models
                 || model.is_some()
                 || matches!(self.settings.connection, settings::Connection::Automatic));
-        let config = lifecycle::config(&self.settings, &profile, model);
-        Engine::start(config, serve)
+        Engine::start(lifecycle::EngineSpec {
+            settings: self.settings.clone(),
+            profile,
+            model,
+            share_compute: serve,
+            isolated_network: false,
+        })
     }
 
     fn open(&mut self, path: &'static str) {
@@ -716,6 +721,10 @@ fn main() {
                     (*name).into(),
                 ))
                 .map_err(|e| format!("{e:#}"));
+        }
+        // The engine runs as a child of the tray; see lifecycle.rs.
+        if args == [lifecycle::ENGINE_ARG] {
+            return lifecycle::run_engine_process();
         }
         if !args.is_empty() {
             return Err("Unsupported Mesh app arguments".into());
