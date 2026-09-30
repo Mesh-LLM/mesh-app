@@ -9,7 +9,6 @@ Some features are still experimental or examples
 <!-- screenshot -->
 
 - **Models set up automatically:** Mesh picks a model that fits your machine and downloads it on first use.
-- **Preview of Built-in wallet:** pay for models over Lightning, earn from the one you serve, and add funds with a QR code.
 - **Chat:** open the Mesh chat in your browser from the tray menu.
 
 ## Public or private
