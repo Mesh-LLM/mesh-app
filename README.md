@@ -1,12 +1,15 @@
-# Mesh for desktop
+# Mesh for desktop - expermental/demo app 
 
 Run [Mesh](https://github.com/Mesh-LLM/mesh-llm) from your menu bar or system tray.
 No command line, no model setup.
 
+## Note this is early access
+Some features are still experimental or examples
+
 <!-- screenshot -->
 
 - **Models set up automatically:** Mesh picks a model that fits your machine and downloads it on first use.
-- **Built-in wallet:** pay for models over Lightning, earn from the one you serve, and add funds with a QR code.
+- **Preview of Built-in wallet:** pay for models over Lightning, earn from the one you serve, and add funds with a QR code.
 - **Chat:** open the Mesh chat in your browser from the tray menu.
 
 ## Public or private
