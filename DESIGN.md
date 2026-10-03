@@ -168,3 +168,12 @@ seconds. Quit cancels it; intentional settings stops do not schedule it. The
 existing SDK safety guard still refuses replacement when worker failure leaves
 runtime exit unproven. An in-process abort kills the tray too and cannot be
 recovered by this timer.
+
+## Installed wallet providers
+
+The pinned engine includes payment policy/ledger support, but no built-in Lexe
+SDK or `wallet-lexe` re-exec. The app only dispatches the built-in blobstore;
+installed `wallet.v1` providers run as their own executables, managed by Mesh.
+Provider discovery uses the shared user plugin store, not app bundle resources.
+See README for installation and the fresh-profile restriction of Lexe v0.1.0.
+No wallet migration or silent provider fallback is performed by the app.

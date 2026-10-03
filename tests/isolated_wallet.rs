@@ -13,8 +13,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 fn main() {
-    // The engine launches its wallet as `current_exe --log-format json --plugin
-    // wallet-lexe`; current_exe is this test binary, so serve that here.
+    // Only built-in blobstore re-execs this binary; wallets are installed plugins.
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let [a, b, c, name] = args.as_slice() {
         if (a.as_str(), b.as_str(), c.as_str()) == ("--log-format", "json", "--plugin") {
@@ -24,6 +23,7 @@ fn main() {
                 .unwrap()
                 .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
                     name.clone(),
+                    Vec::new(),
                 ));
             std::process::exit(if result.is_ok() { 0 } else { 1 });
         }
@@ -32,11 +32,26 @@ fn main() {
         println!("isolated_wallet: skipped (set MESH_TRAY_WALLET_E2E=1)");
         return;
     }
+    let archive = std::env::var_os("MESH_TRAY_WALLET_ARCHIVE")
+        .map(std::path::PathBuf::from)
+        .expect("set MESH_TRAY_WALLET_ARCHIVE to the verified native lexe-wallet v0.1.0 archive");
+    let archive = archive.canonicalize().expect("wallet archive must exist");
     // The engine also writes node state (last-mesh, ownership, logs, plugin
     // sockets) under $HOME/.mesh-llm regardless of config_path. Point HOME at
     // a temp dir before any thread starts; the wallet plugin inherits it.
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
+    // Never reuse the operator's plugin store in a throwaway wallet test.
+    std::env::set_var("MESH_LLM_PLUGIN_DIR", home.path().join("plugins"));
+    let options = mesh_llm_plugin_manager::install::PluginInstallOptions::from_env().unwrap();
+    mesh_llm_plugin_manager::install::install_plugin_archive(
+        "lexe-wallet",
+        "0.1.0",
+        &archive,
+        &options,
+        &mut |_| {},
+    )
+    .expect("install wallet into isolated plugin store");
     round_trip();
     drop(home);
     println!("isolated_wallet: ok");
