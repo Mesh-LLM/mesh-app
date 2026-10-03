@@ -1,16 +1,17 @@
 # Testing
 
-`just verify` runs what CI runs: fmt, build, unit tests, Clippy `-D warnings`.
+`just verify` runs fmt, check, the complete package test suite, and Clippy `-D warnings`.
 Unit tests use a fake wallet server; they check the requests the tray sends and
 how it handles bad responses, not what the real engine returns.
 
 ## Real engine wallet test (manual, not in CI)
 
 ```sh
-MESH_TRAY_WALLET_E2E=1 cargo test --test isolated_wallet
+MESH_TRAY_WALLET_E2E=1 MESH_TRAY_WALLET_ARCHIVE="/absolute/path/to/lexe-wallet-v0.1.0-<target>.tar.gz" cargo test --test isolated_wallet
 ```
 
-About 3 s. Starts the embedded engine client-only (no model) with a temp config
+Installs the operator-supplied, checksum-verified native Lexe v0.1.0 archive into
+a temporary plugin store (never the user’s installed store). Starts the embedded engine client-only (no model) with a temp config
 dir and a temp `HOME`, no mesh join, no publishing, no relays, then drives every
 wallet command the tray sends: policy read/save, pricing save/read, balance
 (expects 0), fund (expects a 10-sat `lnbc` invoice) and transactions. Nothing
@@ -21,18 +22,21 @@ pays nothing, so it needs Lexe to be reachable. That is why it is not in CI.
 Whether a Lexe testnet or regtest would work as well is untested. Without
 `MESH_TRAY_WALLET_E2E=1` the test prints `skipped`.
 
-Run it before a release and whenever the pinned engine changes.
+Run it only with explicit live-wallet authorization before a release or after an
+engine change. Agents must not run this network/provisioning test unattended.
+Installation alone and the default test suite never provision a wallet.
 
 ## Manual checks on a packaged build (~10 min)
 
-Use a clean macOS user or move `~/.mesh-llm` and `~/.mesh-app` aside first.
+Use a clean macOS test user with the wallet plugin installed. Do not move or
+modify the real user’s wallet/profile as part of validation.
 
-1. Install and launch. Click **Always Allow** on the keychain prompt. The menu
+1. Install and launch. Complete the normal identity setup. The menu
    status reaches ready.
 2. Untick **Share compute**: the model unloads and the node stays joined.
    Tick it again: the model reloads. The tick matches the state.
-3. Payments: **Get paid** shows an invoice/QR, **Add funds** shows the amount
-   form. If funds are available, send a small payment between two machines and
+3. Payments: **Get paid** sets model pricing; **Add funds** shows the amount
+   form followed by the invoice/QR. If funds are available, send a small payment between two machines and
    confirm it is received.
 4. Quit and relaunch: no second keychain prompt, and settings persist.
 5. Reset: paying/charging are off, launcher defaults are restored, and private
@@ -73,3 +77,7 @@ The test prints its API/console ports; join a separate node using its status
 invite and request the exact advertised model before and after restart. Use
 the matching packaged native runtime. This is additional evidence, not a
 claim that the native menu was clicked.
+
+For this engine pin, packaging must use the matching source-built native runtime
+(`runtime=source` in the existing release workflow). The v0.77.0 runtime inputs
+differ; do not bypass the packager's runtime-source compatibility check.

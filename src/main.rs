@@ -705,9 +705,8 @@ fn main() {
         // The engine invokes its built-in blobstore through current_exe().
         // Dispatch before profile locking or UI setup; this is not another node.
         let args: Vec<String> = std::env::args().skip(1).collect();
-        // Same for the built-in Lexe wallet (mesh-llm #2035): Mesh launches it as
-        // `current_exe --plugin wallet-lexe` and owns it; the tray only dispatches.
-        if let ["--log-format", "json", "--plugin", name @ ("blobstore" | "wallet-lexe")] = args
+        // Wallet providers are installed executables, never tray re-execs.
+        if let ["--log-format", "json", "--plugin", name @ "blobstore"] = args
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>()
@@ -719,6 +718,7 @@ fn main() {
                 .map_err(|e| e.to_string())?
                 .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
                     (*name).into(),
+                    Vec::new(),
                 ))
                 .map_err(|e| format!("{e:#}"));
         }

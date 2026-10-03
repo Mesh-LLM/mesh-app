@@ -34,3 +34,42 @@ just clean
 ```
 
 See [PRODUCT.md](PRODUCT.md) and [DESIGN.md](DESIGN.md) for details.
+
+## Wallet plugin setup
+
+Mesh handles pricing, spending limits and settlement; an installed `wallet.v1`
+plugin handles the Lightning wallet. The app enables the engine's payments
+support but does not bundle or compile in Lexe.
+
+With a current payments-enabled Mesh CLI, install the native plugin as the same
+OS user who runs the app, then quit and reopen the app:
+
+```sh
+mesh-llm plugins install Mesh-LLM/lexe-wallet
+```
+
+The app and CLI use the same `~/.mesh-llm/plugins` store (unless
+`MESH_LLM_PLUGIN_DIR` overrides it). Installed, enabled providers are discovered
+by the engine; no executable path or extra config stanza is needed. Keep just
+one wallet provider enabled unless you explicitly configure provider selection.
+Use **Payments → Add funds** to create a Lightning invoice and pay it from
+another wallet. Separately enable **Pay** and set a daily limit when you want
+paid inference. Installation and funding do not authorize spending.
+
+For CLI control of the app's default management port:
+
+```sh
+mesh-llm wallet --port 3232 fund-wallet --amount-sats 1000
+mesh-llm wallet --port 3232 policy --mode automatic --daily-budget-sats 100
+mesh-llm wallet --port 3232 policy --mode free-only
+```
+
+**Existing wallet warning:** [Lexe v0.1.0](https://github.com/Mesh-LLM/lexe-wallet/releases/tag/v0.1.0)
+is for fresh/unpinned profiles. An existing `wallet-lexe` provider pin is not an
+automatic upgrade to `lexe-wallet`. This app does not migrate, delete, or rewrite
+wallet pins, recovery seeds, or payment history. Preserve the old wallet and use
+a separately validated migration procedure before switching a funded profile.
+Do not remove a pin to suppress an identity mismatch. A missing/disabled or
+mismatched provider yields a wallet error, not a fallback wallet. Free Mesh use
+does not require a wallet plugin. Plugin executables are trusted local code,
+not sandboxed payment tools.
