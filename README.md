@@ -41,8 +41,12 @@ Mesh handles pricing, spending limits and settlement; an installed `wallet.v1`
 plugin handles the Lightning wallet. The app enables the engine's payments
 support but does not bundle or compile in Lexe.
 
-With a current payments-enabled Mesh CLI, install the native plugin as the same
-OS user who runs the app, then quit and reopen the app:
+For a reproducible setup, use the Mesh CLI built from this app's engine revision
+`89db585319fc04d7d50530900e466502273f1b68`. No numbered Mesh release containing
+that engine change is claimed here. The v0.77.0 CLI already has `plugins install`,
+but running its older engine is not equivalent to this app's external-wallet
+engine. Install the native plugin as the same OS user who runs the app, then
+quit and reopen the app:
 
 ```sh
 mesh-llm plugins install Mesh-LLM/lexe-wallet
@@ -69,7 +73,10 @@ is for fresh/unpinned profiles. An existing `wallet-lexe` provider pin is not an
 automatic upgrade to `lexe-wallet`. This app does not migrate, delete, or rewrite
 wallet pins, recovery seeds, or payment history. Preserve the old wallet and use
 a separately validated migration procedure before switching a funded profile.
-Do not remove a pin to suppress an identity mismatch. A missing/disabled or
+Do not remove a pin to suppress an identity mismatch. The engine error may
+suggest `mesh-llm wallet unpin`; that is **not a migration procedure** and must
+not be followed merely to make an old funded wallet open with this new provider.
+A missing/disabled or
 mismatched provider yields a wallet error, not a fallback wallet. Free Mesh use
 does not require a wallet plugin. Plugin executables are trusted local code,
 not sandboxed payment tools.
