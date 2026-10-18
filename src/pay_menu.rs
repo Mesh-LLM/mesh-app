@@ -22,6 +22,8 @@ const REFRESH: Duration = Duration::from_secs(10);
 enum Job {
     Balance,
     Reset,
+    /// Private mesh: turn spending off and remove every price.
+    PrivateOff(u32),
     ReadPolicy,
     ReadPricing(String),
     Run(Command),
@@ -31,6 +33,7 @@ enum Job {
 
 enum Reply {
     Reset(Result<(), String>),
+    PrivateOff(u32, Result<(), String>),
     Balance(Result<Balance, payments::Error>),
     Policy(Result<PolicyStatus, payments::Error>),
     Pricing(String, Result<BTreeMap<String, Pricing>, payments::Error>),
@@ -77,6 +80,10 @@ pub struct Payments {
     jobs: Sender<(u16, u32, Job)>,
     replies: Receiver<Reply>,
     reset_result: Option<Result<(), String>>,
+    /// Runtime pid whose payments were verified off for private mode.
+    private_off: Option<u32>,
+    private_off_pending: bool,
+    next_private_off: Instant,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
 }
 
@@ -107,6 +114,9 @@ impl Payments {
             replies,
             last_invoice: None,
             reset_result: None,
+            private_off: None,
+            private_off_pending: false,
+            next_private_off: Instant::now(),
         }
     }
 
@@ -142,12 +152,26 @@ impl Payments {
     }
 
     /// `target` is (console port, runtime pid) only while our own runtime is ready.
-    pub fn tick(&mut self, target: Option<(u16, u32)>) {
+    /// `public` is false on a private mesh: no balance polling, and the engine
+    /// is told once per runtime to stop paying and charging (retried until
+    /// verified). Wallet files are never touched.
+    pub fn tick(&mut self, target: Option<(u16, u32)>, public: bool) {
         let now = Instant::now();
         while let Ok(reply) = self.replies.try_recv() {
             self.handle(reply, target);
         }
-        if let Some(t) = target {
+        if public {
+            self.private_off = None;
+        } else if let Some(t) = target {
+            if self.private_off != Some(t.1)
+                && !self.private_off_pending
+                && now >= self.next_private_off
+            {
+                self.private_off_pending = self.jobs.send((t.0, t.1, Job::PrivateOff(t.1))).is_ok();
+                self.next_private_off = now + REFRESH;
+            }
+        }
+        if let Some(t) = target.filter(|_| public) {
             if !self.refreshing && now >= self.next_refresh && self.wallet() {
                 self.refreshing = self.jobs.send((t.0, t.1, Job::Balance)).is_ok();
                 self.next_refresh = now + REFRESH;
@@ -181,6 +205,14 @@ impl Payments {
     fn handle(&mut self, reply: Reply, target: Option<(u16, u32)>) {
         match reply {
             Reply::Reset(result) => self.reset_result = Some(result),
+            Reply::PrivateOff(pid, result) => {
+                self.private_off_pending = false;
+                match result {
+                    Ok(()) => self.private_off = Some(pid),
+                    // Logged to mesh.log; retried on the next refresh.
+                    Err(e) => eprintln!("private mode: could not turn payments off: {e}"),
+                }
+            }
             Reply::Balance(result) => {
                 self.refreshing = false;
                 self.balance_failed = result.is_err();
@@ -425,6 +457,7 @@ pub fn earn_command(
 fn run(client: Client, job: Job) -> Reply {
     match job {
         Job::Reset => Reply::Reset(crate::payment_reset::disable(&client)),
+        Job::PrivateOff(pid) => Reply::PrivateOff(pid, crate::payment_reset::disable(&client)),
         Job::Balance => Reply::Balance(client.execute(&Command::Balance)),
         Job::ReadPolicy => Reply::Policy(client.execute(&Command::Policy { value: None })),
         Job::ReadPricing(model) => Reply::Pricing(model, client.execute(&Command::Pricing)),

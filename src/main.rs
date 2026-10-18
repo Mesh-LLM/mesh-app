@@ -488,7 +488,10 @@ impl App {
         }
         self.sync_payments_menu();
         let target = self.pay_target();
-        self.pay.tick(target);
+        self.pay.tick(
+            target,
+            settings::payments_visible(&self.settings.connection),
+        );
         if let Some(result) = self.pay.take_reset_result() {
             if self.resetting {
                 self.complete_reset(result);
