@@ -21,7 +21,6 @@ pub struct PolicyStatus {
     pub mode: Mode,
     pub daily_budget_msat: Option<u64>,
     pub spent_today_msat: u64,
-    pub reserved_msat: u64,
     pub remaining_daily_budget_msat: u64,
 }
 
@@ -93,7 +92,6 @@ fn validate(command: &Command) -> Result<(), Error> {
             if value.as_ref().is_some_and(|price| {
                 !valid_amount(price.input_msat_per_million)
                     || !valid_amount(price.output_msat_per_million)
-                    || !valid_amount(price.minimum_invoice_msat)
             }) {
                 return Err(Error::InvalidInput("Paid prices must be positive"));
             }

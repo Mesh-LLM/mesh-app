@@ -115,7 +115,7 @@ fn main() {
                 value: Some(Pricing {
                     input_msat_per_million: 1000,
                     output_msat_per_million: 1000,
-                    minimum_invoice_msat: 1000,
+                    cache_discount_percent: 0,
                 }),
             })
             .unwrap();

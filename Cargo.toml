@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# External wallet-provider engine; immutable source pin.
-mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68", features = ["host-io"] }
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68", default-features = false, features = ["serving", "console", "payments"] }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68", default-features = false, features = ["payments"] }
-mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68" }
+# mesh-llm main (wallet providers are installed plugins); immutable source pin.
+mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca", default-features = false, features = ["serving", "console", "payments"] }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca", default-features = false, features = ["payments"] }
+mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
@@ -53,7 +53,7 @@ name = "embedded_restart"
 harness = false
 
 [dev-dependencies]
-mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68" }
+mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca" }
 
 [profile.release]
 strip = true

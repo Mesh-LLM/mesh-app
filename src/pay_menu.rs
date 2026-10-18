@@ -18,8 +18,6 @@ use std::time::{Duration, Instant};
 /// Balance poll while Mesh is ready. Any action refreshes at once; a failed
 /// read just waits for the next tick and keeps the last good balance.
 const REFRESH: Duration = Duration::from_secs(10);
-/// Minimum invoice used when a price is first set; Mesh bills at least this.
-const DEFAULT_MINIMUM_MSAT: u64 = 10_000;
 
 enum Job {
     Balance,
@@ -403,7 +401,7 @@ pub fn pay_command(on: bool, limit: &str) -> Result<Command, payments::Error> {
 }
 
 /// Get paid form -> command. Off removes the price (serve free, never 0);
-/// on applies one price to input and output and keeps the existing minimum.
+/// on applies one price to input and output and keeps the existing cache discount.
 pub fn earn_command(
     model: String,
     current: Option<&Pricing>,
@@ -419,9 +417,7 @@ pub fn earn_command(
         value: Some(Pricing {
             input_msat_per_million: msat,
             output_msat_per_million: msat,
-            minimum_invoice_msat: current
-                .map(|p| p.minimum_invoice_msat)
-                .unwrap_or(DEFAULT_MINIMUM_MSAT),
+            cache_discount_percent: current.map_or(0, |p| p.cache_discount_percent),
         }),
     })
 }
@@ -497,22 +493,19 @@ mod tests {
     }
 
     #[test]
-    fn earn_on_uses_one_price_for_both_and_keeps_minimum() {
+    fn earn_on_uses_one_price_for_both_and_keeps_cache_discount() {
         let existing = Pricing {
             input_msat_per_million: 1,
             output_msat_per_million: 2,
-            minimum_invoice_msat: 42_000,
+            cache_discount_percent: 42,
         };
         let c = earn_command("m".into(), Some(&existing), true, "100").unwrap();
         let v = json(&c)["value"].clone();
         assert_eq!(v["input_msat_per_million"], 100_000);
         assert_eq!(v["output_msat_per_million"], 100_000);
-        assert_eq!(v["minimum_invoice_msat"], 42_000);
+        assert_eq!(v["cache_discount_percent"], 42);
         let c = earn_command("m".into(), None, true, "100").unwrap();
-        assert_eq!(
-            json(&c)["value"]["minimum_invoice_msat"],
-            DEFAULT_MINIMUM_MSAT
-        );
+        assert!(json(&c)["value"].get("cache_discount_percent").is_none());
         assert!(earn_command("m".into(), None, true, "").is_err());
     }
 
@@ -521,7 +514,6 @@ mod tests {
             mode,
             daily_budget_msat: budget,
             spent_today_msat: 250_000,
-            reserved_msat: 0,
             remaining_daily_budget_msat: 750_000,
         }
     }
@@ -560,7 +552,7 @@ mod tests {
         let existing = Pricing {
             input_msat_per_million: 100_000,
             output_msat_per_million: 100_000,
-            minimum_invoice_msat: 42_000,
+            cache_discount_percent: 42,
         };
         let (on, price) = earn_form(Some(&existing));
         assert!(on);

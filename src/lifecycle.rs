@@ -7,7 +7,8 @@
 //! its SDK handle cooperatively and exits. The same EOF happens if the tray
 //! dies, so an orphaned engine shuts itself down.
 use crate::settings::{Connection, Settings, MIN_NODE_VERSION};
-use mesh_llm_sdk::{client, serve, TrustPolicy};
+use mesh_llm_sdk::embedded_node::EmbeddedTrustPolicy as TrustPolicy;
+use mesh_llm_sdk::{MeshNode, MeshNodeBuilder};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -34,21 +35,31 @@ pub struct EngineSpec {
     pub isolated_network: bool,
 }
 
-pub fn config(
+/// SDK builder for the node the engine child runs. Serving mode loads and
+/// shares the tray-selected model; client mode consumes inference only and
+/// never receives a model.
+pub fn builder(
     settings: &Settings,
     profile: &Path,
     model: Option<String>,
-) -> serve::EmbeddedServeConfig {
-    let mut builder = serve::EmbeddedServeConfig::builder()
+    share_compute: bool,
+) -> MeshNodeBuilder {
+    let mut builder = MeshNode::builder()
         .api_port(settings.api_port)
         .console_port(settings.console_port)
         .console_ui(true)
         .config_path(profile.join("config.toml"))
         .isolated_config(false)
         .startup_timeout(std::time::Duration::from_secs(180));
-    if let Some(model) = model {
-        builder = builder.model(model);
-    }
+    builder = if share_compute {
+        let builder = builder.serve();
+        match model {
+            Some(model) => builder.model(model),
+            None => builder,
+        }
+    } else {
+        builder.client()
+    };
     match settings.connection {
         Connection::Automatic => builder = builder.auto_join(true),
         Connection::Private { .. } => {
@@ -64,20 +75,16 @@ pub fn config(
             }
         }
     }
-    builder.build()
+    builder
 }
 
-// Transfer connection, identity and HTTP settings unchanged; client mode has no
-// serving config, so turning compute off cannot pass a tray-selected model.
-fn client_config(config: serve::EmbeddedServeConfig) -> client::EmbeddedClientConfig {
-    client::EmbeddedClientConfig {
-        http: config.http,
-        network: config.network,
-        admission: config.admission,
-        storage: config.storage,
-        log_format: config.log_format,
-        startup_timeout: config.startup_timeout,
-    }
+#[cfg(test)]
+fn config(
+    settings: &Settings,
+    profile: &Path,
+    model: Option<String>,
+) -> mesh_llm_sdk::embedded_node::EmbeddedMeshNodeConfig {
+    builder(settings, profile, model, true).build()
 }
 
 pub struct Engine {
@@ -232,22 +239,23 @@ pub fn run_engine_process() -> Result<(), String> {
         .read_line(&mut line)
         .map_err(|e| e.to_string())?;
     let spec: EngineSpec = serde_json::from_str(&line).map_err(|e| format!("engine spec: {e}"))?;
-    let mut config = config(&spec.settings, &spec.profile, spec.model);
+    let mut node = builder(
+        &spec.settings,
+        &spec.profile,
+        spec.model,
+        spec.share_compute,
+    );
     if spec.isolated_network {
-        config.network.auto_join = false;
-        config.network.disable_iroh_relays = true;
+        // The SDK builder does not expose relay disabling; no auto-join and
+        // no join tokens keep test runs off every real mesh.
+        node = node.auto_join(false);
     }
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
     runtime.block_on(async {
-        let handle = if spec.share_compute {
-            serve::start(config).await
-        } else {
-            client::start(client_config(config)).await
-        }
-        .map_err(|e| format!("{e:#}"))?;
+        let handle = node.start().await.map_err(|e| format!("{e:#}"))?;
         // EOF: the tray asked us to stop, or the tray is gone.
         tokio::task::spawn_blocking(move || {
             let _ = std::io::stdin().read_to_end(&mut Vec::new());
@@ -270,8 +278,14 @@ mod tests {
             },
             ..Default::default()
         };
-        let serving = config(&settings, Path::new("/test-profile"), Some("model".into()));
-        let client = client_config(serving);
+        let client = builder(
+            &settings,
+            Path::new("/test-profile"),
+            Some("model".into()),
+            false,
+        )
+        .build();
+        assert!(client.serving.models.is_empty());
         assert_eq!(client.network.join_tokens, vec!["selected-mesh"]);
         assert_eq!(client.http.api_port, settings.api_port);
         assert_eq!(
