@@ -8,6 +8,8 @@ edition = "2021"
 mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca", features = ["host-io"] }
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca", default-features = false, features = ["serving", "console", "payments"] }
 mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca", default-features = false, features = ["payments"] }
+# Installs the pinned wallet plugin when a user first opts into payments.
+mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca" }
 mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
@@ -16,7 +18,8 @@ open = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = { version = "0.8", default-features = false, features = ["parse"] }
-ureq = { version = "2", default-features = false }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+sha2 = "0.10"
 tempfile = "3"
 fs2 = "0.4"
 rfd = "0.16"
@@ -52,8 +55,6 @@ harness = false
 name = "embedded_restart"
 harness = false
 
-[dev-dependencies]
-mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "d9c6e5a2ff3143c2c9161236bf24d415c403b9ca" }
 
 [profile.release]
 strip = true

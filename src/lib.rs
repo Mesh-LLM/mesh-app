@@ -15,3 +15,4 @@ pub mod private_reset;
 
 pub mod lifecycle;
 pub mod payment_reset;
+pub mod wallet_setup;
