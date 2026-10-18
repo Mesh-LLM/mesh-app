@@ -39,7 +39,7 @@ mod tests {
 
     fn policy() -> Value {
         json!({"mode":"free_only", "daily_budget_msat":null, "spent_today_msat":12,
-            "reserved_msat":3, "remaining_daily_budget_msat":0})
+            "remaining_daily_budget_msat":0})
     }
 
     #[test]
@@ -54,8 +54,8 @@ mod tests {
                     Ok(policy())
                 }
                 (2, Command::Pricing) => Ok(json!({
-                    "a":{"input_msat_per_million":1,"output_msat_per_million":1,"minimum_invoice_msat":1},
-                    "b":{"input_msat_per_million":2,"output_msat_per_million":2,"minimum_invoice_msat":2}
+                    "a":{"input_msat_per_million":1,"output_msat_per_million":1},
+                    "b":{"input_msat_per_million":2,"output_msat_per_million":2}
                 })),
                 (3, Command::SetPricing { model, value: None }) if model == "a" => Ok(json!({})),
                 (4, Command::SetPricing { model, value: None }) if model == "b" => Ok(json!({})),
@@ -63,7 +63,8 @@ mod tests {
                 (6, Command::Pricing) => Ok(json!({})),
                 _ => panic!("unexpected command"),
             }
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(step, 6);
     }
 

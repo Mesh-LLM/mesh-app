@@ -4,10 +4,10 @@
 //!
 //! Starts the embedded engine client-only (no model) in a temp config dir, so
 //! its payments ledger and wallet live in that dir and are deleted afterwards.
-//! No mesh join, no publishing, no relays. Drives every command the tray's
+//! No mesh join, no publishing. Drives every command the tray's
 //! wallet client sends. `Fund` only creates an invoice; nothing is paid.
 //! Each run provisions a fresh, empty mainnet Lexe wallet over the network.
-use mesh_llm_sdk::{client, serve};
+use mesh_llm_sdk::MeshNode;
 use mesh_tray::payments::*;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -78,7 +78,8 @@ fn step<T>(label: &str, t: Instant, r: Result<T, Error>) -> T {
 fn round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let (api, console) = (free_port(), free_port());
-    let config = serve::EmbeddedServeConfig::builder()
+    let node = MeshNode::builder()
+        .client()
         .api_port(api)
         .console_port(console)
         .console_ui(true)
@@ -86,20 +87,10 @@ fn round_trip() {
         .isolated_config(false)
         .auto_join(false)
         .publish(false)
-        .disable_iroh_relays(true)
-        .startup_timeout(Duration::from_secs(120))
-        .build();
-    let config = client::EmbeddedClientConfig {
-        http: config.http,
-        network: config.network,
-        admission: config.admission,
-        storage: config.storage,
-        log_format: config.log_format,
-        startup_timeout: config.startup_timeout,
-    };
+        .startup_timeout(Duration::from_secs(120));
     let rt = tokio::runtime::Runtime::new().unwrap();
     let t = Instant::now();
-    let handle = rt.block_on(client::start(config)).expect("engine start");
+    let handle = rt.block_on(node.start()).expect("engine start");
     eprintln!("  engine started ({:?})", t.elapsed());
 
     let c = Client::new(console, std::process::id());
@@ -130,7 +121,7 @@ fn round_trip() {
     let price = Pricing {
         input_msat_per_million: 100_000,
         output_msat_per_million: 100_000,
-        minimum_invoice_msat: 10_000,
+        cache_discount_percent: 0,
     };
     let _: serde_json::Value = step(
         "save price",

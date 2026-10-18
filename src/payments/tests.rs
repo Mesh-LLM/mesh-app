@@ -49,11 +49,10 @@ fn exact_money_input_rejects_unsafe_values() {
 fn policy_read_pins_runtime_and_preserves_engine_usage() {
     let (client, worker) = fixture(
         200,
-        r#"{"mode":"automatic","daily_budget_msat":10000,"spent_today_msat":2000,"reserved_msat":3000,"remaining_daily_budget_msat":5000}"#,
+        r#"{"mode":"automatic","daily_budget_msat":10000,"spent_today_msat":2000,"remaining_daily_budget_msat":5000}"#,
     );
     let result: PolicyStatus = client.execute(&Command::Policy { value: None }).unwrap();
     assert_eq!(result.remaining_daily_budget_msat, 5000);
-    assert_eq!(result.reserved_msat, 3000);
     assert_eq!(
         worker.join().unwrap(),
         serde_json::json!({"command":"policy","value":null,"expected_pid":42})
@@ -95,7 +94,7 @@ fn invalid_commands_fail_before_network_access() {
             value: Some(Pricing {
                 input_msat_per_million: 0,
                 output_msat_per_million: 1,
-                minimum_invoice_msat: 1,
+                cache_discount_percent: 0,
             }),
         },
     ] {
