@@ -10,11 +10,11 @@ const MAX_RESPONSE: u64 = 2 * 1024 * 1024;
 // Request/response types come from the engine crates so the tray cannot drift
 // from the contract the CLI uses. Only the two JSON-object replies that the
 // engine builds inline (policy status, balance) are declared here.
-pub use mesh_llm_payments::control::ControlCommand as Command;
-pub use mesh_llm_payments::invoice::Invoice as FundingInvoice;
-pub use mesh_llm_payments::ledger::{ApprovalMode as Mode, Policy};
-pub use mesh_llm_payments::pricing::Pricing;
-pub use mesh_llm_payments::wallet::{PaymentStatus, Transaction};
+pub use mesh_llm_sdk::payments::control::ControlCommand as Command;
+pub use mesh_llm_sdk::payments::invoice::Invoice as FundingInvoice;
+pub use mesh_llm_sdk::payments::ledger::{ApprovalMode as Mode, Policy};
+pub use mesh_llm_sdk::payments::pricing::Pricing;
+pub use mesh_llm_sdk::payments::wallet::{PaymentStatus, Transaction};
 
 #[derive(Debug, Deserialize)]
 pub struct PolicyStatus {

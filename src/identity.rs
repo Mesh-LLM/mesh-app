@@ -1,5 +1,5 @@
 //! Machine identity establishment and launcher-profile locking.
-use mesh_llm_identity::{
+use mesh_llm_sdk::identity::{
     keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
     save_keystore_with_keychain, OwnerKeypair,
 };
@@ -125,7 +125,7 @@ mod tests {
             load_keystore(p, None).map_err(|e| e.to_string())
         }
         fn create(&self, p: &Path, o: &OwnerKeypair) -> Result<(), String> {
-            mesh_llm_identity::save_keystore(p, o, None, false).map_err(|e| e.to_string())
+            mesh_llm_sdk::identity::save_keystore(p, o, None, false).map_err(|e| e.to_string())
         }
     }
     #[test]
@@ -137,7 +137,7 @@ mod tests {
                 Err("startup must not unlock the credential store".into())
             }
             fn create(&self, p: &Path, o: &OwnerKeypair) -> Result<(), String> {
-                mesh_llm_identity::save_keystore(p, o, None, false).map_err(|e| e.to_string())
+                mesh_llm_sdk::identity::save_keystore(p, o, None, false).map_err(|e| e.to_string())
             }
         }
         let root = tempfile::tempdir().unwrap();
@@ -159,7 +159,7 @@ mod tests {
         // Whatever identity the profile holds is the one the tray uses, so a
         // profile the user reset with the CLI is adopted rather than refused.
         let replacement = OwnerKeypair::generate();
-        mesh_llm_identity::save_keystore(&path, &replacement, None, true).unwrap();
+        mesh_llm_sdk::identity::save_keystore(&path, &replacement, None, true).unwrap();
         assert_eq!(
             establish_with(root.path(), &TestStore).unwrap(),
             replacement.owner_id()

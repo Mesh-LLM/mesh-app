@@ -27,7 +27,7 @@ fn main() {
     if let [a, b, c, name] = args.as_slice() {
         if (a.as_str(), b.as_str(), c.as_str()) == ("--log-format", "json", "--plugin") {
             let result = tokio::runtime::Runtime::new().unwrap().block_on(
-                mesh_llm_host_runtime::plugin::run_plugin_process(name.clone(), Vec::new()),
+                mesh_llm_sdk::plugin::run_plugin_process(name.clone(), Vec::new()),
             );
             std::process::exit(if result.is_ok() { 0 } else { 1 });
         }

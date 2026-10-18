@@ -2,9 +2,9 @@
 //! app installs the pinned Lexe wallet plugin for them. Never at launch.
 //! The archive is downloaded from its GitHub release and must match the
 //! SHA-256 pinned here before anything is extracted.
-use mesh_llm_plugin_manager::install::{install_plugin_archive, PluginInstallOptions};
-use mesh_llm_plugin_manager::store::PluginStore;
-use mesh_llm_plugin_manager::PluginProgressEvent;
+use mesh_llm_sdk::plugin_install::install::{install_plugin_archive, PluginInstallOptions};
+use mesh_llm_sdk::plugin_install::store::PluginStore;
+use mesh_llm_sdk::plugin_install::PluginProgressEvent;
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
