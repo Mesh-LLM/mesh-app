@@ -67,6 +67,9 @@ pub fn title(wallet: bool, balance: Option<u64>, failed: bool) -> String {
     }
 }
 
+/// (clicked item, runtime pid, install result).
+type Setup = (String, u32, Receiver<Result<(), String>>);
+
 pub struct Payments {
     profile: Option<PathBuf>,
     menu: Option<Submenu>,
@@ -82,6 +85,11 @@ pub struct Payments {
     reset_result: Option<Result<(), String>>,
     /// Runtime pid whose payments were verified off for private mode.
     private_off: Option<u32>,
+    /// Wallet plugin install in flight: (clicked item, runtime pid, result).
+    setup: Option<Setup>,
+    /// Installed; the engine must restart to load it, then `.0` reopens.
+    replay: Option<(String, u32)>,
+    restart_requested: bool,
     private_off_pending: bool,
     next_private_off: Instant,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
@@ -115,6 +123,9 @@ impl Payments {
             last_invoice: None,
             reset_result: None,
             private_off: None,
+            setup: None,
+            replay: None,
+            restart_requested: false,
             private_off_pending: false,
             next_private_off: Instant::now(),
         }
@@ -160,6 +171,7 @@ impl Payments {
         while let Ok(reply) = self.replies.try_recv() {
             self.handle(reply, target);
         }
+        self.poll_setup();
         if public {
             self.private_off = None;
         } else if let Some(t) = target {
@@ -195,6 +207,43 @@ impl Payments {
                 menu.set_text(&text);
             }
             self.shown = text;
+        }
+    }
+
+    /// Main asks after every tick: restart the engine so it loads the wallet.
+    pub fn take_restart_request(&mut self) -> bool {
+        std::mem::take(&mut self.restart_requested)
+    }
+
+    /// The item to reopen once a restarted engine (new pid) is ready.
+    pub fn take_replay(&mut self, target: Option<(u16, u32)>) -> Option<String> {
+        let (_, old_pid) = self.replay.as_ref()?;
+        let (_, pid) = target?;
+        if pid == *old_pid {
+            return None;
+        }
+        self.replay.take().map(|(id, _)| id)
+    }
+
+    fn poll_setup(&mut self) {
+        let Some((_, _, result)) = &self.setup else {
+            return;
+        };
+        let outcome = match result.try_recv() {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err("wallet setup stopped".into()),
+        };
+        let (id, pid, _) = self.setup.take().expect("checked above");
+        match outcome {
+            Ok(()) => {
+                self.replay = Some((id, pid));
+                self.restart_requested = true;
+            }
+            Err(e) => ui::notice(
+                "Could not set up your wallet",
+                &format!("{e}. Nothing was changed; try again."),
+            ),
         }
     }
 
@@ -304,6 +353,25 @@ impl Payments {
             ui::notice("Mesh is still starting", "Try again in a moment.");
             return true;
         };
+        if self.setup.is_some() || self.replay.is_some() {
+            ui::notice(
+                "Setting up your wallet",
+                "This opens by itself when it is ready.",
+            );
+            return true;
+        }
+        if !mesh_tray::wallet_setup::installed() {
+            let (done, result) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = done.send(mesh_tray::wallet_setup::install());
+            });
+            self.setup = Some((id.to_string(), t.1, result));
+            ui::notice(
+                "Setting up your wallet",
+                "Paying and getting paid use a Lightning wallet. Mesh is installing one for you and will restart; this opens by itself when it is ready.",
+            );
+            return true;
+        }
         match id {
             "pay:pay" => self.send(t, Job::ReadPolicy),
             "pay:earn" => match models.first() {

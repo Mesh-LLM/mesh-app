@@ -488,10 +488,16 @@ impl App {
         }
         self.sync_payments_menu();
         let target = self.pay_target();
-        self.pay.tick(
-            target,
-            settings::payments_visible(&self.settings.connection),
-        );
+        let public = settings::payments_visible(&self.settings.connection);
+        self.pay.tick(target, public);
+        if self.pay.take_restart_request() {
+            // Reload the engine so it discovers the newly installed wallet.
+            self.queue_settings(self.settings.clone());
+        }
+        if let Some(id) = self.pay.take_replay(self.pay_target()).filter(|_| public) {
+            let models = self.snapshot.serving_models.clone();
+            self.pay.click(&id, self.pay_target(), &models);
+        }
         if let Some(result) = self.pay.take_reset_result() {
             if self.resetting {
                 self.complete_reset(result);

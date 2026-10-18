@@ -4667,6 +4667,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "toml 0.8.2",
@@ -9644,7 +9645,10 @@ dependencies = [
  "base64 0.22.1",
  "log",
  "once_cell",
+ "rustls",
+ "rustls-pki-types",
  "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
