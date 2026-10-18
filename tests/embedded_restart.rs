@@ -50,6 +50,7 @@ fn main() {
         connection: Connection::Automatic,
         api_port: port(),
         console_port: port(),
+        share_rules: Default::default(),
     };
     // Synthetic preservation fixture, not a provisioned wallet or spendable funds.
     let wallet = profile.join("payments/wallet-provider.json");

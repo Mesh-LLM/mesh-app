@@ -12,6 +12,7 @@ mod pay_menu;
 use mesh_tray::payment_reset;
 mod qr;
 mod settings_actions;
+mod share_menu;
 mod status;
 
 use lifecycle::Engine;
@@ -35,7 +36,7 @@ struct Ui {
 }
 
 /// Position of the Payments submenu in the tray menu (after Invites).
-const PAYMENTS_INDEX: usize = 6;
+const PAYMENTS_INDEX: usize = 7;
 
 struct App {
     settings: settings::Settings,
@@ -61,6 +62,9 @@ struct App {
     open_when_ready: Option<&'static str>,
     exit: bool,
     pay: pay_menu::Payments,
+    share: share_menu::ShareControl,
+    /// Whether the running engine was started serving.
+    spawned_share: bool,
 }
 
 fn icon() -> Icon {
@@ -97,7 +101,10 @@ impl App {
                 }
             }
         });
+        let share = share_menu::ShareControl::new(&settings.share_rules);
         Self {
+            share,
+            spawned_share: false,
             root,
             settings,
             pending_settings: None,
@@ -143,9 +150,12 @@ impl App {
         let reset = MenuItem::with_id("reset", "Reset settings…", true, None);
         let payments = self.pay.submenu()?;
         let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
+        let rules = self.settings.share_rules.clone();
+        let share_when = self.share.submenu(&rules)?.clone();
         menu.append_items(&[
             &chat,
             compute.item(),
+            &share_when,
             &PredefinedMenuItem::separator(),
             &public,
             &private,
@@ -189,6 +199,7 @@ impl App {
             Ok(child) => {
                 self.child = Some(child);
                 self.started = Some(Instant::now());
+                self.spawned_share = self.effective_share();
             }
             Err(e) => self.error = Some(e),
         }
@@ -258,7 +269,7 @@ impl App {
         // Their `[[models]]` wins: a `--model` flag would beat the file, so when
         // the file names models the tray passes none and stays out of the way.
         let configured_models = mesh_tray::runtime_config::config_declares_models(&profile);
-        let model = if !self.settings.share_compute {
+        let model = if !self.effective_share() {
             None
         } else if configured_models {
             use std::io::Write;
@@ -278,7 +289,7 @@ impl App {
         }
         // A private automatic no-fit must be client-only, not an empty serve
         // list that can fall back to engine model selection. Explicit config wins.
-        let serve = self.settings.share_compute
+        let serve = self.effective_share()
             && (configured_models
                 || model.is_some()
                 || matches!(self.settings.connection, settings::Connection::Automatic));
@@ -391,6 +402,10 @@ impl App {
             if self.pay.click(event.id.as_ref(), target, &models) {
                 continue;
             }
+            if event.id.as_ref().starts_with("share:") {
+                self.change_share_rules(event.id.as_ref());
+                continue;
+            }
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
                 "compute" => self.toggle_compute(),
@@ -486,6 +501,9 @@ impl App {
         if let Some(ui) = &self.ui {
             ui.compute.sync(sharing, busy);
         }
+        let rules = self.settings.share_rules.clone();
+        self.share.tick(&rules, self.settings.share_compute);
+        self.follow_share_rules();
         self.sync_payments_menu();
         let target = self.pay_target();
         let public = settings::payments_visible(&self.settings.connection);
@@ -535,6 +553,43 @@ impl App {
             .as_ref()
             .map_or(self.settings.share_compute, |next| next.share_compute);
         (sharing, busy)
+    }
+
+    /// The user's choice, unless a power/sunshine rule pauses it.
+    fn effective_share(&self) -> bool {
+        self.settings.share_compute && self.share.allows()
+    }
+
+    /// Restart the engine when a rule flips whether it should serve.
+    fn follow_share_rules(&mut self) {
+        let idle = self.child.is_some()
+            && self.started.is_none()
+            && self.stopping.is_none()
+            && self.pending_settings.is_none()
+            && !self.resetting;
+        if idle && self.effective_share() != self.spawned_share {
+            self.queue_settings(self.settings.clone());
+        }
+    }
+
+    /// Rules are launcher state only; saving them never restarts by itself.
+    fn change_share_rules(&mut self, id: &str) {
+        let current = self.settings.share_rules.clone();
+        if let Some(rules) = self.share.click(id, &current) {
+            let mut next = self.settings.clone();
+            next.share_rules = rules.clone();
+            match next.save(&self.root) {
+                Ok(()) => {
+                    self.settings = next;
+                    if let Some(p) = self.pending_settings.as_mut() {
+                        p.share_rules = rules;
+                    }
+                }
+                Err(e) => self.error = Some(e),
+            }
+        }
+        let rules = self.settings.share_rules.clone();
+        self.share.reset(&rules);
     }
 
     fn toggle_compute(&mut self) {

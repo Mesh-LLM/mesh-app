@@ -38,6 +38,8 @@ pub struct Settings {
     pub connection: Connection,
     pub console_port: u16,
     pub api_port: u16,
+    /// Conditions that pause sharing (power, sunshine); see share_rules.
+    pub share_rules: crate::share_rules::ShareRules,
 }
 
 impl Default for Settings {
@@ -47,6 +49,7 @@ impl Default for Settings {
             share_compute: true,
             console_port: 3232,
             api_port: 9447,
+            share_rules: Default::default(),
         }
     }
 }
@@ -104,6 +107,7 @@ impl Settings {
             share_compute: self.share_compute,
             console_port: self.console_port,
             api_port: self.api_port,
+            share_rules: self.share_rules.clone(),
         };
         next.validate()?;
         *self = next;
@@ -199,6 +203,7 @@ mod tests {
             share_compute: false,
             console_port: 4242,
             api_port: 4243,
+            share_rules: Default::default(),
         };
         settings.accept_seed("new-mesh").unwrap();
         settings.save(root.path()).unwrap();
