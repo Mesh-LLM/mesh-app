@@ -342,3 +342,23 @@ mod tests {
         assert!(settings.validate().is_err());
     }
 }
+
+/// Wallet, pricing and spending belong to the public mesh only. A private
+/// mesh is owner-only and free; switching to it hides payments but never
+/// touches wallet data.
+pub fn payments_visible(connection: &Connection) -> bool {
+    matches!(connection, Connection::Automatic)
+}
+
+#[cfg(test)]
+mod payments_visibility_tests {
+    use super::*;
+    #[test]
+    fn payments_are_public_only() {
+        assert!(payments_visible(&Connection::Automatic));
+        assert!(!payments_visible(&Connection::Private { invite: None }));
+        assert!(!payments_visible(&Connection::Private {
+            invite: Some("t".into())
+        }));
+    }
+}
