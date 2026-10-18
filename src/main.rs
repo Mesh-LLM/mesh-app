@@ -758,7 +758,7 @@ fn main() {
                 .enable_all()
                 .build()
                 .map_err(|e| e.to_string())?
-                .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
+                .block_on(mesh_llm_sdk::plugin::run_plugin_process(
                     (*name).into(),
                     Vec::new(),
                 ))

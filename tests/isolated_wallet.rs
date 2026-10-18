@@ -21,7 +21,7 @@ fn main() {
                 .enable_all()
                 .build()
                 .unwrap()
-                .block_on(mesh_llm_host_runtime::plugin::run_plugin_process(
+                .block_on(mesh_llm_sdk::plugin::run_plugin_process(
                     name.clone(),
                     Vec::new(),
                 ));
@@ -43,8 +43,8 @@ fn main() {
     std::env::set_var("HOME", home.path());
     // Never reuse the operator's plugin store in a throwaway wallet test.
     std::env::set_var("MESH_LLM_PLUGIN_DIR", home.path().join("plugins"));
-    let options = mesh_llm_plugin_manager::install::PluginInstallOptions::from_env().unwrap();
-    mesh_llm_plugin_manager::install::install_plugin_archive(
+    let options = mesh_llm_sdk::plugin_install::install::PluginInstallOptions::from_env().unwrap();
+    mesh_llm_sdk::plugin_install::install::install_plugin_archive(
         "lexe-wallet",
         "0.1.0",
         &archive,

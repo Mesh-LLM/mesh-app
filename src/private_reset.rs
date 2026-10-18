@@ -23,7 +23,7 @@ pub fn validate_default_profile() -> Result<PathBuf, String> {
         );
     }
     let profile = crate::settings::mesh_profile()?;
-    let key = mesh_llm_identity::default_node_key_path().map_err(|e| e.to_string())?;
+    let key = mesh_llm_sdk::identity::default_node_key_path().map_err(|e| e.to_string())?;
     if key != profile.join("key") {
         return Err(
             "Reset is unavailable with a custom node-key path. No private state was changed."
