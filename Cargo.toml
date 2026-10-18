@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Mesh v0.77.0-based embedded profile/lifecycle correction; immutable source pin.
-mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f", features = ["host-io"] }
-mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f", default-features = false, features = ["serving", "console", "payments"] }
-mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f", default-features = false, features = ["wallet-lexe"] }
-mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "f7e0ff9ab3ae2085b489d337981fbf873d40636f" }
+# External wallet-provider engine; immutable source pin.
+mesh-llm-identity = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68", features = ["host-io"] }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68", default-features = false, features = ["serving", "console", "payments"] }
+mesh-llm-host-runtime = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68", default-features = false, features = ["payments"] }
+mesh-llm-payments = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
 tray-icon = "0.21"
 muda = "0.17"
@@ -43,7 +43,7 @@ clipboard-win = "5"
 windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 
 # Manual, real-engine wallet check in a throwaway profile. harness = false so
-# it can serve the engine's `current_exe --plugin wallet-lexe` re-exec itself.
+# it can serve the engine's built-in blobstore re-exec itself.
 [[test]]
 name = "isolated_wallet"
 harness = false
@@ -51,6 +51,9 @@ harness = false
 [[test]]
 name = "embedded_restart"
 harness = false
+
+[dev-dependencies]
+mesh-llm-plugin-manager = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "89db585319fc04d7d50530900e466502273f1b68" }
 
 [profile.release]
 strip = true

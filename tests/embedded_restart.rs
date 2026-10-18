@@ -27,7 +27,7 @@ fn main() {
     if let [a, b, c, name] = args.as_slice() {
         if (a.as_str(), b.as_str(), c.as_str()) == ("--log-format", "json", "--plugin") {
             let result = tokio::runtime::Runtime::new().unwrap().block_on(
-                mesh_llm_host_runtime::plugin::run_plugin_process(name.clone()),
+                mesh_llm_host_runtime::plugin::run_plugin_process(name.clone(), Vec::new()),
             );
             std::process::exit(if result.is_ok() { 0 } else { 1 });
         }
@@ -36,6 +36,7 @@ fn main() {
     // so runtime owner resolution never enters the native Keychain load path.
     let home = tempfile::tempdir().unwrap();
     std::env::set_var("HOME", home.path());
+    std::env::set_var("MESH_LLM_PLUGIN_DIR", home.path().join("plugins"));
     std::env::remove_var("MESH_LLM_OWNER_PASSPHRASE");
     std::env::remove_var("MESH_LLM_EPHEMERAL_KEY");
     let profile = home.path().join(".mesh-llm");
@@ -87,6 +88,13 @@ fn main() {
             std::thread::sleep(Duration::from_millis(100));
         };
         assert_eq!(policy.mode, Mode::FreeOnly);
+        // No installed wallet provider: policy stays usable, but a wallet read
+        // must fail rather than provision a replacement for the preserved pin.
+        assert!(client
+            .execute::<serde_json::Value>(&Command::Balance)
+            .is_err());
+        assert_eq!(std::fs::read(&wallet).unwrap(), wallet_pin);
+        assert_eq!(std::fs::read(&seed).unwrap(), seed_fixture);
         let prices: BTreeMap<String, Pricing> = client.execute(&Command::Pricing).unwrap();
         assert!(prices.is_empty());
         assert!(
