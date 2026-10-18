@@ -27,8 +27,15 @@ struct Ui {
     compute: compute_menu::ComputeMenu,
     public: muda::CheckMenuItem,
     private: muda::CheckMenuItem,
+    menu: Menu,
+    /// Payments exist only on the public mesh; hidden (never deleted) in private.
+    payments: muda::Submenu,
+    payments_shown: bool,
     _tray: TrayIcon,
 }
+
+/// Position of the Payments submenu in the tray menu (after Invites).
+const PAYMENTS_INDEX: usize = 6;
 
 struct App {
     settings: settings::Settings,
@@ -143,7 +150,6 @@ impl App {
             &public,
             &private,
             &people,
-            &payments,
             &PredefinedMenuItem::separator(),
             &reset,
             &quit,
@@ -160,8 +166,12 @@ impl App {
             compute,
             public,
             private,
+            menu,
+            payments,
+            payments_shown: false,
             _tray: tray,
         });
+        self.sync_payments_menu();
         self.start();
         Ok(())
     }
@@ -340,6 +350,23 @@ impl App {
     }
 
     /// Our own runtime's management port and pid, only once it is ready.
+    fn sync_payments_menu(&mut self) {
+        let want = settings::payments_visible(&self.settings.connection);
+        let Some(ui) = self.ui.as_mut() else { return };
+        if want == ui.payments_shown {
+            return;
+        }
+        let result = if want {
+            ui.menu.insert(&ui.payments, PAYMENTS_INDEX)
+        } else {
+            ui.menu.remove(&ui.payments)
+        };
+        match result {
+            Ok(()) => ui.payments_shown = want,
+            Err(e) => self.error = Some(format!("menu: {e}")),
+        }
+    }
+
     fn pay_target(&self) -> Option<(u16, u32)> {
         let child = self.child.as_ref()?;
         (self.snapshot.running
@@ -356,6 +383,11 @@ impl App {
             }
             let target = self.pay_target();
             let models = self.snapshot.serving_models.clone();
+            if event.id.as_ref().starts_with("pay:")
+                && !settings::payments_visible(&self.settings.connection)
+            {
+                continue;
+            }
             if self.pay.click(event.id.as_ref(), target, &models) {
                 continue;
             }
@@ -454,8 +486,12 @@ impl App {
         if let Some(ui) = &self.ui {
             ui.compute.sync(sharing, busy);
         }
+        self.sync_payments_menu();
         let target = self.pay_target();
-        self.pay.tick(target);
+        self.pay.tick(
+            target,
+            settings::payments_visible(&self.settings.connection),
+        );
         if let Some(result) = self.pay.take_reset_result() {
             if self.resetting {
                 self.complete_reset(result);
