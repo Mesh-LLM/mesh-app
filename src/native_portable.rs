@@ -143,12 +143,27 @@ mod payments {
         notice("Payments", PAYMENTS_MAC_ONLY);
         None
     }
+    pub fn toggle_fields<const N: usize>(
+        _: &str,
+        _: &str,
+        _: &str,
+        _: bool,
+        _: &[(&str, &str); N],
+    ) -> Option<(bool, [String; N])> {
+        notice("Payments", PAYMENTS_MAC_ONLY);
+        None
+    }
     pub fn invoice(_: &str, _: &str, _: &[u8]) -> InvoiceAction {
         InvoiceAction::Done
     }
 }
 #[cfg(not(target_os = "macos"))]
 pub use payments::*;
+/// Menu tracking is only observable on macOS.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn menu_open() -> bool {
+    false
+}
 #[cfg(test)]
 mod tests {
     use super::*;

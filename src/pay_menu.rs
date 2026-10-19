@@ -189,7 +189,7 @@ impl Payments {
                 self.next_refresh = now + REFRESH;
             }
         }
-        if let Some(menu) = &self.menu {
+        if let Some(menu) = self.menu.as_ref().filter(|_| !crate::native::menu_open()) {
             if self.balance_failed && self.unavailable.is_none() {
                 let item = MenuItem::new("Balance unavailable", false, None);
                 if menu.append(&item).is_ok() {
@@ -202,7 +202,7 @@ impl Payments {
             }
         }
         let text = title(self.wallet(), self.balance, self.balance_failed);
-        if text != self.shown {
+        if text != self.shown && !crate::native::menu_open() {
             if let Some(menu) = &self.menu {
                 menu.set_text(&text);
             }
@@ -416,18 +416,28 @@ impl Payments {
     }
 
     fn edit_earn(&mut self, t: (u16, u32), model: String, current: Option<Pricing>) {
-        let (checked, price) = earn_form(current.as_ref());
-        let Some((on, text)) = ui::toggle_amount(
+        let form = earn_form(current.as_ref());
+        let Some((on, values)) = ui::toggle_fields(
             "Get paid",
             &format!("When on, other nodes pay you to use {model}. Off serves it for free."),
             "Charge for this model",
-            checked,
-            "Price (sats per M tokens)",
-            &price,
+            form.on,
+            &[
+                ("Input (sats per M tokens)", &form.input),
+                ("Output (sats per M tokens)", &form.output),
+                ("Cached input discount (%)", &form.cache),
+            ],
         ) else {
             return;
         };
-        match earn_command(model, current.as_ref(), on, &text) {
+        let [input, output, cache] = values;
+        let form = EarnForm {
+            on,
+            input,
+            output,
+            cache,
+        };
+        match earn_command(model, &form) {
             Ok(command) => self.send(t, Job::Run(command)),
             Err(e) => {
                 invalid(&e);
@@ -451,14 +461,23 @@ pub fn pay_form(p: &PolicyStatus) -> (bool, String, String) {
     )
 }
 
-/// What the Get paid form opens with: (ticked, price in sats).
-pub fn earn_form(current: Option<&Pricing>) -> (bool, String) {
-    (
-        current.is_some(),
-        current
-            .map(|p| (p.output_msat_per_million / 1000).to_string())
-            .unwrap_or_default(),
-    )
+/// The Get paid form's values, as shown and as typed.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct EarnForm {
+    pub on: bool,
+    pub input: String,
+    pub output: String,
+    pub cache: String,
+}
+
+/// What the Get paid form opens with.
+pub fn earn_form(current: Option<&Pricing>) -> EarnForm {
+    current.map_or_else(EarnForm::default, |p| EarnForm {
+        on: true,
+        input: (p.input_msat_per_million / 1000).to_string(),
+        output: (p.output_msat_per_million / 1000).to_string(),
+        cache: p.cache_discount_percent.to_string(),
+    })
 }
 
 /// Add funds amount: blank lets the payer choose.
@@ -500,24 +519,36 @@ pub fn pay_command(on: bool, limit: &str) -> Result<Command, payments::Error> {
     })
 }
 
-/// Get paid form -> command. Off removes the price (serve free, never 0);
-/// on applies one price to input and output and keeps the existing cache discount.
-pub fn earn_command(
-    model: String,
-    current: Option<&Pricing>,
-    on: bool,
-    price: &str,
-) -> Result<Command, payments::Error> {
-    if !on {
+/// Get paid form -> command. Off removes the price (serve free, never 0).
+/// Output blank copies input; a blank discount is 0%.
+pub fn earn_command(model: String, form: &EarnForm) -> Result<Command, payments::Error> {
+    if !form.on {
         return Ok(Command::SetPricing { model, value: None });
     }
-    let msat = sats_to_msat(price)?;
+    let input = sats_to_msat(&form.input)?;
+    let output = if form.output.trim().is_empty() {
+        input
+    } else {
+        sats_to_msat(&form.output)?
+    };
+    let cache = form.cache.trim();
+    let cache_discount_percent = if cache.is_empty() {
+        0
+    } else {
+        cache
+            .parse::<u8>()
+            .ok()
+            .filter(|p| *p <= 100)
+            .ok_or(payments::Error::InvalidInput(
+                "Cached input discount must be 0 to 100",
+            ))?
+    };
     Ok(Command::SetPricing {
         model,
         value: Some(Pricing {
-            input_msat_per_million: msat,
-            output_msat_per_million: msat,
-            cache_discount_percent: current.map_or(0, |p| p.cache_discount_percent),
+            input_msat_per_million: input,
+            output_msat_per_million: output,
+            cache_discount_percent,
         }),
     })
 }
@@ -584,9 +615,18 @@ mod tests {
         assert!(pay_command(true, "abc").is_err());
     }
 
+    fn form(on: bool, input: &str, output: &str, cache: &str) -> EarnForm {
+        EarnForm {
+            on,
+            input: input.into(),
+            output: output.into(),
+            cache: cache.into(),
+        }
+    }
+
     #[test]
     fn earn_off_removes_the_price_instead_of_zero() {
-        let c = earn_command("m".into(), None, false, "500").unwrap();
+        let c = earn_command("m".into(), &form(false, "500", "", "")).unwrap();
         assert_eq!(
             json(&c),
             serde_json::json!({"command":"set_pricing","model":"m","value":null})
@@ -594,20 +634,21 @@ mod tests {
     }
 
     #[test]
-    fn earn_on_uses_one_price_for_both_and_keeps_cache_discount() {
-        let existing = Pricing {
-            input_msat_per_million: 1,
-            output_msat_per_million: 2,
-            cache_discount_percent: 42,
-        };
-        let c = earn_command("m".into(), Some(&existing), true, "100").unwrap();
+    fn earn_on_sets_input_output_and_cache_discount() {
+        let c = earn_command("m".into(), &form(true, "100", "300", "50")).unwrap();
         let v = json(&c)["value"].clone();
         assert_eq!(v["input_msat_per_million"], 100_000);
-        assert_eq!(v["output_msat_per_million"], 100_000);
-        assert_eq!(v["cache_discount_percent"], 42);
-        let c = earn_command("m".into(), None, true, "100").unwrap();
-        assert!(json(&c)["value"].get("cache_discount_percent").is_none());
-        assert!(earn_command("m".into(), None, true, "").is_err());
+        assert_eq!(v["output_msat_per_million"], 300_000);
+        assert_eq!(v["cache_discount_percent"], 50);
+        let c = earn_command("m".into(), &form(true, "100", "", "")).unwrap();
+        let v = json(&c)["value"].clone();
+        assert_eq!(
+            v["output_msat_per_million"], 100_000,
+            "blank output copies input"
+        );
+        assert!(v.get("cache_discount_percent").is_none());
+        assert!(earn_command("m".into(), &form(true, "", "", "")).is_err());
+        assert!(earn_command("m".into(), &form(true, "1", "1", "101")).is_err());
     }
 
     fn status(mode: Mode, budget: Option<u64>) -> PolicyStatus {
@@ -652,18 +693,16 @@ mod tests {
     fn saving_the_earn_form_unchanged_keeps_the_price() {
         let existing = Pricing {
             input_msat_per_million: 100_000,
-            output_msat_per_million: 100_000,
+            output_msat_per_million: 250_000,
             cache_discount_percent: 42,
         };
-        let (on, price) = earn_form(Some(&existing));
-        assert!(on);
-        let Command::SetPricing { value, .. } =
-            earn_command("m".into(), Some(&existing), on, &price).unwrap()
-        else {
+        let f = earn_form(Some(&existing));
+        assert!(f.on);
+        let Command::SetPricing { value, .. } = earn_command("m".into(), &f).unwrap() else {
             panic!("not a pricing command");
         };
         assert_eq!(value, Some(existing));
-        assert_eq!(earn_form(None), (false, String::new()));
+        assert_eq!(earn_form(None), EarnForm::default());
     }
 
     #[test]

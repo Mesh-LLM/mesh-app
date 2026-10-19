@@ -18,6 +18,7 @@ pub struct ShareControl {
 struct Items {
     submenu: Submenu,
     sunny: CheckMenuItem,
+    grid: CheckMenuItem,
     location: MenuItem,
     status: MenuItem,
 }
@@ -61,12 +62,19 @@ impl ShareControl {
 
     pub fn submenu(&mut self, rules: &ShareRules) -> Result<&Submenu, String> {
         let items = Items {
-            submenu: Submenu::new("Solar", true),
+            submenu: Submenu::new("Use spare power", true),
             sunny: CheckMenuItem::with_id(
                 "share:sunny",
                 "Only when sunny",
                 true,
                 rules.sunny,
+                None,
+            ),
+            grid: CheckMenuItem::with_id(
+                "share:grid",
+                "Only when NSW grid has spare power",
+                true,
+                rules.nsw_surplus,
                 None,
             ),
             location: MenuItem::with_id("share:location", location_label(rules), true, None),
@@ -78,6 +86,7 @@ impl ShareControl {
                 &items.status,
                 &muda::PredefinedMenuItem::separator(),
                 &items.sunny,
+                &items.grid,
                 &items.location,
             ])
             .map_err(|e| e.to_string())?;
@@ -91,6 +100,7 @@ impl ShareControl {
         let mut next = current.clone();
         match id {
             "share:sunny" => next.sunny = !next.sunny,
+            "share:grid" => next.nsw_surplus = !next.nsw_surplus,
             "share:location" => next.location = Some(ask_location()?),
             _ => return None,
         }
@@ -99,12 +109,14 @@ impl ShareControl {
     }
 
     /// Drain background checks; returns true when share/pause flipped.
-    pub fn tick(&mut self, rules: &ShareRules, user_sharing: bool) -> bool {
+    pub fn tick(&mut self, rules: &ShareRules, user_sharing: bool, render: bool) -> bool {
         let mut flipped = false;
         while let Ok(result) = self.results.try_recv() {
             flipped |= self.gate.observe(result);
         }
-        self.render(rules, user_sharing);
+        if render {
+            self.render(rules, user_sharing);
+        }
         flipped
     }
 
@@ -113,6 +125,7 @@ impl ShareControl {
         let _ = self.rules_tx.send(rules.clone());
         if let Some(m) = &self.menu {
             m.sunny.set_checked(rules.sunny);
+            m.grid.set_checked(rules.nsw_surplus);
             m.location.set_text(location_label(rules));
         }
     }
@@ -121,7 +134,7 @@ impl ShareControl {
         let Some(m) = &self.menu else { return };
         let text = match (user_sharing, self.gate.status()) {
             (false, _) => "Sharing is off".to_string(),
-            (true, Ok(())) if rules.sunny => "Sharing now".to_string(),
+            (true, Ok(())) if rules.sunny || rules.nsw_surplus => "Sharing now".to_string(),
             (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),
             (true, Err(reason)) => reason.clone(),
         };

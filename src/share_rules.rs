@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 pub const SUNNY_W_M2: f64 = 200.0;
 /// Weather is re-fetched at most this often.
 pub const WEATHER_EVERY: Duration = Duration::from_secs(10 * 60);
+/// AEMO dispatch runs every 5 minutes.
+pub const GRID_EVERY: Duration = Duration::from_secs(5 * 60);
 /// A changed answer must hold this many consecutive checks before it flips
 /// sharing, so a passing cloud does not restart the engine.
 pub const STABLE_CHECKS: u32 = 2;
@@ -23,6 +25,8 @@ pub struct Location {
 #[serde(default)]
 pub struct ShareRules {
     pub sunny: bool,
+    /// Share only while NSW wholesale power is free or negative (surplus).
+    pub nsw_surplus: bool,
     /// Typed override; `None` means locate by IP address.
     pub location: Option<Location>,
 }
@@ -32,14 +36,19 @@ pub struct ShareRules {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Readings {
     pub irradiance: Option<f64>,
+    /// NSW1 dispatch price, $/MWh.
+    pub nsw_price: Option<f64>,
 }
 
 /// `Ok(())` to share, or `Err(reason)` shown in the menu.
 pub fn evaluate(rules: &ShareRules, now: Readings) -> Result<(), String> {
-    match now.irradiance {
-        Some(w) if rules.sunny && w < SUNNY_W_M2 => Err(format!("Paused: not sunny ({w:.0} W/m²)")),
-        _ => Ok(()),
+    if let Some(w) = now.irradiance.filter(|w| rules.sunny && *w < SUNNY_W_M2) {
+        return Err(format!("Paused: not sunny ({w:.0} W/m²)"));
     }
+    if let Some(p) = now.nsw_price.filter(|p| rules.nsw_surplus && *p > 0.0) {
+        return Err(format!("Paused: NSW grid has no spare power (${p:.0}/MWh)"));
+    }
+    Ok(())
 }
 
 /// Debounces [`evaluate`]: the decision only changes after
@@ -122,6 +131,29 @@ pub fn parse_ip_location(body: &serde_json::Value) -> Result<Location, String> {
     }
 }
 
+/// NSW1 wholesale price from AEMO's public 5-minute NEM summary (no key).
+/// Zero or negative means the grid has more power than it can use.
+pub fn nsw_price() -> Result<f64, String> {
+    let body: serde_json::Value = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .get("https://visualisations.aemo.com.au/aemo/apps/api/report/ELEC_NEM_SUMMARY")
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_string()
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))?;
+    parse_nsw_price(&body)
+}
+
+pub fn parse_nsw_price(body: &serde_json::Value) -> Result<f64, String> {
+    body["ELEC_NEM_SUMMARY"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|r| r["REGIONID"] == "NSW1"))
+        .and_then(|r| r["PRICE"].as_f64())
+        .ok_or_else(|| "AEMO summary had no NSW1 price".into())
+}
+
 /// Current shortwave irradiance from Open-Meteo (free, no key). The
 /// location is the one the user typed; nothing is inferred from the network.
 pub fn irradiance(at: Location) -> Result<f64, String> {
@@ -171,6 +203,7 @@ pub fn parse_location(text: &str) -> Result<Location, String> {
 pub struct Sampler {
     ip: Option<(Instant, Option<Location>)>,
     weather: Option<(Location, Instant, Option<f64>)>,
+    grid: Option<(Instant, Option<f64>)>,
 }
 
 impl Sampler {
@@ -188,12 +221,28 @@ impl Sampler {
     }
 
     pub fn sample(&mut self, rules: &ShareRules) -> Readings {
-        if !rules.sunny {
-            return Readings::default();
+        Readings {
+            irradiance: self.sunshine(rules),
+            nsw_price: self.grid(rules),
         }
-        let Some(at) = self.location(rules) else {
-            return Readings::default();
-        };
+    }
+
+    fn grid(&mut self, rules: &ShareRules) -> Option<f64> {
+        if !rules.nsw_surplus {
+            return None;
+        }
+        if self.grid.is_none_or(|(t, _)| t.elapsed() >= GRID_EVERY) {
+            let previous = self.grid.and_then(|(_, p)| p);
+            self.grid = Some((Instant::now(), nsw_price().ok().or(previous)));
+        }
+        self.grid.and_then(|(_, p)| p)
+    }
+
+    fn sunshine(&mut self, rules: &ShareRules) -> Option<f64> {
+        if !rules.sunny {
+            return None;
+        }
+        let at = self.location(rules)?;
         let fresh = self
             .weather
             .is_some_and(|(l, t, _)| l == at && t.elapsed() < WEATHER_EVERY);
@@ -205,9 +254,7 @@ impl Sampler {
             let w = irradiance(at).ok().or(previous);
             self.weather = Some((at, Instant::now(), w));
         }
-        Readings {
-            irradiance: self.weather.and_then(|(_, _, w)| w),
-        }
+        self.weather.and_then(|(_, _, w)| w)
     }
 }
 
@@ -224,6 +271,7 @@ mod tests {
     fn no_rules_always_share() {
         let dim = Readings {
             irradiance: Some(10.0),
+            nsw_price: None,
         };
         assert!(evaluate(&ShareRules::default(), dim).is_ok());
     }
@@ -232,7 +280,7 @@ mod tests {
     fn sunny_pauses_only_on_a_dim_reading() {
         let rules = ShareRules {
             sunny: true,
-            location: None,
+            ..Default::default()
         };
         assert!(
             evaluate(&rules, Readings::default()).is_ok(),
@@ -240,12 +288,35 @@ mod tests {
         );
         let dim = Readings {
             irradiance: Some(40.0),
+            nsw_price: None,
         };
         assert!(evaluate(&rules, dim).unwrap_err().contains("not sunny"));
         let bright = Readings {
             irradiance: Some(650.0),
+            nsw_price: None,
         };
         assert!(evaluate(&rules, bright).is_ok());
+    }
+
+    #[test]
+    fn nsw_surplus_shares_only_at_zero_or_negative_price() {
+        let rules = ShareRules {
+            nsw_surplus: true,
+            ..Default::default()
+        };
+        let at = |p| Readings {
+            irradiance: None,
+            nsw_price: Some(p),
+        };
+        assert!(evaluate(&rules, at(85.0)).unwrap_err().contains("NSW"));
+        assert!(evaluate(&rules, at(0.0)).is_ok());
+        assert!(evaluate(&rules, at(-40.0)).is_ok());
+        assert!(evaluate(&rules, Readings::default()).is_ok());
+        let body = serde_json::json!({"ELEC_NEM_SUMMARY": [
+            {"REGIONID": "QLD1", "PRICE": 1.0},
+            {"REGIONID": "NSW1", "PRICE": -12.5}
+        ]});
+        assert_eq!(parse_nsw_price(&body).unwrap(), -12.5);
     }
 
     #[test]

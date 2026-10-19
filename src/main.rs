@@ -497,14 +497,20 @@ impl App {
                     .into(),
             );
         }
+        // Changing items while the user has the menu open makes macOS close
+        // it; cosmetic updates wait until it is closed.
+        let menu_open = native::menu_open();
         let (sharing, busy) = self.compute_view();
-        if let Some(ui) = &self.ui {
+        if let Some(ui) = self.ui.as_ref().filter(|_| !menu_open) {
             ui.compute.sync(sharing, busy);
         }
         let rules = self.settings.share_rules.clone();
-        self.share.tick(&rules, self.settings.share_compute);
+        self.share
+            .tick(&rules, self.settings.share_compute, !menu_open);
         self.follow_share_rules();
-        self.sync_payments_menu();
+        if !menu_open {
+            self.sync_payments_menu();
+        }
         let target = self.pay_target();
         let public = settings::payments_visible(&self.settings.connection);
         self.pay.tick(target, public);
