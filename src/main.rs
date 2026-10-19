@@ -1,6 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use mesh_tray::{identity, settings};
-mod compute_menu;
 mod invites;
 use mesh_tray::lifecycle;
 #[cfg(target_os = "macos")]
@@ -25,21 +24,10 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
-    compute: compute_menu::ComputeMenu,
-    public: muda::CheckMenuItem,
-    private: muda::CheckMenuItem,
-    menu: Menu,
-    /// Payments exist only on the public mesh; hidden (never deleted) in private.
-    payments: muda::Submenu,
-    payments_shown: bool,
-    /// Invites only mean something on a private mesh; swapped with Payments.
-    people: muda::Submenu,
-    people_shown: bool,
     /// What the engine is doing right now, e.g. "Loading Qwen3.8-27B…".
     status: MenuItem,
     _tray: TrayIcon,
 }
-
 
 struct App {
     settings: settings::Settings,
@@ -152,27 +140,12 @@ impl App {
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
         let panel = MenuItem::with_id("panel", "Settings…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        let private_mode = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        let public = muda::CheckMenuItem::with_id("public", "Public", true, !private_mode, None);
-        let private = muda::CheckMenuItem::with_id("private", "Private", true, private_mode, None);
-        let people = muda::Submenu::new("Invites", true);
-        people
-            .append_items(&[
-                &MenuItem::with_id("invite", "Invite someone…", true, None),
-                &MenuItem::with_id("join", "Join with an invite…", true, None),
-            ])
-            .map_err(|e| e.to_string())?;
-        let reset = MenuItem::with_id("reset", "Reset settings…", true, None);
-        let payments = self.pay.submenu()?;
-        let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
+        // Pay and share-rule state still own their (unshown) menu items.
+        let _ = self.pay.submenu()?;
         let rules = self.settings.share_rules.clone();
-        let share_when = self.share.submenu(&rules)?.clone();
+        let _ = self.share.submenu(&rules)?;
         let status = MenuItem::with_id("status", "Mesh is starting…", false, None);
         // Every control lives in the panel; the tray menu stays minimal.
-        let _ = (&public, &private, &reset, &share_when);
         menu.append_items(&[
             &status,
             &PredefinedMenuItem::separator(),
@@ -190,14 +163,6 @@ impl App {
             .build()
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
-            compute,
-            public,
-            private,
-            menu,
-            payments,
-            payments_shown: false,
-            people,
-            people_shown: false,
             status,
             _tray: tray,
         });
@@ -386,8 +351,6 @@ impl App {
         }
     }
 
-    /// Our own runtime's management port and pid, only once it is ready.
-
     /// One line for the top of the menu: what the engine is doing now.
     fn status_line(&self) -> String {
         if let Some(error) = &self.error {
@@ -403,7 +366,10 @@ impl App {
         if self.child.is_none() || !self.snapshot.running {
             // A first launch can sit on the macOS keychain prompt; say so
             // instead of failing, since killing the engine re-prompts.
-            if self.started.is_some_and(|at| at.elapsed() > Duration::from_secs(15)) {
+            if self
+                .started
+                .is_some_and(|at| at.elapsed() > Duration::from_secs(15))
+            {
                 return "Starting… allow keychain access if asked".into();
             }
             return "Mesh is starting…".into();
@@ -577,18 +543,18 @@ impl App {
         // Changing items while the user has the menu open makes macOS close
         // it; cosmetic updates wait until it is closed.
         let menu_open = native::menu_open();
-        let (sharing, busy) = self.compute_view();
-        if let Some(ui) = self.ui.as_ref().filter(|_| !menu_open) {
-            ui.compute.sync(sharing, busy);
-        }
         let rules = self.settings.share_rules.clone();
         self.share
             .tick(&rules, self.settings.share_compute, !menu_open);
         self.follow_share_rules();
         if !menu_open {
             let text = self.status_line();
-            if let Some(ui) = self.ui.as_ref().filter(|ui| ui.status.text() != menu_line(&text, self.error.is_some())) {
-                ui.status.set_text(&menu_line(&text, self.error.is_some()));
+            if let Some(ui) = self
+                .ui
+                .as_ref()
+                .filter(|ui| ui.status.text() != menu_line(&text, self.error.is_some()))
+            {
+                ui.status.set_text(menu_line(&text, self.error.is_some()));
                 let _ = ui._tray.set_tooltip(Some(format!("Mesh · {text}")));
             }
         }
@@ -615,22 +581,6 @@ impl App {
             self.next_poll = Instant::now() + POLL;
         }
     }
-    // Only called for a mode click or a successfully committed settings change.
-    // Never refresh menu state from the periodic polling/render path.
-    fn sync_mode_checks(&self) {
-        let Some(ui) = &self.ui else { return };
-        let private = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        if ui.public.is_checked() == private {
-            ui.public.set_checked(!private);
-        }
-        if ui.private.is_checked() != private {
-            ui.private.set_checked(private);
-        }
-    }
-
     /// Requested sharing state, and whether an engine restart is in flight.
     fn compute_view(&self) -> (bool, bool) {
         let busy = self.resetting
@@ -735,10 +685,6 @@ impl App {
             let mut next = self.settings.clone();
             next.share_compute = !next.share_compute;
             self.queue_settings(next);
-        }
-        let (sharing, busy) = self.compute_view();
-        if let Some(ui) = &self.ui {
-            ui.compute.sync(sharing, busy);
         }
     }
 }
@@ -935,7 +881,9 @@ fn menu_line(status: &str, error: bool) -> String {
         return "Needs attention · open Settings".into();
     }
     let s = status.trim_end_matches('…');
-    if s.chars().count() <= 28 { status.into() } else {
+    if s.chars().count() <= 28 {
+        status.into()
+    } else {
         format!("{}…", s.chars().take(27).collect::<String>())
     }
 }

@@ -3,9 +3,6 @@ use super::*;
 
 impl App {
     pub(super) fn change_mode(&mut self, connection: settings::Connection) {
-        // muda auto-toggles the clicked item before dispatch. Restore the saved
-        // choice so cancellation, same-mode clicks and failures cannot lie.
-        self.sync_mode_checks();
         if self.resetting
             || self.stopping.is_some()
             || self.pending_settings.is_some()
@@ -86,7 +83,6 @@ impl App {
             match saved {
                 Ok(()) => {
                     self.settings = next;
-                    self.sync_mode_checks();
                     self.snapshot = status::Snapshot::default();
                     self.error = None;
                     self.start();

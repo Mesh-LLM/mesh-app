@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Linux native development libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libayatana-appindicator3-dev libxdo-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libayatana-appindicator3-dev libxdo-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-xcb-dev libvulkan-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

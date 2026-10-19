@@ -470,8 +470,9 @@ fn main() {
             ..Default::default()
         };
         let r = root.clone();
-        let (window, view) = gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Panel::load(r)))
-            .expect("open panel window");
+        let (window, view) =
+            gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Panel::load(r)))
+                .expect("open panel window");
         cx.activate(true);
         let view = view.downgrade();
         let mut raised = None;

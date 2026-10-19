@@ -141,6 +141,8 @@ jobs:
           test -z "$(git diff -- Cargo.toml Cargo.lock)"
           python3 engine-src/scripts/verify-host-dependencies.py target/release/mesh-tray \
             --format macho --report host-import-policy.json
+          python3 engine-src/scripts/verify-host-dependencies.py target/release/mesh-panel \
+            --format macho --report panel-import-policy.json
 
       - name: Package Mesh.app
         env:
@@ -178,6 +180,8 @@ jobs:
           find "$app/Contents/Resources/engine/native-runtimes" -type f \
             \( -name '*.dylib' -o -perm -u+x \) -print0 2>/dev/null \
             | xargs -0 -n1 codesign --force --timestamp --options runtime --sign "$identity"
+          # Nested panel executable before the enclosing app.
+          codesign --force --timestamp --options runtime --sign "$identity" "$app/Contents/MacOS/mesh-panel"
           python3 scripts/finalize-app.py out runtime
           codesign --force --timestamp --options runtime \
             --entitlements scripts/entitlements.plist --sign "$identity" "$app"
@@ -229,6 +233,7 @@ jobs:
             "artifacts/${base}.dmg"
           tar -czf "artifacts/${base}.upstream-metadata.tar.gz" -C out upstream-metadata
           cp host-import-policy.json "artifacts/${base}.host-import-policy.json"
+          cp panel-import-policy.json "artifacts/${base}.panel-import-policy.json"
           cp out/SHA256.json "artifacts/${base}.manifest.json"
           cd artifacts
           for f in "${base}.zip" "${base}.dmg"; do

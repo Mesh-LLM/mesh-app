@@ -21,6 +21,7 @@ def fixture(root):
     (native / "manifest.json").write_text("{}")
     tray = root / "tray"
     tray.write_bytes(b"inert tray fixture")
+    (root / "mesh-panel").write_bytes(b"inert panel fixture")
     archive = root / "bundle.tar.gz"
     with tarfile.open(archive, "w:gz") as bundle:
         bundle.add(runtime, arcname="mesh-bundle")
@@ -36,6 +37,7 @@ class PackageAppTests(unittest.TestCase):
             (native / "manifest.json").write_text("{}")
             tray = root / "tray"
             tray.write_bytes(b"inert embedded tray")
+            (root / "mesh-panel").write_bytes(b"inert embedded panel")
             archive = root / "native.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
                 bundle.add(native, arcname="metal")
@@ -49,9 +51,19 @@ class PackageAppTests(unittest.TestCase):
             self.assertEqual(icon.read_bytes()[:4], b"icns")
             manifest = json.loads((out / "SHA256.json").read_text())
             self.assertEqual(manifest["files"][str(icon.relative_to(out))], pack.sha(icon))
-            self.assertEqual([p.name for p in (app / "Contents/MacOS").iterdir()], ["mesh-tray"])
+            self.assertEqual(sorted(p.name for p in (app / "Contents/MacOS").iterdir()), ["mesh-panel", "mesh-tray"])
             self.assertTrue((app / "Contents/Resources/engine/native-runtimes/metal/manifest.json").is_file())
             self.assertEqual(json.loads((out / "SHA256.json").read_text())["engine_kind"], "embedded-sdk")
+
+    def test_refuses_package_without_panel(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = pathlib.Path(root)
+            tray, archive = fixture(root)
+            (root / "mesh-panel").unlink()
+            with self.assertRaisesRegex(ValueError, "mesh-panel"):
+                pack.package(tray, archive, root / "out", version="1.0.0",
+                             archive_sha256=pack.sha(archive), engine_version="0.76.2")
+            self.assertFalse((root / "out").exists())
 
     def test_requires_pin_and_exactly_one_engine_provenance(self):
         with tempfile.TemporaryDirectory() as root:

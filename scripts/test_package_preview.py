@@ -33,6 +33,7 @@ class PackageTests(unittest.TestCase):
             (native / "manifest.json").write_text("{}")
             tray = root / "tray"
             tray.write_bytes(b"inert tray fixture")
+            (root / "mesh-panel").write_bytes(b"inert panel fixture")
             archive = root / "bundle.tar.gz"
             with tarfile.open(archive, "w:gz") as bundle:
                 bundle.add(runtime, arcname="mesh-bundle")
