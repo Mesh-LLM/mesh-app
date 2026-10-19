@@ -1,3 +1,8 @@
+[workspace]
+# The panel is its own crate so the tray binary never links GPUI (Metal).
+members = [".", "panel"]
+default-members = [".", "panel"]
+
 [package]
 name = "mesh-tray"
 version = "0.1.0"
@@ -21,7 +26,6 @@ fs2 = "0.4"
 rfd = "0.16"
 qrcode = { version = "0.14", default-features = false }
 png = "0.17"
-gpui-kit = "0.7"
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 winit = "0.30"
@@ -47,10 +51,6 @@ windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] 
 [[bin]]
 name = "mesh-tray"
 path = "src/main.rs"
-
-[[bin]]
-name = "mesh-panel"
-path = "src/bin/mesh-panel.rs"
 
 [[test]]
 name = "isolated_wallet"

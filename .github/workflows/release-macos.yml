@@ -76,7 +76,7 @@ jobs:
       - name: Install engine UI package manager
         run: |
           set -euo pipefail
-          manager="$(node -p 'require("./engine-src/crates/mesh-llm-ui/package.json").packageManager')"
+          manager="$(node -p 'require("./engine-src/mesh/crates/mesh-llm-ui/package.json").packageManager')"
           [[ "$manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]]
           npm install --global "$manager"
           pnpm --version
@@ -139,10 +139,16 @@ jobs:
           just verify
           just build
           test -z "$(git diff -- Cargo.toml Cargo.lock)"
-          python3 engine-src/scripts/verify-host-dependencies.py target/release/mesh-tray \
-            --format macho --report host-import-policy.json
-          python3 engine-src/scripts/verify-host-dependencies.py target/release/mesh-panel \
-            --format macho --report panel-import-policy.json
+          # The engine's host-dependency policy (Rust xtask since mesh-llm#2376).
+          # The tray hosts the engine, so it must not link GPU backends.
+          (cd engine-src && cargo xtool native verify-host-dependencies \
+            "$GITHUB_WORKSPACE/target/release/mesh-tray" --format macho \
+            --report "$GITHUB_WORKSPACE/host-import-policy.json")
+          # The panel is UI only; GPUI renders with Metal, so record its
+          # imports without the engine-host policy.
+          (cd engine-src && cargo xtool native verify-host-dependencies \
+            "$GITHUB_WORKSPACE/target/release/mesh-panel" --format macho --no-import-policy \
+            --report "$GITHUB_WORKSPACE/panel-import-policy.json")
 
       - name: Package Mesh.app
         env:

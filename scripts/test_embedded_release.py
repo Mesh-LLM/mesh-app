@@ -76,7 +76,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('python3 scripts/release-inputs.py', workflow)
         self.assertIn('just release-runtime-build metal', workflow)
         self.assertIn('--embedded --engine-commit', workflow)
-        self.assertIn('verify-host-dependencies.py', workflow)
+        self.assertIn('native verify-host-dependencies', workflow)
         self.assertIn('verify-embedded-package.py', workflow)
         self.assertNotIn('inputs.engine', workflow)
         self.assertNotIn('Contents/MacOS/mesh-llm', workflow)

@@ -1,5 +1,8 @@
+# Separate builds: building both together unifies features, and GPUI's would
+# link Metal into the tray (rejected by the engine host-dependency policy).
 build: console-build
-    rustup run stable cargo build --locked --release
+    rustup run stable cargo build --locked --release -p mesh-tray
+    rustup run stable cargo build --locked --release -p mesh-panel
 
 verify:
     rustup run stable cargo fmt --check

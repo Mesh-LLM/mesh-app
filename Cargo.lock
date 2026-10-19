@@ -6664,13 +6664,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-panel"
+version = "0.1.0"
+dependencies = [
+ "gpui-kit",
+ "libc",
+ "mesh-tray",
+]
+
+[[package]]
 name = "mesh-tray"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "clipboard-win",
  "fs2",
- "gpui-kit",
  "gtk",
  "libc",
  "mesh-llm-sdk",
