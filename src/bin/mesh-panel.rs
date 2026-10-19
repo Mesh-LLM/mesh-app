@@ -205,7 +205,7 @@ impl Render for Panel {
                 match model {
                     None => price_row = price_row.child("Price: no model to price"),
                     Some(model) => {
-                        let saved = self.app.prices.get(&model).copied();
+                        let saved = self.app.price_for(&model);
                         let suggested = LADDER
                             .iter()
                             .find(|r| r.model == model)
@@ -270,7 +270,7 @@ impl Render for Panel {
                                     let m = m.clone();
                                     p.edit(
                                         |a| {
-                                            a.prices.remove(&m);
+                                            a.prices.insert(m, app_config::FREE);
                                         },
                                         cx,
                                     )

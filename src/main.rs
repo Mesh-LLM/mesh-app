@@ -633,7 +633,6 @@ impl App {
         (sharing, busy)
     }
 
-    /// The user's choice, unless a power/sunshine rule pauses it.
     /// Push the panel's price for the served model once per engine run.
     /// Mesh owns pricing; this only replays the saved preference.
     fn apply_price(&mut self) {
@@ -646,7 +645,7 @@ impl App {
         ) else {
             return;
         };
-        let price = self.app.prices.get(&model).copied();
+        let price = self.app.price_for(&model);
         let want = Some((pid, model.clone(), price));
         if self.applied_price == want {
             return;
@@ -667,6 +666,8 @@ impl App {
         });
     }
 
+    /// The user's choice, unless a power/sunshine rule pauses it (or the
+    /// panel's "share now" overrides the rules).
     fn effective_share(&self) -> bool {
         self.settings.share_compute && (self.share.allows() || self.app.share_now)
     }

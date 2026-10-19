@@ -18,9 +18,15 @@ pub struct AppConfig {
     pub model: Option<String>,
     /// Ignore "Share when" rules and share now.
     pub share_now: bool,
-    /// Price per model, sats per 1M tokens. Absent = serve free.
+    /// Price per model, sats per 1M tokens. Absent = ladder suggestion;
+    /// 0/0 = free.
     pub prices: BTreeMap<String, Price>,
 }
+
+pub const FREE: Price = Price {
+    input_sats: 0,
+    output_sats: 0,
+};
 
 pub struct Rung {
     pub label: &'static str,
@@ -78,6 +84,18 @@ impl AppConfig {
         std::fs::rename(&tmp, path(root)).map_err(|e| e.to_string())
     }
 
+    /// Price to serve `model` at: the saved one, else the ladder suggestion.
+    /// A saved 0/0 means "free" (`None`).
+    pub fn price_for(&self, model: &str) -> Option<Price> {
+        let p = self.prices.get(model).copied().or_else(|| {
+            LADDER
+                .iter()
+                .find(|r| r.model == model)
+                .map(|r| r.suggested)
+        })?;
+        (p != FREE).then_some(p)
+    }
+
     /// The chosen model, only if it is a ladder rung that fits this machine.
     pub fn chosen_model(&self) -> Option<&'static str> {
         let want = self.model.as_deref()?;
@@ -119,5 +137,10 @@ mod tests {
         let back = AppConfig::load(dir.path());
         assert_eq!(back, c);
         assert_eq!(back.chosen_model(), None);
+        let rung = LADDER[0].model;
+        assert_eq!(back.price_for(rung), Some(LADDER[0].suggested));
+        let mut c = back;
+        c.prices.insert(rung.into(), FREE);
+        assert_eq!(c.price_for(rung), None);
     }
 }
