@@ -6,7 +6,8 @@ No command line, no model setup.
 ## Note this is early access
 Some features are still experimental or examples
 
-<!-- screenshot -->
+<img width="533" height="909" alt="image" src="https://github.com/user-attachments/assets/9e81cdd9-22fb-4674-9123-217e110d2f85" />
+
 
 - **Models set up automatically:** Mesh picks a model that fits your machine and downloads it on first use.
 - **Chat:** open the Mesh chat in your browser with **Chat** in the panel or the tray menu.
