@@ -129,7 +129,8 @@ pub enum Error {
     InvalidInput(&'static str),
     RuntimeChanged,
     Unavailable,
-    Rejected(u16),
+    /// HTTP status and the engine's `error` text, when it gave one.
+    Rejected(u16, Option<String>),
     Transport,
     InvalidResponse,
 }
@@ -137,6 +138,21 @@ pub enum Error {
 /// Only loopback, no redirects, bounded body, and no automatic write retries.
 /// Call from a worker, never the native event loop. On RuntimeChanged the UI
 /// must discard its snapshot and ask for confirmation again after refresh.
+/// The engine explains refusals as `{"error": "..."}`; keep that text so
+/// the user sees why, not just a status code.
+fn engine_error(response: ureq::Response) -> Option<String> {
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .take(MAX_RESPONSE)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value["error"]
+        .as_str()
+        .map(|s| s.chars().take(300).collect())
+}
+
 pub struct Client {
     port: u16,
     expected_pid: u32,
@@ -171,11 +187,13 @@ impl Client {
             .map_err(|error| match error {
                 ureq::Error::Status(409, _) => Error::RuntimeChanged,
                 ureq::Error::Status(404 | 501, _) => Error::Unavailable,
-                ureq::Error::Status(code, _) => Error::Rejected(code),
+                ureq::Error::Status(code, response) => {
+                    Error::Rejected(code, engine_error(response))
+                }
                 ureq::Error::Transport(_) => Error::Transport,
             })?;
         if response.status() != 200 {
-            return Err(Error::Rejected(response.status()));
+            return Err(Error::Rejected(response.status(), engine_error(response)));
         }
         let mut bytes = Vec::new();
         response

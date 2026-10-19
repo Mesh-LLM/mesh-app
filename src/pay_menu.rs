@@ -48,7 +48,8 @@ fn describe(error: &payments::Error) -> String {
         InvalidInput(m) => (*m).into(),
         RuntimeChanged => "Mesh restarted; try again".into(),
         Unavailable => "not available in this Mesh".into(),
-        Rejected(code) => format!("Mesh refused ({code})"),
+        Rejected(_, Some(why)) => format!("Mesh refused: {why}"),
+        Rejected(code, None) => format!("Mesh refused ({code})"),
         Transport => "Mesh not reachable".into(),
         InvalidResponse => "unexpected answer from Mesh".into(),
     }

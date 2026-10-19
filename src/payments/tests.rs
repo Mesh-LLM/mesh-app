@@ -110,10 +110,16 @@ fn runtime_mismatch_and_unavailable_are_distinct() {
     for (status, expected) in [
         (409, Error::RuntimeChanged),
         (404, Error::Unavailable),
-        (400, Error::Rejected(400)),
-        (302, Error::Rejected(302)),
+        (
+            400,
+            Error::Rejected(400, Some("unsupported draft payment ledger".into())),
+        ),
+        (
+            302,
+            Error::Rejected(302, Some("unsupported draft payment ledger".into())),
+        ),
     ] {
-        let (client, worker) = fixture(status, "{}");
+        let (client, worker) = fixture(status, r#"{"error":"unsupported draft payment ledger"}"#);
         assert_eq!(
             client.execute::<serde_json::Value>(&Command::Pricing),
             Err(expected)
