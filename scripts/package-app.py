@@ -45,6 +45,9 @@ def package(tray, archive, destination, *, version, archive_sha256,
         raise ValueError("Engine archive checksum mismatch")
     if not tray.is_file():
         raise ValueError("Build target/release/mesh-tray first")
+    panel = tray.with_name("mesh-panel")
+    if not panel.is_file():
+        raise ValueError("Build target/release/mesh-panel first; the tray opens it")
     destination.mkdir(parents=True)
     app = destination / f"{APP_NAME}.app"
     macos = app / "Contents/MacOS"
@@ -74,6 +77,7 @@ def package(tray, archive, destination, *, version, archive_sha256,
             shutil.move(str(path), target / path.name)
     shutil.rmtree(destination / "runtime")
     shutil.copy2(tray, macos / "mesh-tray")
+    shutil.copy2(panel, macos / "mesh-panel")
     repo = pathlib.Path(__file__).resolve().parents[1]
     shutil.copy2(repo / "assets/Mesh.icns", app / "Contents/Resources/Mesh.icns")
     with (app / "Contents/Info.plist").open("wb") as out:

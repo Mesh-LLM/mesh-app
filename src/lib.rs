@@ -1,8 +1,12 @@
 //! Launcher-owned pieces, separate from platform presentation.
+pub mod app_config;
 pub mod identity;
 mod model_hardware;
 pub mod model_selection;
+pub mod panel_ipc;
 pub mod settings;
+pub mod share_rules;
+pub mod status;
 
 pub mod reset;
 

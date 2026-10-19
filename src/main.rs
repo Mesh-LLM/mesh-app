@@ -1,6 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use mesh_tray::{identity, settings};
-mod compute_menu;
 mod invites;
 use mesh_tray::lifecycle;
 #[cfg(target_os = "macos")]
@@ -12,6 +11,7 @@ mod pay_menu;
 use mesh_tray::payment_reset;
 mod qr;
 mod settings_actions;
+mod share_menu;
 mod status;
 
 use lifecycle::Engine;
@@ -24,18 +24,10 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 const POLL: Duration = Duration::from_secs(3);
 
 struct Ui {
-    compute: compute_menu::ComputeMenu,
-    public: muda::CheckMenuItem,
-    private: muda::CheckMenuItem,
-    menu: Menu,
-    /// Payments exist only on the public mesh; hidden (never deleted) in private.
-    payments: muda::Submenu,
-    payments_shown: bool,
+    /// What the engine is doing right now, e.g. "Loading Qwen3.8-27B…".
+    status: MenuItem,
     _tray: TrayIcon,
 }
-
-/// Position of the Payments submenu in the tray menu (after Invites).
-const PAYMENTS_INDEX: usize = 6;
 
 struct App {
     settings: settings::Settings,
@@ -61,6 +53,18 @@ struct App {
     open_when_ready: Option<&'static str>,
     exit: bool,
     pay: pay_menu::Payments,
+    share: share_menu::ShareControl,
+    /// Whether the running engine was started serving.
+    spawned_share: bool,
+    /// Model the running engine was started with.
+    spawned_model: Option<String>,
+    /// Panel-edited preferences (`mesh-app.toml`), re-read every poll.
+    app: mesh_tray::app_config::AppConfig,
+    /// (pid, model, price) last pushed to the engine.
+    applied_price: Option<(u32, String, Option<mesh_tray::app_config::Price>)>,
+    published: Option<mesh_tray::panel_ipc::State>,
+    /// Settings clicks while the panel is open (see `panel_ipc::State::raise`).
+    raise: u64,
 }
 
 fn icon() -> Icon {
@@ -97,7 +101,15 @@ impl App {
                 }
             }
         });
+        let share = share_menu::ShareControl::new(&settings.share_rules);
         Self {
+            share,
+            spawned_share: false,
+            spawned_model: None,
+            app: mesh_tray::app_config::AppConfig::load(&root),
+            applied_price: None,
+            published: None,
+            raise: 0,
             root,
             settings,
             pending_settings: None,
@@ -125,33 +137,17 @@ impl App {
 
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
-        let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
+        let chat = MenuItem::with_id("chat", "Chat", true, None);
+        let panel = MenuItem::with_id("panel", "Settings…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        let private_mode = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        let public = muda::CheckMenuItem::with_id("public", "Public", true, !private_mode, None);
-        let private = muda::CheckMenuItem::with_id("private", "Private", true, private_mode, None);
-        let people = muda::Submenu::new("Invites", true);
-        people
-            .append_items(&[
-                &MenuItem::with_id("invite", "Invite someone…", true, None),
-                &MenuItem::with_id("join", "Join with an invite…", true, None),
-            ])
-            .map_err(|e| e.to_string())?;
-        let reset = MenuItem::with_id("reset", "Reset settings…", true, None);
-        let payments = self.pay.submenu()?;
-        let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
+        let status = MenuItem::with_id("status", "Mesh is starting…", false, None);
+        // Every control lives in the panel; the tray menu stays minimal.
         menu.append_items(&[
+            &status,
+            &PredefinedMenuItem::separator(),
+            &panel,
             &chat,
-            compute.item(),
             &PredefinedMenuItem::separator(),
-            &public,
-            &private,
-            &people,
-            &PredefinedMenuItem::separator(),
-            &reset,
             &quit,
         ])
         .map_err(|e| e.to_string())?;
@@ -163,16 +159,11 @@ impl App {
             .build()
             .map_err(|e| e.to_string())?;
         self.ui = Some(Ui {
-            compute,
-            public,
-            private,
-            menu,
-            payments,
-            payments_shown: false,
+            status,
             _tray: tray,
         });
-        self.sync_payments_menu();
         self.start();
+        let _ = open_panel();
         Ok(())
     }
 
@@ -189,12 +180,13 @@ impl App {
             Ok(child) => {
                 self.child = Some(child);
                 self.started = Some(Instant::now());
+                self.spawned_share = self.effective_share();
             }
             Err(e) => self.error = Some(e),
         }
     }
 
-    fn spawn(&self) -> Result<Engine, String> {
+    fn spawn(&mut self) -> Result<Engine, String> {
         for port in [self.settings.console_port, self.settings.api_port] {
             if std::net::TcpStream::connect_timeout(
                 &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -218,6 +210,9 @@ impl App {
         // it exists without unlocking it; the runtime child unlocks the key, so
         // the user sees one credential prompt, not two.
         let profile = settings::mesh_profile()?;
+        if let Ok(true) = mesh_tray::wallet_setup::migrate_builtin_wallet(&profile) {
+            eprintln!("Copied the built-in Lexe wallet to the installed wallet plugin's folder");
+        }
         if mesh_tray::private_reset::pending(&self.root) {
             return Err("An interrupted reset must finish first. Choose Reset settings.".into());
         }
@@ -258,7 +253,7 @@ impl App {
         // Their `[[models]]` wins: a `--model` flag would beat the file, so when
         // the file names models the tray passes none and stays out of the way.
         let configured_models = mesh_tray::runtime_config::config_declares_models(&profile);
-        let model = if !self.settings.share_compute {
+        let model = if !self.effective_share() {
             None
         } else if configured_models {
             use std::io::Write;
@@ -269,16 +264,19 @@ impl App {
             )
             .map_err(|e| e.to_string())?;
             None
+        } else if let Some(chosen) = self.app.chosen_model() {
+            Some(chosen.to_string())
         } else {
             mesh_tray::model_selection::local_model(&self.settings.connection)?
         };
+        self.spawned_model = model.clone();
         if let Some(model) = model.as_deref() {
             use std::io::Write;
-            writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
+            writeln!(&log, "Tray selected model: {model}").map_err(|e| e.to_string())?;
         }
         // A private automatic no-fit must be client-only, not an empty serve
         // list that can fall back to engine model selection. Explicit config wins.
-        let serve = self.settings.share_compute
+        let serve = self.effective_share()
             && (configured_models
                 || model.is_some()
                 || matches!(self.settings.connection, settings::Connection::Automatic));
@@ -349,22 +347,42 @@ impl App {
         }
     }
 
-    /// Our own runtime's management port and pid, only once it is ready.
-    fn sync_payments_menu(&mut self) {
-        let want = settings::payments_visible(&self.settings.connection);
-        let Some(ui) = self.ui.as_mut() else { return };
-        if want == ui.payments_shown {
-            return;
+    /// One line for the top of the menu: what the engine is doing now.
+    fn status_line(&self) -> String {
+        if let Some(error) = &self.error {
+            return error
+                .lines()
+                .next()
+                .unwrap_or("Mesh needs attention")
+                .to_string();
         }
-        let result = if want {
-            ui.menu.insert(&ui.payments, PAYMENTS_INDEX)
-        } else {
-            ui.menu.remove(&ui.payments)
-        };
-        match result {
-            Ok(()) => ui.payments_shown = want,
-            Err(e) => self.error = Some(format!("menu: {e}")),
+        if self.stopping.is_some() || self.pending_settings.is_some() {
+            return "Mesh is restarting…".into();
         }
+        if self.child.is_none() || !self.snapshot.running {
+            // A first launch can sit on the macOS keychain prompt; say so
+            // instead of failing, since killing the engine re-prompts.
+            if self
+                .started
+                .is_some_and(|at| at.elapsed() > Duration::from_secs(15))
+            {
+                return "Starting… allow keychain access if asked".into();
+            }
+            return "Mesh is starting…".into();
+        }
+        // Engine ids can be content hashes; show the ladder name instead.
+        let mut text = status::describe(&self.snapshot);
+        if let Some(label) = self
+            .spawned_model
+            .as_deref()
+            .map(mesh_tray::app_config::label)
+        {
+            for id in &self.snapshot.serving_models {
+                let short = id.rsplit('/').next().unwrap_or(id);
+                text = text.replace(id.as_str(), label).replace(short, label);
+            }
+        }
+        text
     }
 
     fn pay_target(&self) -> Option<(u16, u32)> {
@@ -376,32 +394,79 @@ impl App {
         .then(|| (self.settings.console_port, child.id()))
     }
 
+    /// One action, from the tray menu or the panel.
+    fn dispatch(&mut self, id: &str) {
+        if self.resetting && id != "quit" {
+            return;
+        }
+        let target = self.pay_target();
+        let models = self.snapshot.serving_models.clone();
+        if id.starts_with("pay:") && !settings::payments_visible(&self.settings.connection) {
+            return;
+        }
+        if self.pay.click(id, target, &models) {
+            return;
+        }
+        if id.starts_with("share:") {
+            self.change_share_rules(id);
+            return;
+        }
+        match id {
+            "chat" => self.open("/chat"),
+            "console" => self.open("/"),
+            "panel" => {
+                if !open_panel() {
+                    self.raise += 1;
+                    self.publish_state();
+                }
+            }
+            "compute" => self.toggle_compute(),
+            "public" => self.change_mode(settings::Connection::Automatic),
+            "private" => self.change_mode(settings::Connection::Private { invite: None }),
+            "invite" => self.invite(),
+            "join" => self.join(),
+            "reset" => self.reset_settings(),
+            "quit" => self.quit(),
+            _ => {}
+        }
+    }
+
+    /// What the panel shows; written only when it changes.
+    fn publish_state(&mut self) {
+        let (sharing, busy) = self.compute_view();
+        let model = self
+            .spawned_model
+            .as_deref()
+            .filter(|_| self.snapshot.running && !self.snapshot.serving_models.is_empty())
+            .map(|m| mesh_tray::app_config::label(m).to_string());
+        let state = mesh_tray::panel_ipc::State {
+            status: self.status_line(),
+            sharing,
+            busy,
+            share_status: self.share.status_text(&self.settings.share_rules, sharing),
+            serving: model,
+            public: settings::payments_visible(&self.settings.connection),
+            balance_sats: self.pay.balance().map(|m| m / 1000),
+            wallet: self.pay.has_wallet(),
+            tray_pid: std::process::id(),
+            raise: self.raise,
+        };
+        if self.published.as_ref() != Some(&state) {
+            // Cache only on success, so a failed write retries next tick.
+            if mesh_tray::panel_ipc::write_state(&self.root, &state).is_ok() {
+                self.published = Some(state);
+            }
+        }
+    }
+
     fn tick(&mut self) {
+        let mut ids: Vec<String> = Vec::new();
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if self.resetting && event.id.as_ref() != "quit" {
-                continue;
-            }
-            let target = self.pay_target();
-            let models = self.snapshot.serving_models.clone();
-            if event.id.as_ref().starts_with("pay:")
-                && !settings::payments_visible(&self.settings.connection)
-            {
-                continue;
-            }
-            if self.pay.click(event.id.as_ref(), target, &models) {
-                continue;
-            }
-            match event.id.as_ref() {
-                "chat" => self.open("/chat"),
-                "compute" => self.toggle_compute(),
-                "public" => self.change_mode(settings::Connection::Automatic),
-                "private" => self.change_mode(settings::Connection::Private { invite: None }),
-                "invite" => self.invite(),
-                "join" => self.join(),
-                "reset" => self.reset_settings(),
-                "quit" => self.quit(),
-                _ => {}
-            }
+            ids.push(event.id.as_ref().to_string());
+        }
+        ids.extend(mesh_tray::panel_ipc::take_commands(&self.root));
+        for id in ids {
+            self.dispatch(&id);
         }
         while let Ok(snapshot) = self.rx.try_recv() {
             self.polling = false;
@@ -472,21 +537,22 @@ impl App {
                     .into(),
             );
         }
-        if self
-            .started
-            .is_some_and(|at| at.elapsed() > Duration::from_secs(180))
-        {
-            self.started = None;
-            self.error = Some(
-                "Mesh startup timed out. Choose Open Chat for startup details; Quit stops only this instance."
-                    .into(),
-            );
+        // Changing items while the user has the menu open makes macOS close
+        // it; cosmetic updates wait until it is closed.
+        let menu_open = native::menu_open();
+        self.share.tick();
+        self.follow_share_rules();
+        if !menu_open {
+            let text = self.status_line();
+            if let Some(ui) = self
+                .ui
+                .as_ref()
+                .filter(|ui| ui.status.text() != menu_line(&text, self.error.is_some()))
+            {
+                ui.status.set_text(menu_line(&text, self.error.is_some()));
+                let _ = ui._tray.set_tooltip(Some(format!("Mesh · {text}")));
+            }
         }
-        let (sharing, busy) = self.compute_view();
-        if let Some(ui) = &self.ui {
-            ui.compute.sync(sharing, busy);
-        }
-        self.sync_payments_menu();
         let target = self.pay_target();
         let public = settings::payments_visible(&self.settings.connection);
         self.pay.tick(target, public);
@@ -503,27 +569,13 @@ impl App {
                 self.complete_reset(result);
             }
         }
+        self.apply_price();
+        self.publish_state();
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(self.settings.console_port).is_ok();
             self.next_poll = Instant::now() + POLL;
         }
     }
-    // Only called for a mode click or a successfully committed settings change.
-    // Never refresh menu state from the periodic polling/render path.
-    fn sync_mode_checks(&self) {
-        let Some(ui) = &self.ui else { return };
-        let private = matches!(
-            self.settings.connection,
-            settings::Connection::Private { .. }
-        );
-        if ui.public.is_checked() == private {
-            ui.public.set_checked(!private);
-        }
-        if ui.private.is_checked() != private {
-            ui.private.set_checked(private);
-        }
-    }
-
     /// Requested sharing state, and whether an engine restart is in flight.
     fn compute_view(&self) -> (bool, bool) {
         let busy = self.resetting
@@ -537,6 +589,86 @@ impl App {
         (sharing, busy)
     }
 
+    /// Push the panel's price for the served model once per engine run.
+    /// Mesh owns pricing; this only replays the saved preference.
+    fn apply_price(&mut self) {
+        if !settings::payments_visible(&self.settings.connection) {
+            return;
+        }
+        let (Some((port, pid)), Some(model)) = (
+            self.pay_target(),
+            self.snapshot.serving_models.first().cloned(),
+        ) else {
+            return;
+        };
+        let price = self
+            .spawned_model
+            .as_deref()
+            .and_then(|m| self.app.price_for(m));
+        let want = Some((pid, model.clone(), price));
+        if self.applied_price == want {
+            return;
+        }
+        self.applied_price = want;
+        std::thread::spawn(move || {
+            use mesh_tray::payments::{Client, Command, Pricing};
+            let value = price.map(|p| Pricing {
+                input_msat_per_million: p.input_sats * 1000,
+                output_msat_per_million: p.output_sats * 1000,
+                cache_discount_percent: 0,
+            });
+            let r = Client::new(port, pid).execute::<serde_json::Value>(&Command::SetPricing {
+                model: model.clone(),
+                value,
+            });
+            eprintln!("Panel price for {model}: {price:?} -> {r:?}");
+        });
+    }
+
+    /// The user's choice, unless a power/sunshine rule pauses it.
+    fn effective_share(&self) -> bool {
+        self.settings.share_compute && self.share.allows()
+    }
+
+    /// Restart the engine when a rule flips whether it should serve.
+    fn follow_share_rules(&mut self) {
+        let idle = self.child.is_some()
+            && self.started.is_none()
+            && self.stopping.is_none()
+            && self.pending_settings.is_none()
+            && !self.resetting;
+        let next = mesh_tray::app_config::AppConfig::load(&self.root);
+        if next != self.app {
+            self.app = next;
+        }
+        let model_changed = self.spawned_share
+            && self.app.chosen_model().is_some()
+            && self.app.chosen_model() != self.spawned_model.as_deref();
+        if idle && (self.effective_share() != self.spawned_share || model_changed) {
+            self.queue_settings(self.settings.clone());
+        }
+    }
+
+    /// Rules are launcher state only; saving them never restarts by itself.
+    fn change_share_rules(&mut self, id: &str) {
+        let current = self.settings.share_rules.clone();
+        if let Some(rules) = self.share.click(id, &current) {
+            let mut next = self.settings.clone();
+            next.share_rules = rules.clone();
+            match next.save(&self.root) {
+                Ok(()) => {
+                    self.settings = next;
+                    if let Some(p) = self.pending_settings.as_mut() {
+                        p.share_rules = rules;
+                    }
+                }
+                Err(e) => self.error = Some(e),
+            }
+        }
+        let rules = self.settings.share_rules.clone();
+        self.share.reset(&rules);
+    }
+
     fn toggle_compute(&mut self) {
         // muda auto-toggles the check before dispatch; queue first, then
         // render the requested state with its transition label.
@@ -548,10 +680,6 @@ impl App {
             let mut next = self.settings.clone();
             next.share_compute = !next.share_compute;
             self.queue_settings(next);
-        }
-        let (sharing, busy) = self.compute_view();
-        if let Some(ui) = &self.ui {
-            ui.compute.sync(sharing, busy);
         }
     }
 }
@@ -740,6 +868,19 @@ fn capture_logs(root: &std::path::Path) -> Result<(), String> {
 #[cfg(not(unix))]
 fn capture_logs(_: &std::path::Path) -> Result<(), String> {
     Ok(())
+}
+
+/// One short menu-bar line; detail lives in the panel and tooltip.
+fn menu_line(status: &str, error: bool) -> String {
+    if error {
+        return "Needs attention · open Settings".into();
+    }
+    let s = status.trim_end_matches('…');
+    if s.chars().count() <= 28 {
+        status.into()
+    } else {
+        format!("{}…", s.chars().take(27).collect::<String>())
+    }
 }
 
 fn main() {
@@ -1000,7 +1141,7 @@ mod transaction_tests {
 
     #[cfg(unix)]
     #[test]
-    fn live_child_still_times_out_without_being_stopped_or_forgotten() {
+    fn slow_start_waits_for_keychain_without_stopping_or_erroring() {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(root.path());
         app.polling = true;
@@ -1021,11 +1162,8 @@ mod transaction_tests {
         assert!(fresh_start_pending);
         assert_eq!(retained_pid, Some(pid));
         assert!(still_alive);
-        assert!(app.started.is_none());
-        let error = app.error.clone().unwrap();
-        assert!(error.starts_with("Mesh startup timed out."));
-        app.tick();
-        assert_eq!(app.error.as_deref(), Some(error.as_str()));
+        assert!(app.error.is_none());
+        assert!(app.status_line().contains("keychain"));
     }
 
     #[cfg(unix)]
@@ -1067,3 +1205,27 @@ mod transaction_tests {
 #[cfg(all(test, target_os = "macos"))]
 #[path = "native_portable.rs"]
 mod portable_test;
+
+/// Open the GPUI panel (sibling `mesh-panel` binary). Returns false when one
+/// is already open; the caller then asks it to come forward.
+fn open_panel() -> bool {
+    static PANEL: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+    let mut panel = PANEL.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(child) = panel.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return false;
+        }
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return true;
+    };
+    let path = exe.with_file_name("mesh-panel");
+    match std::process::Command::new(&path).spawn() {
+        Ok(child) => *panel = Some(child),
+        Err(e) => native::notice(
+            "Could not open the Mesh panel",
+            &format!("{}: {e}", path.display()),
+        ),
+    }
+    true
+}

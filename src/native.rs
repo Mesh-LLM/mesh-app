@@ -89,6 +89,26 @@ pub fn notice(title: &str, detail: &str) {
     alert.runModal();
 }
 
+/// Ask for one line of text, prefilled with `initial`.
+pub fn prompt_text(title: &str, detail: &str, action: &str, initial: &str) -> Option<String> {
+    let mtm = MainThreadMarker::new()?;
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.addButtonWithTitle(&NSString::from_str(action));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(240.0, 24.0));
+    let field = NSTextField::initWithFrame(mtm.alloc::<NSTextField>(), frame);
+    field.setStringValue(&NSString::from_str(initial));
+    alert.setAccessoryView(Some(&field));
+    alert.window().setInitialFirstResponder(Some(&field));
+    foreground_dialog(mtm);
+    if alert.runModal() != 1000 {
+        return None;
+    }
+    Some(field.stringValue().to_string())
+}
+
 /// Ask for an invite in a window with a field in it, prefilled from the
 /// clipboard when there is one on it, so the usual case is paste-already-done.
 pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {
@@ -209,6 +229,48 @@ pub fn fund_amount() -> Option<String> {
     (a.runModal() == 1000).then(|| f.stringValue().to_string())
 }
 
+/// One on/off checkbox and several labelled fields. Returns (checked, texts).
+pub fn toggle_fields<const N: usize>(
+    title: &str,
+    detail: &str,
+    check_label: &str,
+    checked: bool,
+    fields: &[(&str, &str); N],
+) -> Option<(bool, [String; N])> {
+    let mtm = MainThreadMarker::new()?;
+    let a = alert(mtm, title, detail, &["Save", "Cancel"]);
+    let row = 30.;
+    let height = 34. + row * N as f64;
+    let view = NSView::initWithFrame(
+        mtm.alloc(),
+        NSRect::new(NSPoint::new(0., 0.), NSSize::new(340., height)),
+    );
+    let check = unsafe {
+        NSButton::checkboxWithTitle_target_action(&NSString::from_str(check_label), None, None, mtm)
+    };
+    check.setFrame(NSRect::new(
+        NSPoint::new(0., height - 26.),
+        NSSize::new(340., 24.),
+    ));
+    check.setState(if checked { 1 } else { 0 });
+    view.addSubview(&check);
+    let mut made = Vec::with_capacity(N);
+    for (i, (name, value)) in fields.iter().enumerate() {
+        let y = height - 34. - row * (i as f64 + 1.) + 4.;
+        view.addSubview(&label(mtm, 0., y, 190., name));
+        let f = field(mtm, 200., y, 140., value);
+        view.addSubview(&f);
+        made.push(f);
+    }
+    a.setAccessoryView(Some(&view));
+    foreground_dialog(mtm);
+    if a.runModal() != 1000 {
+        return None;
+    }
+    let texts = std::array::from_fn(|i| made[i].stringValue().to_string());
+    Some((check.state() == 1, texts))
+}
+
 /// One on/off checkbox and one amount. Returns (checked, amount text).
 pub fn toggle_amount(
     title: &str,
@@ -280,4 +342,12 @@ pub fn invoice(detail: &str, bolt11: &str, png: &[u8]) -> InvoiceAction {
         1002 => InvoiceAction::Check,
         _ => InvoiceAction::Done,
     }
+}
+
+/// True while the user has a menu open (AppKit is tracking it). Changing menu
+/// items then makes macOS close the menu, so callers defer cosmetic updates.
+pub fn menu_open() -> bool {
+    use objc2_foundation::NSRunLoop;
+    let mode = NSRunLoop::currentRunLoop().currentMode();
+    mode.is_some_and(|m| m.to_string() == "NSEventTrackingRunLoopMode")
 }

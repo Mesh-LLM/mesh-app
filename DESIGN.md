@@ -5,15 +5,16 @@ Public/Private are flags on that node. Launcher state is `~/.mesh-app`
 (`launcher.json`, `mesh.log`). Changing mode forgets the Mesh being left, so
 there is no separate Start Over.
 
-The menu structure is constructed once; Retry startup is always present.
-Public/Private ticks are initialized from saved settings and synchronized only
-on mode clicks and committed settings changes, never periodically while polling. Runtime guards
-handle unavailable/busy actions; process supervision continues independently.
-
-OS-native jellyfish status menu: Public/Private, Invites, Payments, Chat, Retry
-startup, Quit. Invites contains exactly two items — copy an invite, or
-join with one. Payments is a fixed submenu (see below). No roster, no per-person controls, no extra settings website,
-wizard, Buzz UI/runtime, custom typography or webview.
+OS-native jellyfish status menu, constructed once: a status line, Settings…,
+Chat, Quit. Every control lives in the panel (`mesh-panel`, a GPUI window in
+its own crate so the tray never links GPUI): Public/Private, invites, Share
+compute and Share-when rules, model and price, Payments, Chat (prominent),
+Console (small link), Reset and Quit. The tray stays the single owner of
+settings, sharing rules and the engine; the panel sends actions over
+`panel_ipc` and renders the state the tray publishes. Runtime guards handle
+unavailable/busy actions; process supervision continues independently. No
+roster, no per-person controls, no extra settings website, wizard, Buzz
+UI/runtime or webview.
 
 ## One code, both directions
 
@@ -55,9 +56,12 @@ on a LAN — NAT traversal between houses is a separate, unsolved problem. Porta
 native paths compile but are not Windows/Linux product verification; Windows
 runtime isolation remains gated. No accessibility/keyboard/QR success claimed.
 
-Shutdown signals only the retained child: SIGTERM on macOS/Linux, forced
-termination through the Child handle on Windows. Windows graceful shutdown
-and product support remain deferred; no HTTP shutdown endpoint is assumed.
+The engine runs as a child process of the tray (`mesh-tray --engine`).
+Shutdown closes the child's stdin; the child stops its node and exits. If it
+has not exited within 60 seconds, the tray kills it through its Child handle.
+A stop that arrives while the engine is still starting waits up to 10 seconds
+for startup, then stops cleanly; past that, startup is abandoned and config
+snapshot cleanup is best-effort. No HTTP shutdown endpoint is assumed.
 
 ## Durable private restarts
 
@@ -87,21 +91,17 @@ A thin controller over Mesh's wallet (mesh-llm #1926). Mesh owns the wallet,
 ledger, prices, budget and settlement; the tray sends local operator API
 requests (`POST /api/wallet`, pinned to the retained runtime's PID) from a
 worker thread. The SDK has no typed wallet operations yet; when it does, the
-calls move there and the menu does not change.
+calls move there and the panel does not change.
 
-Three fixed actions. The submenu title shows the balance only after a successful
-read with a wallet present; otherwise it is plain “Payments”. A failed refresh
-adds a disabled “Balance unavailable” item inside the submenu, removed after
-recovery. Reads happen when ready, then every 10s. The last good value is retained
+Three fixed actions in the panel. The balance is shown only after a successful
+read with a wallet present. Reads happen when ready, then every 10s. The last good value is retained
 internally, never presented as a fresh balance after a failed read. Each action
 reads Mesh fresh when clicked.
 
 ```text
-Payments · <balance>         (plain “Payments” while unknown or unavailable)
-  Pay…                      [x] Pay for models + daily limit (UTC day)
-  Get paid…                 [x] Charge for the served model + one price per M tokens
-  Add funds…                balance + Lightning invoice
-  Balance unavailable       (disabled, only after a failed read)
+Pay…                      [x] Pay for models + daily limit (UTC day)
+Get paid…                 [x] Charge for the served model + one price per M tokens
+Add funds…                balance + Lightning invoice
 ```
 
 The wallet is created lazily by Mesh (first Add funds, or when paying needs
@@ -115,19 +115,18 @@ other platforms say so.
 
 ## Share compute
 
-One persisted launcher preference, defaulting on to preserve existing behaviour.
-The macOS menu row uses an AppKit NSSwitch forwarding to the existing muda
-menu action; other platforms use a checked item. No model picker or payment
+One persisted launcher preference, defaulting on to preserve existing behaviour,
+shown as a switch in the panel. No model picker or payment
 policy is added. The switch reflects the saved serving preference, not proof
 that a model is healthy.
 
-Changing it cooperatively stops the retained embedded engine, waits for exit,
+Changing it cooperatively stops the engine child process, waits for exit,
 saves the preference, and restarts via the SDK serve/client entry point. Off
 skips automatic model selection and uses client mode, not an empty serve-model
 list (which could still load configured models). Connection, invites, identity,
 ports and payment policy are unchanged. Active requests can be interrupted by
 the restart. No live engine or Keychain-touching validation is automated here;
-menu interaction, accessibility and actual unload/rejoin need a human trial.
+panel interaction, accessibility and actual unload/rejoin need a human trial.
 
 ## Explicit Reset settings
 
@@ -161,13 +160,13 @@ Quit during a pending stop cancels the queued restart and waits for shutdown;
 it does not force-kill other processes. Payment errors may leave some preferences
 disabled, but never claim to have completed the reset.
 
-## Unexpected embedded exit
+## Unexpected engine exit
 
 The tray schedules at most one automatic restart per app launch, after three
-seconds. Quit cancels it; intentional settings stops do not schedule it. The
-existing SDK safety guard still refuses replacement when worker failure leaves
-runtime exit unproven. An in-process abort kills the tray too and cannot be
-recovered by this timer.
+seconds. Quit cancels it; intentional settings stops do not schedule it. Restart
+waits for the previous engine child to exit, so two engines never share the
+profile. Because the engine is a separate process, an engine
+abort does not take the tray down with it.
 
 ## Installed wallet providers
 

@@ -15,8 +15,8 @@ def verify(root):
     if metadata['engine_kind'] != 'embedded-sdk':
         raise ValueError('Expected embedded SDK package')
     app = root / 'Mesh.app'
-    if {p.name for p in (app / 'Contents/MacOS').iterdir()} != {'mesh-tray'}:
-        raise ValueError('Expected only embedded tray executable')
+    if {p.name for p in (app / 'Contents/MacOS').iterdir()} != {'mesh-tray', 'mesh-panel'}:
+        raise ValueError('Expected exactly the tray and panel executables')
     actual = {str(p.relative_to(root)): sha(p) for p in app.rglob('*') if p.is_file()}
     if actual != metadata['files']:
         raise ValueError('Final app file hashes differ')

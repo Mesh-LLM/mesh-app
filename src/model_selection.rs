@@ -5,14 +5,15 @@ use crate::settings::Connection;
 // Pinned OpenClaw recipes: d08c80a126097113d1b412d67aaa173aa889b4b8,
 // extensions/llama-cpp/src/model-catalog.ts. Budgets include 64K context/runtime.
 const GIB: u64 = 1024 * 1024 * 1024;
-const SMALL: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523:Q4_K_M";
-const GEMMA: &str = "unsloth/gemma-4-12b-it-GGUF@fc034cfff751157913579611efad8462ac1be606:Q4_K_M";
-const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@4ca720788d1e01f1bff70c033e0d0028fd02e502:UD-Q4_K_M";
+pub const SMALL: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a09523:Q4_K_M";
+pub const GEMMA: &str =
+    "unsloth/gemma-4-12b-it-GGUF@fc034cfff751157913579611efad8462ac1be606:Q4_K_M";
+pub const LARGE: &str =
+    "unsloth/Qwen3.8-27B-GGUF@4ca720788d1e01f1bff70c033e0d0028fd02e502:UD-Q4_K_M";
 
-pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
-    if !matches!(connection, Connection::Private { .. }) {
-        return Ok(None);
-    }
+/// The same hardware-fit pick on the public and private mesh: on public the
+/// engine's own auto mode otherwise stays on standby with nothing loaded.
+pub fn local_model(_connection: &Connection) -> Result<Option<String>, String> {
     let total = memory_bytes()?;
     // Small hosts participate without automatically loading a local model.
     if total < 16 * GIB {
@@ -25,16 +26,33 @@ pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
     choose(total, available, accelerated).map(|model| model.map(str::to_string))
 }
 
+/// Whether this machine can serve `model` at all (total memory and GPU),
+/// ignoring what is free right now. Used for an explicit choice.
+pub fn fits(model: &str) -> bool {
+    let Ok(total) = memory_bytes() else {
+        return false;
+    };
+    let accelerated = cfg!(all(target_os = "macos", target_arch = "aarch64"));
+    RUNGS
+        .iter()
+        .find(|(m, ..)| *m == model)
+        .is_some_and(|(_, floor, required, gpu)| {
+            total >= floor * GIB && total / 4 * 3 >= required * GIB && (!gpu || accelerated)
+        })
+}
+
+const RUNGS: [(&str, u64, u64, bool); 3] = [
+    (LARGE, 128, 22, true),
+    (GEMMA, 24, 12, true),
+    (SMALL, 16, 6, false),
+];
+
 fn choose(total: u64, available: u64, accelerated: bool) -> Result<Option<&'static str>, String> {
     if total < 16 * GIB {
         return Ok(None);
     }
     let budget = available.min(total.saturating_sub((2 * GIB).max(total / 4)));
-    for (model, floor, required, gpu) in [
-        (LARGE, 128, 22, true),
-        (GEMMA, 24, 12, true),
-        (SMALL, 16, 6, false),
-    ] {
+    for (model, floor, required, gpu) in RUNGS {
         if total >= floor * GIB && budget >= required * GIB && (!gpu || accelerated) {
             return Ok(Some(model));
         }
@@ -129,6 +147,5 @@ mod tests {
             }
         }
         assert_eq!(choose(16 * GIB, 5 * GIB, true).unwrap(), None);
-        assert_eq!(local_model(&Connection::Automatic).unwrap(), None);
     }
 }

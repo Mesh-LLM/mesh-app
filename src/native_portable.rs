@@ -143,12 +143,34 @@ mod payments {
         notice("Payments", PAYMENTS_MAC_ONLY);
         None
     }
+    pub fn toggle_fields<const N: usize>(
+        _: &str,
+        _: &str,
+        _: &str,
+        _: bool,
+        _: &[(&str, &str); N],
+    ) -> Option<(bool, [String; N])> {
+        notice("Payments", PAYMENTS_MAC_ONLY);
+        None
+    }
     pub fn invoice(_: &str, _: &str, _: &[u8]) -> InvoiceAction {
         InvoiceAction::Done
     }
 }
 #[cfg(not(target_os = "macos"))]
 pub use payments::*;
+/// One line of text; the portable dialogs have no prefill, so this asks
+/// through the same field as invites.
+#[cfg(not(target_os = "macos"))]
+pub fn prompt_text(title: &str, detail: &str, action: &str, _initial: &str) -> Option<String> {
+    prompt_card(title, detail, action)
+}
+
+/// Menu tracking is only observable on macOS.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn menu_open() -> bool {
+    false
+}
 #[cfg(test)]
 mod tests {
     use super::*;

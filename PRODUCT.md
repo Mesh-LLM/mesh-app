@@ -28,12 +28,13 @@ restart requires an engine containing mesh-llm #1896; see DESIGN.md.
   no longer match the flags.
 - Existing Mesh QUIC and ownership enforcement stay intact. The tray adds no
   trust decisions of its own and writes nothing to the user's trust store.
-- Payments (engine with mesh-llm #1926): balance on the menu title, and three
-  items: Pay (daily limit, off by default), Get paid (one price for the served
-  model) and Add funds (Lightning invoice, optional amount). Mesh keeps
+- Payments (engine with mesh-llm #1926), in the panel: balance, Pay (daily
+  limit, off by default), Get paid (one price for the served model) and Add
+  funds (Lightning invoice, optional amount). Mesh keeps
   all money state; the tray only asks and displays. See DESIGN.md.
-- Keep native jellyfish menu, optional Chat and existing console Settings. No
-  automatic chat opening. Stop only this app's retained child.
+- Native jellyfish menu is minimal: status, Settings… (the panel), Chat, Quit.
+  The panel holds every control, with a prominent Chat and a small Console
+  link. No automatic chat opening. Stop only this app's retained child.
 - One machine identity: the child runs as the user against `~/.mesh-llm`, the
   profile the CLI and Buzz already share. No app-owned HOME, no second keystore,
   no trust-store writes and no symlinks. The engine `config.toml` is written
@@ -95,4 +96,4 @@ partial success with spending potentially enabled. An interrupted retirement
 marker can be resumed without starting the engine.
 
 The embedded SDK, payment types and matching packaged native runtime are pinned
-to source commit `89db585319fc04d7d50530900e466502273f1b68` (external wallet plugins; no built-in Lexe SDK).
+to source commit `e81239b679f511edcc59e25bc3e7b5f6ac31294f` (external wallet plugins; no built-in Lexe SDK).

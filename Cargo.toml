@@ -1,3 +1,8 @@
+[workspace]
+# The panel is its own crate so the tray binary never links GPUI (Metal).
+members = [".", "panel"]
+default-members = [".", "panel"]
+
 [package]
 name = "mesh-tray"
 version = "0.1.0"
@@ -6,13 +11,14 @@ edition = "2021"
 [dependencies]
 # mesh-llm main (wallet providers are installed plugins); immutable source pin.
 mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", rev = "e81239b679f511edcc59e25bc3e7b5f6ac31294f", default-features = false, features = ["serving", "console", "payments", "identity", "plugin-install"] }
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 tray-icon = "0.21"
 muda = "0.17"
 open = "5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = { version = "0.8", default-features = false, features = ["parse"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 sha2 = "0.10"
 tempfile = "3"
@@ -42,12 +48,20 @@ windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] 
 
 # Manual, real-engine wallet check in a throwaway profile. harness = false so
 # it can serve the engine's built-in blobstore re-exec itself.
+[[bin]]
+name = "mesh-tray"
+path = "src/main.rs"
+
 [[test]]
 name = "isolated_wallet"
 harness = false
 
 [[test]]
 name = "embedded_restart"
+harness = false
+
+[[test]]
+name = "profile_wallet"
 harness = false
 
 

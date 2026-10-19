@@ -1,0 +1,12 @@
+[package]
+name = "mesh-panel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mesh-tray = { path = ".." }
+gpui-kit = "0.7"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -41,6 +41,9 @@ def package(tray, archive, destination, *, source_commit=None,
                          "Expected official Mesh 0.76.2 macOS arm64 archive")
     if not tray.is_file():
         raise ValueError("Build target/release/mesh-tray first")
+    panel = tray.with_name("mesh-panel")
+    if not panel.is_file():
+        raise ValueError("Build target/release/mesh-panel first; the tray opens it")
     destination.mkdir(parents=True)
     app = destination / "Mesh Candidate.app"
     macos = app / "Contents/MacOS"
@@ -55,6 +58,7 @@ def package(tray, archive, destination, *, source_commit=None,
         shutil.move(str(path), macos / path.name)
     shutil.rmtree(destination / "runtime")
     shutil.copy2(tray, macos / "mesh-tray")
+    shutil.copy2(panel, macos / "mesh-panel")
     with (app / "Contents/Info.plist").open("wb") as out:
         plistlib.dump({
             "CFBundleExecutable": "mesh-tray",

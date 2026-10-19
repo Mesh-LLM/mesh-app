@@ -13,6 +13,7 @@ pub fn switching_to(current: &Settings, connection: Connection) -> Settings {
         share_compute: current.share_compute,
         console_port: current.console_port,
         api_port: current.api_port,
+        share_rules: current.share_rules.clone(),
     }
 }
 
@@ -28,6 +29,7 @@ mod tests {
             share_compute: false,
             console_port: 4242,
             api_port: 4243,
+            share_rules: Default::default(),
         }
     }
 

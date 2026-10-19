@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 pub const ENGINE_ARG: &str = "--engine";
 /// How long a cooperative stop may take before the child is killed.
 const STOP_GRACE: Duration = Duration::from_secs(60);
+/// How long a stop received mid-start waits for startup to finish so the
+/// engine can then shut down cleanly.
+const STOP_DURING_START: Duration = Duration::from_secs(10);
 
 /// Everything the child needs to build its SDK config, sent as one JSON line
 /// on stdin. The child builds the config with the same [`config`] function
@@ -50,7 +53,9 @@ pub fn builder(
         .console_ui(true)
         .config_path(profile.join("config.toml"))
         .isolated_config(false)
-        .startup_timeout(std::time::Duration::from_secs(180));
+        // Long: the engine may sit on a first-run keychain prompt. Killing it
+        // there just brings the prompt back, so the tray waits instead.
+        .startup_timeout(std::time::Duration::from_secs(1800));
     builder = if share_compute {
         let builder = builder.serve();
         match model {
@@ -254,21 +259,94 @@ pub fn run_engine_process() -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    runtime.block_on(async {
-        let handle = node.start().await.map_err(|e| format!("{e:#}"))?;
-        // EOF: the tray asked us to stop, or the tray is gone.
-        tokio::task::spawn_blocking(move || {
+    // Watch for EOF from the very start: if the tray dies while the model is
+    // still downloading or loading, the engine must not outlive it holding
+    // the console port (that is what blocked later starts).
+    let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
+    std::thread::Builder::new()
+        .name("engine-parent-watch".into())
+        .spawn(move || {
             let _ = std::io::stdin().read_to_end(&mut Vec::new());
+            let _ = eof_tx.send(());
+            // Cooperative stop gets a bounded grace period, then hard exit.
+            std::thread::sleep(STOP_GRACE);
+            std::process::exit(0);
         })
-        .await
         .map_err(|e| e.to_string())?;
-        handle.stop().await.map_err(|e| format!("{e:#}"))
-    })
+    runtime.block_on(run_until_stop(
+        node.start(),
+        eof_rx,
+        STOP_DURING_START,
+        |handle| async move { handle.stop().await },
+    ))
+}
+
+/// Runs startup until the tray's EOF, then stops the started handle exactly
+/// once. If EOF arrives mid-start, startup gets `grace` to finish so its
+/// runtime is stopped cleanly; past that it is abandoned and snapshot
+/// cleanup is best-effort only.
+async fn run_until_stop<H, E, S, Fut>(
+    start: impl std::future::Future<Output = Result<H, E>>,
+    mut eof_rx: tokio::sync::oneshot::Receiver<()>,
+    grace: Duration,
+    stop: S,
+) -> Result<(), String>
+where
+    E: std::fmt::Display,
+    S: FnOnce(H) -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    tokio::pin!(start);
+    let (handle, eof_seen) = tokio::select! {
+        started = &mut start => (started.map_err(|e| format!("{e:#}"))?, false),
+        _ = &mut eof_rx => match tokio::time::timeout(grace, &mut start).await {
+            Ok(Ok(handle)) => (handle, true),
+            _ => return Ok(()),
+        },
+    };
+    // A completed oneshot receiver panics if polled again.
+    if !eof_seen {
+        let _ = eof_rx.await;
+    }
+    stop(handle).await.map_err(|e| format!("{e:#}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn eof_during_startup_stops_exactly_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let stops = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = stops.clone();
+        let start = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, String>(7u8)
+        };
+        run_until_stop(start, rx, Duration::from_secs(5), move |h| async move {
+            assert_eq!(h, 7);
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn startup_past_grace_is_abandoned_without_stop() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let start = std::future::pending::<Result<u8, String>>();
+        run_until_stop(start, rx, Duration::from_millis(20), |_| async {
+            panic!("must not stop an unstarted engine")
+        })
+        .await
+        .unwrap();
+    }
     #[test]
     fn client_keeps_mesh_and_profile_without_serving_configuration() {
         let settings = Settings {

@@ -54,6 +54,7 @@ class ReleaseTests(unittest.TestCase):
             macos = app / 'Contents/MacOS'
             macos.mkdir(parents=True)
             (macos / 'mesh-tray').write_bytes(b'inert tray')
+            (macos / 'mesh-panel').write_bytes(b'inert panel')
             native = app / 'Contents/Resources/engine/native-runtimes/metal'
             native.mkdir(parents=True)
             (native / 'lib.dylib').write_bytes(b'inert library')
@@ -67,7 +68,7 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'hashes'):
                 package.verify(root)
             (macos / 'mesh-llm').write_bytes(b'unwanted host')
-            with self.assertRaisesRegex(ValueError, 'only embedded'):
+            with self.assertRaisesRegex(ValueError, 'tray and panel'):
                 package.verify(root)
 
     def test_workflow_uses_embedded_producers_and_never_launches_app(self):
@@ -75,7 +76,7 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn('python3 scripts/release-inputs.py', workflow)
         self.assertIn('just release-runtime-build metal', workflow)
         self.assertIn('--embedded --engine-commit', workflow)
-        self.assertIn('verify-host-dependencies.py', workflow)
+        self.assertIn('native verify-host-dependencies', workflow)
         self.assertIn('verify-embedded-package.py', workflow)
         self.assertNotIn('inputs.engine', workflow)
         self.assertNotIn('Contents/MacOS/mesh-llm', workflow)
