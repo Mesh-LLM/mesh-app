@@ -163,9 +163,9 @@ disabled, but never claim to have completed the reset.
 ## Unexpected engine exit
 
 The tray schedules at most one automatic restart per app launch, after three
-seconds. Quit cancels it; intentional settings stops do not schedule it. The
-existing SDK safety guard still refuses replacement when worker failure leaves
-runtime exit unproven. Because the engine is a separate process, an engine
+seconds. Quit cancels it; intentional settings stops do not schedule it. Restart
+waits for the previous engine child to exit, so two engines never share the
+profile. Because the engine is a separate process, an engine
 abort does not take the tray down with it.
 
 ## Installed wallet providers
