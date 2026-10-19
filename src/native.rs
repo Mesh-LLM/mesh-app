@@ -89,6 +89,26 @@ pub fn notice(title: &str, detail: &str) {
     alert.runModal();
 }
 
+/// Ask for one line of text, prefilled with `initial`.
+pub fn prompt_text(title: &str, detail: &str, action: &str, initial: &str) -> Option<String> {
+    let mtm = MainThreadMarker::new()?;
+    let alert = NSAlert::new(mtm);
+    alert.setMessageText(&NSString::from_str(title));
+    alert.setInformativeText(&NSString::from_str(detail));
+    alert.addButtonWithTitle(&NSString::from_str(action));
+    alert.addButtonWithTitle(&NSString::from_str("Cancel"));
+    let frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(240.0, 24.0));
+    let field = NSTextField::initWithFrame(mtm.alloc::<NSTextField>(), frame);
+    field.setStringValue(&NSString::from_str(initial));
+    alert.setAccessoryView(Some(&field));
+    alert.window().setInitialFirstResponder(Some(&field));
+    foreground_dialog(mtm);
+    if alert.runModal() != 1000 {
+        return None;
+    }
+    Some(field.stringValue().to_string())
+}
+
 /// Ask for an invite in a window with a field in it, prefilled from the
 /// clipboard when there is one on it, so the usual case is paste-already-done.
 pub fn prompt_card(title: &str, detail: &str, action: &str) -> Option<String> {

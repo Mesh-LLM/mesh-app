@@ -1,4 +1,4 @@
-//! "Share only when sunny" submenu: a sunshine condition that pauses
+//! "Share when" submenu: spare-power and time-of-day conditions that pause
 //! sharing without changing the user's Share compute choice.
 use mesh_tray::share_rules::{self, Gate, Sampler, ShareRules};
 use muda::{CheckMenuItem, MenuItem, Submenu};
@@ -17,8 +17,8 @@ pub struct ShareControl {
 
 struct Items {
     submenu: Submenu,
-    sunny: CheckMenuItem,
-    grid: CheckMenuItem,
+    spare: CheckMenuItem,
+    hours: CheckMenuItem,
     location: MenuItem,
     status: MenuItem,
 }
@@ -62,19 +62,19 @@ impl ShareControl {
 
     pub fn submenu(&mut self, rules: &ShareRules) -> Result<&Submenu, String> {
         let items = Items {
-            submenu: Submenu::new("Use spare power", true),
-            sunny: CheckMenuItem::with_id(
-                "share:sunny",
-                "Only when sunny",
+            submenu: Submenu::new("Share when", true),
+            spare: CheckMenuItem::with_id(
+                "share:spare",
+                "There's spare power (sunny, or NSW surplus)",
                 true,
-                rules.sunny,
+                rules.spare_power,
                 None,
             ),
-            grid: CheckMenuItem::with_id(
-                "share:grid",
-                "Only when NSW grid has spare power",
+            hours: CheckMenuItem::with_id(
+                "share:hours",
+                hours_label(rules),
                 true,
-                rules.nsw_surplus,
+                rules.hours_on,
                 None,
             ),
             location: MenuItem::with_id("share:location", location_label(rules), true, None),
@@ -85,8 +85,9 @@ impl ShareControl {
             .append_items(&[
                 &items.status,
                 &muda::PredefinedMenuItem::separator(),
-                &items.sunny,
-                &items.grid,
+                &items.spare,
+                &items.hours,
+                &muda::PredefinedMenuItem::separator(),
                 &items.location,
             ])
             .map_err(|e| e.to_string())?;
@@ -99,8 +100,13 @@ impl ShareControl {
     pub fn click(&mut self, id: &str, current: &ShareRules) -> Option<ShareRules> {
         let mut next = current.clone();
         match id {
-            "share:sunny" => next.sunny = !next.sunny,
-            "share:grid" => next.nsw_surplus = !next.nsw_surplus,
+            "share:spare" => next.spare_power = !next.spare_power,
+            // Turning hours on asks for the window (prefilled); off just stops.
+            "share:hours" if next.hours_on => next.hours_on = false,
+            "share:hours" => {
+                next.hours = ask_hours(next.hours)?;
+                next.hours_on = true;
+            }
             "share:location" => next.location = Some(ask_location()?),
             _ => return None,
         }
@@ -124,8 +130,9 @@ impl ShareControl {
     pub fn reset(&mut self, rules: &ShareRules) {
         let _ = self.rules_tx.send(rules.clone());
         if let Some(m) = &self.menu {
-            m.sunny.set_checked(rules.sunny);
-            m.grid.set_checked(rules.nsw_surplus);
+            m.spare.set_checked(rules.spare_power);
+            m.hours.set_checked(rules.hours_on);
+            m.hours.set_text(hours_label(rules));
             m.location.set_text(location_label(rules));
         }
     }
@@ -134,12 +141,32 @@ impl ShareControl {
         let Some(m) = &self.menu else { return };
         let text = match (user_sharing, self.gate.status()) {
             (false, _) => "Sharing is off".to_string(),
-            (true, Ok(())) if rules.sunny || rules.nsw_surplus => "Sharing now".to_string(),
+            (true, Ok(())) if rules.any() => "Sharing now".to_string(),
             (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),
             (true, Err(reason)) => reason.clone(),
         };
         if m.status.text() != text {
             m.status.set_text(text);
+        }
+    }
+}
+
+fn hours_label(rules: &ShareRules) -> String {
+    format!("Between {}…", rules.hours.label())
+}
+
+fn ask_hours(current: share_rules::Hours) -> Option<share_rules::Hours> {
+    let text = crate::native::prompt_text(
+        "Share between",
+        "Local time, for example 10:00-15:00. Overnight works too: 22:00-06:00.",
+        "Save",
+        &current.label().replace('–', "-"),
+    )?;
+    match share_rules::parse_hours(&text) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            crate::native::notice("Hours not saved", &e);
+            None
         }
     }
 }
@@ -152,10 +179,11 @@ fn location_label(rules: &ShareRules) -> String {
 }
 
 fn ask_location() -> Option<share_rules::Location> {
-    let text = crate::native::prompt_card(
+    let text = crate::native::prompt_text(
         "Where is your solar?",
         "By default Mesh uses your IP address's city. To be exact, enter latitude, longitude (for example -33.87, 151.21). Sunshine there is checked with Open-Meteo every 10 minutes.",
         "Save",
+        "",
     )?;
     match share_rules::parse_location(&text) {
         Ok(l) => Some(l),

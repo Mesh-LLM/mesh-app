@@ -159,6 +159,13 @@ mod payments {
 }
 #[cfg(not(target_os = "macos"))]
 pub use payments::*;
+/// One line of text; the portable dialogs have no prefill, so this asks
+/// through the same field as invites.
+#[cfg(not(target_os = "macos"))]
+pub fn prompt_text(title: &str, detail: &str, action: &str, _initial: &str) -> Option<String> {
+    prompt_card(title, detail, action)
+}
+
 /// Menu tracking is only observable on macOS.
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn menu_open() -> bool {
