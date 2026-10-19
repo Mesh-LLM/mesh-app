@@ -402,8 +402,21 @@ impl Render for Panel {
             .flex()
             .gap_2()
             .justify_end()
+            .items_center()
             .child(
-                chip("chat", "Launch Console", false)
+                div()
+                    .id("console")
+                    .text_sm()
+                    .text_color(rgb(MUTED))
+                    .cursor_pointer()
+                    .hover(|d| d.underline())
+                    .child("Console")
+                    .on_click(cx.listener(|p, _, _, cx| p.act("console", cx))),
+            )
+            .child(
+                chip("chat", "Chat", true)
+                    .px_5()
+                    .py_2()
                     .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
             )
             .child(

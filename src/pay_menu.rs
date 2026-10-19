@@ -9,7 +9,6 @@ use mesh_tray::payments::{
     self, format_sats, sats_to_msat, Balance, Client, Command, FundingInvoice, Mode, Policy,
     PolicyStatus, Pricing, Receipt, Transaction,
 };
-use muda::{MenuItem, Submenu};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -55,27 +54,11 @@ fn describe(error: &payments::Error) -> String {
     }
 }
 
-/// Submenu title: the balance only when a wallet exists and has been read.
-pub fn title(wallet: bool, balance: Option<u64>, failed: bool) -> String {
-    // Keep the last good value internally, but do not present a stale balance
-    // as current after a failed refresh. Unknown is distinct from known zero.
-    if failed {
-        return "Payments".into();
-    }
-    match (wallet, balance) {
-        (true, Some(msat)) => format!("Payments · {}", format_sats(msat)),
-        _ => "Payments".into(),
-    }
-}
-
 /// (clicked item, runtime pid, install result).
 type Setup = (String, u32, Receiver<Result<(), String>>);
 
 pub struct Payments {
     profile: Option<PathBuf>,
-    menu: Option<Submenu>,
-    shown: String,
-    unavailable: Option<MenuItem>,
     /// Last good balance; a failed read never clears it.
     balance: Option<u64>,
     balance_failed: bool,
@@ -112,9 +95,6 @@ impl Payments {
             .expect("spawn payments worker");
         Self {
             profile,
-            menu: None,
-            shown: String::new(),
-            unavailable: None,
             balance: None,
             balance_failed: false,
             next_refresh: Instant::now(),
@@ -149,20 +129,6 @@ impl Payments {
         self.profile.as_deref().is_some_and(payments::wallet_exists)
     }
 
-    /// Main thread only, called once from `App::build`.
-    pub fn submenu(&mut self) -> Result<Submenu, String> {
-        self.shown = title(self.wallet(), self.balance, self.balance_failed);
-        let menu = Submenu::new(&self.shown, true);
-        menu.append_items(&[
-            &MenuItem::with_id("pay:pay", "Pay…", true, None),
-            &MenuItem::with_id("pay:earn", "Get paid…", true, None),
-            &MenuItem::with_id("pay:fund", "Add funds…", true, None),
-        ])
-        .map_err(|e| e.to_string())?;
-        self.menu = Some(menu.clone());
-        Ok(menu)
-    }
-
     /// `target` is (console port, runtime pid) only while our own runtime is ready.
     /// `public` is false on a private mesh: no balance polling, and the engine
     /// is told once per runtime to stop paying and charging (retried until
@@ -189,25 +155,6 @@ impl Payments {
                 self.refreshing = self.jobs.send((t.0, t.1, Job::Balance)).is_ok();
                 self.next_refresh = now + REFRESH;
             }
-        }
-        if let Some(menu) = self.menu.as_ref().filter(|_| !crate::native::menu_open()) {
-            if self.balance_failed && self.unavailable.is_none() {
-                let item = MenuItem::new("Balance unavailable", false, None);
-                if menu.append(&item).is_ok() {
-                    self.unavailable = Some(item);
-                }
-            } else if !self.balance_failed {
-                if let Some(item) = self.unavailable.take() {
-                    let _ = menu.remove(&item);
-                }
-            }
-        }
-        let text = title(self.wallet(), self.balance, self.balance_failed);
-        if text != self.shown && !crate::native::menu_open() {
-            if let Some(menu) = &self.menu {
-                menu.set_text(&text);
-            }
-            self.shown = text;
         }
     }
 
@@ -741,16 +688,6 @@ mod tests {
     }
 
     #[test]
-    fn title_shows_balance_only_with_a_wallet() {
-        assert_eq!(title(false, Some(1_234_000), false), "Payments");
-        assert_eq!(title(true, None, false), "Payments");
-        assert_eq!(title(true, None, true), "Payments");
-        assert_eq!(title(true, Some(0), true), "Payments");
-        assert_eq!(title(true, Some(0), false), "Payments · 0 sats");
-        assert_eq!(title(true, Some(1_234_000), false), "Payments · 1,234 sats");
-    }
-
-    #[test]
     fn failed_read_keeps_last_good_balance() {
         let mut p = Payments::new(None);
         p.handle(
@@ -762,7 +699,8 @@ mod tests {
         );
         p.handle(Reply::Balance(Err(payments::Error::Transport)), None);
         assert_eq!(p.balance, Some(5_000));
-        assert_eq!(title(true, p.balance, p.balance_failed), "Payments");
+        // Kept internally, but not presented as current after a failed read.
+        assert!(p.balance_failed);
         p.handle(
             Reply::Balance(Ok(Balance {
                 spendable_msat: 0,
@@ -770,9 +708,6 @@ mod tests {
             })),
             None,
         );
-        assert_eq!(
-            title(true, p.balance, p.balance_failed),
-            "Payments · 0 sats"
-        );
+        assert_eq!((p.balance, p.balance_failed), (Some(0), false));
     }
 }

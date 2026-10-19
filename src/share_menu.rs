@@ -1,7 +1,6 @@
-//! "Share when" submenu: spare-power and time-of-day conditions that pause
+//! Share-when control: spare-power and time-of-day conditions that pause
 //! sharing without changing the user's Share compute choice.
 use mesh_tray::share_rules::{self, Gate, Sampler, ShareRules};
-use muda::{CheckMenuItem, MenuItem, Submenu};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -12,15 +11,6 @@ pub struct ShareControl {
     gate: Gate,
     rules_tx: Sender<ShareRules>,
     results: Receiver<Result<(), String>>,
-    menu: Option<Items>,
-}
-
-struct Items {
-    submenu: Submenu,
-    spare: CheckMenuItem,
-    hours: CheckMenuItem,
-    location: MenuItem,
-    status: MenuItem,
 }
 
 impl ShareControl {
@@ -52,47 +42,11 @@ impl ShareControl {
             gate,
             rules_tx,
             results,
-            menu: None,
         }
     }
 
     pub fn allows(&self) -> bool {
         self.gate.allows()
-    }
-
-    pub fn submenu(&mut self, rules: &ShareRules) -> Result<&Submenu, String> {
-        let items = Items {
-            submenu: Submenu::new("Share when", true),
-            spare: CheckMenuItem::with_id(
-                "share:spare",
-                "Only when sunny or there's surplus energy",
-                true,
-                rules.spare_power,
-                None,
-            ),
-            hours: CheckMenuItem::with_id(
-                "share:hours",
-                hours_label(rules),
-                true,
-                rules.hours_on,
-                None,
-            ),
-            location: MenuItem::with_id("share:location", location_label(rules), true, None),
-            status: MenuItem::with_id("share:status", "", false, None),
-        };
-        items
-            .submenu
-            .append_items(&[
-                &items.status,
-                &muda::PredefinedMenuItem::separator(),
-                &items.spare,
-                &muda::PredefinedMenuItem::separator(),
-                &items.location,
-            ])
-            .map_err(|e| e.to_string())?;
-        self.menu = Some(items);
-        self.render(rules, true);
-        Ok(&self.menu.as_ref().expect("just set").submenu)
     }
 
     /// Handle a `share:` click; returns the new rules to save, if any.
@@ -114,13 +68,10 @@ impl ShareControl {
     }
 
     /// Drain background checks; returns true when share/pause flipped.
-    pub fn tick(&mut self, rules: &ShareRules, user_sharing: bool, render: bool) -> bool {
+    pub fn tick(&mut self) -> bool {
         let mut flipped = false;
         while let Ok(result) = self.results.try_recv() {
             flipped |= self.gate.observe(result);
-        }
-        if render {
-            self.render(rules, user_sharing);
         }
         flipped
     }
@@ -128,12 +79,6 @@ impl ShareControl {
     /// Rules changed by a click (or a failed save): re-sync checks and sampler.
     pub fn reset(&mut self, rules: &ShareRules) {
         let _ = self.rules_tx.send(rules.clone());
-        if let Some(m) = &self.menu {
-            m.spare.set_checked(rules.spare_power);
-            m.hours.set_checked(rules.hours_on);
-            m.hours.set_text(hours_label(rules));
-            m.location.set_text(location_label(rules));
-        }
     }
 
     /// One line for the panel: sharing now, or why it is paused.
@@ -145,23 +90,6 @@ impl ShareControl {
             (true, Err(reason)) => reason.clone(),
         }
     }
-
-    fn render(&self, rules: &ShareRules, user_sharing: bool) {
-        let Some(m) = &self.menu else { return };
-        let text = match (user_sharing, self.gate.status()) {
-            (false, _) => "Sharing is off".to_string(),
-            (true, Ok(())) if rules.any() => "Sharing now".to_string(),
-            (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),
-            (true, Err(reason)) => reason.clone(),
-        };
-        if m.status.text() != text {
-            m.status.set_text(text);
-        }
-    }
-}
-
-fn hours_label(rules: &ShareRules) -> String {
-    format!("Between {}…", rules.hours.label())
 }
 
 fn ask_hours(current: share_rules::Hours) -> Option<share_rules::Hours> {
@@ -177,13 +105,6 @@ fn ask_hours(current: share_rules::Hours) -> Option<share_rules::Hours> {
             crate::native::notice("Hours not saved", &e);
             None
         }
-    }
-}
-
-fn location_label(rules: &ShareRules) -> String {
-    match rules.location {
-        Some(l) => format!("Location: {:.2}, {:.2}…", l.lat, l.lon),
-        None => "Location: from IP address (change…)".into(),
     }
 }
 

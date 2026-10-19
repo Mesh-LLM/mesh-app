@@ -5,15 +5,16 @@ Public/Private are flags on that node. Launcher state is `~/.mesh-app`
 (`launcher.json`, `mesh.log`). Changing mode forgets the Mesh being left, so
 there is no separate Start Over.
 
-The menu structure is constructed once; Retry startup is always present.
-Public/Private ticks are initialized from saved settings and synchronized only
-on mode clicks and committed settings changes, never periodically while polling. Runtime guards
-handle unavailable/busy actions; process supervision continues independently.
-
-OS-native jellyfish status menu: Public/Private, Invites, Payments, Chat, Retry
-startup, Quit. Invites contains exactly two items — copy an invite, or
-join with one. Payments is a fixed submenu (see below). No roster, no per-person controls, no extra settings website,
-wizard, Buzz UI/runtime, custom typography or webview.
+OS-native jellyfish status menu, constructed once: a status line, Settings…,
+Chat, Quit. Every control lives in the panel (`mesh-panel`, a GPUI window in
+its own crate so the tray never links GPUI): Public/Private, invites, Share
+compute and Share-when rules, model and price, Payments, Chat (prominent),
+Console (small link), Reset and Quit. The tray stays the single owner of
+settings, sharing rules and the engine; the panel sends actions over
+`panel_ipc` and renders the state the tray publishes. Runtime guards handle
+unavailable/busy actions; process supervision continues independently. No
+roster, no per-person controls, no extra settings website, wizard, Buzz
+UI/runtime or webview.
 
 ## One code, both directions
 
@@ -87,21 +88,17 @@ A thin controller over Mesh's wallet (mesh-llm #1926). Mesh owns the wallet,
 ledger, prices, budget and settlement; the tray sends local operator API
 requests (`POST /api/wallet`, pinned to the retained runtime's PID) from a
 worker thread. The SDK has no typed wallet operations yet; when it does, the
-calls move there and the menu does not change.
+calls move there and the panel does not change.
 
-Three fixed actions. The submenu title shows the balance only after a successful
-read with a wallet present; otherwise it is plain “Payments”. A failed refresh
-adds a disabled “Balance unavailable” item inside the submenu, removed after
-recovery. Reads happen when ready, then every 10s. The last good value is retained
+Three fixed actions in the panel. The balance is shown only after a successful
+read with a wallet present. Reads happen when ready, then every 10s. The last good value is retained
 internally, never presented as a fresh balance after a failed read. Each action
 reads Mesh fresh when clicked.
 
 ```text
-Payments · <balance>         (plain “Payments” while unknown or unavailable)
-  Pay…                      [x] Pay for models + daily limit (UTC day)
-  Get paid…                 [x] Charge for the served model + one price per M tokens
-  Add funds…                balance + Lightning invoice
-  Balance unavailable       (disabled, only after a failed read)
+Pay…                      [x] Pay for models + daily limit (UTC day)
+Get paid…                 [x] Charge for the served model + one price per M tokens
+Add funds…                balance + Lightning invoice
 ```
 
 The wallet is created lazily by Mesh (first Add funds, or when paying needs
@@ -115,9 +112,8 @@ other platforms say so.
 
 ## Share compute
 
-One persisted launcher preference, defaulting on to preserve existing behaviour.
-The macOS menu row uses an AppKit NSSwitch forwarding to the existing muda
-menu action; other platforms use a checked item. No model picker or payment
+One persisted launcher preference, defaulting on to preserve existing behaviour,
+shown as a switch in the panel. No model picker or payment
 policy is added. The switch reflects the saved serving preference, not proof
 that a model is healthy.
 
@@ -127,7 +123,7 @@ skips automatic model selection and uses client mode, not an empty serve-model
 list (which could still load configured models). Connection, invites, identity,
 ports and payment policy are unchanged. Active requests can be interrupted by
 the restart. No live engine or Keychain-touching validation is automated here;
-menu interaction, accessibility and actual unload/rejoin need a human trial.
+panel interaction, accessibility and actual unload/rejoin need a human trial.
 
 ## Explicit Reset settings
 

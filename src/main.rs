@@ -137,13 +137,9 @@ impl App {
 
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
-        let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
+        let chat = MenuItem::with_id("chat", "Chat", true, None);
         let panel = MenuItem::with_id("panel", "Settings…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
-        // Pay and share-rule state still own their (unshown) menu items.
-        let _ = self.pay.submenu()?;
-        let rules = self.settings.share_rules.clone();
-        let _ = self.share.submenu(&rules)?;
         let status = MenuItem::with_id("status", "Mesh is starting…", false, None);
         // Every control lives in the panel; the tray menu stays minimal.
         menu.append_items(&[
@@ -417,6 +413,7 @@ impl App {
         }
         match id {
             "chat" => self.open("/chat"),
+            "console" => self.open("/"),
             "panel" => {
                 if !open_panel() {
                     self.raise += 1;
@@ -543,9 +540,7 @@ impl App {
         // Changing items while the user has the menu open makes macOS close
         // it; cosmetic updates wait until it is closed.
         let menu_open = native::menu_open();
-        let rules = self.settings.share_rules.clone();
-        self.share
-            .tick(&rules, self.settings.share_compute, !menu_open);
+        self.share.tick();
         self.follow_share_rules();
         if !menu_open {
             let text = self.status_line();

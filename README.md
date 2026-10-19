@@ -9,13 +9,15 @@ Some features are still experimental or examples
 <!-- screenshot -->
 
 - **Models set up automatically:** Mesh picks a model that fits your machine and downloads it on first use.
-- **Chat:** open the Mesh chat in your browser from the tray menu.
+- **Chat:** open the Mesh chat in your browser with **Chat** in the panel or the tray menu.
+  The smaller **Console** link opens the Mesh console.
+- **Settings live in one panel:** the tray menu only shows status, **Settings…**, **Chat** and **Quit**.
 
 ## Public or private
 
 - **Public** joins the open Mesh. Anyone can find it, and there's nothing to share.
-- **Private** is your own Mesh. Others join with an invite: choose **Invite → Copy an invite**
-  and send the code, and they paste it with **Invite → Join with an invite**.
+- **Private** is your own Mesh. Others join with an invite: open **Settings…**, copy an
+  invite and send the code; they paste it under **Join with an invite** in their panel.
   An invite works for 24 hours and gives access to the whole private Mesh.
   It can be forwarded and can't be revoked, so share it only with people you trust.
 
