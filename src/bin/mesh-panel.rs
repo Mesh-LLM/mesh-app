@@ -121,6 +121,34 @@ fn switch(id: &'static str, label: impl Into<SharedString>, on: bool) -> Statefu
         )
 }
 
+/// The jellyfish, drawn from the tray's 32×32 RGBA raster as plain boxes:
+/// no image decoder or asset source involved, so it always renders.
+fn logo() -> Div {
+    const N: usize = 32;
+    const PX: f32 = 1.5;
+    let raw = include_bytes!("../../assets/mesh-jellyfish.rgba");
+    let mut d = div().relative().flex_none().size(px(N as f32 * PX));
+    for (i, p) in raw.chunks_exact(4).enumerate() {
+        if p[3] < 24 {
+            continue;
+        }
+        let (x, y) = ((i % N) as f32, (i / N) as f32);
+        let c = (u32::from(p[0]) << 24)
+            | (u32::from(p[1]) << 16)
+            | (u32::from(p[2]) << 8)
+            | u32::from(p[3]);
+        d = d.child(
+            div()
+                .absolute()
+                .left(px(x * PX))
+                .top(px(y * PX))
+                .size(px(PX))
+                .bg(rgba(c)),
+        );
+    }
+    d
+}
+
 fn muted(text: impl Into<SharedString>) -> Div {
     div().text_xs().text_color(rgb(MUTED)).child(text.into())
 }
@@ -153,24 +181,13 @@ impl Render for Panel {
         let rules = self.settings.share_rules.clone();
         let model = self.model();
 
-        let header = div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .child(
-                img(std::sync::Arc::new(Image::from_bytes(
-                    ImageFormat::Png,
-                    include_bytes!("../../assets/mesh-jellyfish.png").to_vec(),
-                )))
-                .size_10(),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(div().text_lg().child("Mesh"))
-                    .child(muted(st.status.clone())),
-            );
+        let header = div().flex().items_center().gap_3().child(logo()).child(
+            div()
+                .flex()
+                .flex_col()
+                .child(div().text_lg().child("Mesh"))
+                .child(muted(st.status.clone())),
+        );
 
         let mut network = card("NETWORK").child(
             div()
@@ -284,10 +301,9 @@ impl Render for Panel {
                 })),
             );
         }
-        let model_card = card("MODEL").child(picks).child(muted(match model {
-            Some(_) => "Mesh restarts to switch models.",
-            None => "This computer is too small to share a model.",
-        }));
+        let model_card = card("MODEL").child(picks).when(model.is_none(), |d| {
+            d.child(muted("Too small to share a model"))
+        });
 
         let earn = model.filter(|_| !private).map(|m| {
             let price = self.app.price_for(m);
@@ -320,7 +336,7 @@ impl Render for Panel {
                 })),
             );
             c = match price {
-                None => c.child(muted("Free for everyone on the mesh.")),
+                None => c.child(muted("Free")),
                 Some(pr) => c
                     .child(div().child(format!(
                         "{} sats in · {} sats out, per 1M tokens",
@@ -380,9 +396,6 @@ impl Render for Panel {
                                 .on_click(cx.listener(|p, _, _, cx| p.act("pay:pay", cx))),
                         ),
                 )
-                .child(muted(
-                    "Paying lets Mesh use bigger models on other computers, up to a daily limit.",
-                ))
         });
 
         let footer = div()
@@ -456,7 +469,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        let bounds = Bounds::centered(None, size(px(440.), px(780.)), cx);
+        let bounds = Bounds::centered(None, size(px(520.), px(900.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
