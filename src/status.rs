@@ -8,6 +8,33 @@ pub struct Snapshot {
     pub private_owner: Option<String>,
     /// Models this node itself serves; Earning prices are keyed on these.
     pub serving_models: Vec<String>,
+    /// Engine node state: "loading", "serving", "standby", "client".
+    pub node_state: String,
+    /// Model the engine is loading or serving, when it has one.
+    pub model_name: String,
+}
+
+/// Short, human status for the menu, from the engine's own state.
+pub fn describe(s: &Snapshot) -> String {
+    let model = short_model(&s.model_name);
+    match (s.node_state.as_str(), model.is_empty()) {
+        ("loading", false) => format!("Loading {model}…"),
+        ("loading", true) => "Loading a model…".into(),
+        ("serving", false) => format!("Sharing {model}"),
+        ("serving", true) => "Sharing".into(),
+        ("client", _) => "Connected, not sharing".into(),
+        _ => "Connected, no model loaded".into(),
+    }
+}
+
+/// "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M" -> "Qwen3.8-27B".
+fn short_model(name: &str) -> String {
+    let name = name.trim();
+    let name = name.rsplit('/').next().unwrap_or(name);
+    let name = name.split([':', '@']).next().unwrap_or(name);
+    name.trim_end_matches("-GGUF")
+        .trim_end_matches(".gguf")
+        .to_string()
 }
 
 fn agent() -> ureq::Agent {
@@ -55,6 +82,8 @@ pub fn snapshot(port: u16) -> Snapshot {
     Snapshot {
         pid,
         running: true,
+        node_state: value["node_state"].as_str().unwrap_or_default().to_string(),
+        model_name: value["model_name"].as_str().unwrap_or_default().to_string(),
         serving_models: value["serving_models"]
             .as_array()
             .map(|models| {
@@ -185,5 +214,27 @@ mod private_tests {
         let mut v = v;
         v["owner"]["verified"] = false.into();
         assert!(checked_private_invite(&v, 42, "owner", 100).is_err());
+    }
+}
+
+#[cfg(test)]
+mod describe_tests {
+    use super::*;
+
+    fn snap(state: &str, model: &str) -> Snapshot {
+        Snapshot {
+            node_state: state.into(),
+            model_name: model.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn says_what_the_engine_is_doing() {
+        let m = "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M";
+        assert_eq!(describe(&snap("loading", m)), "Loading Qwen3.8-27B…");
+        assert_eq!(describe(&snap("serving", m)), "Sharing Qwen3.8-27B");
+        assert_eq!(describe(&snap("client", "")), "Connected, not sharing");
+        assert_eq!(describe(&snap("standby", "")), "Connected, no model loaded");
     }
 }

@@ -32,11 +32,18 @@ struct Ui {
     /// Payments exist only on the public mesh; hidden (never deleted) in private.
     payments: muda::Submenu,
     payments_shown: bool,
+    /// Invites only mean something on a private mesh; swapped with Payments.
+    people: muda::Submenu,
+    people_shown: bool,
+    /// What the engine is doing right now, e.g. "Loading Qwen3.8-27B…".
+    status: MenuItem,
     _tray: TrayIcon,
 }
 
 /// Position of the Payments submenu in the tray menu (after Invites).
 const PAYMENTS_INDEX: usize = 7;
+/// Invites take the same slot as Payments (they are never shown together).
+const PEOPLE_INDEX: usize = 7;
 
 struct App {
     settings: settings::Settings,
@@ -152,14 +159,15 @@ impl App {
         let compute = compute_menu::ComputeMenu::new(self.settings.share_compute);
         let rules = self.settings.share_rules.clone();
         let share_when = self.share.submenu(&rules)?.clone();
+        let status = MenuItem::with_id("status", "Mesh is starting…", false, None);
         menu.append_items(&[
+            &status,
             &chat,
             compute.item(),
             &share_when,
             &PredefinedMenuItem::separator(),
             &public,
             &private,
-            &people,
             &PredefinedMenuItem::separator(),
             &reset,
             &quit,
@@ -179,6 +187,9 @@ impl App {
             menu,
             payments,
             payments_shown: false,
+            people,
+            people_shown: false,
+            status,
             _tray: tray,
         });
         self.sync_payments_menu();
@@ -288,7 +299,7 @@ impl App {
         };
         if let Some(model) = model.as_deref() {
             use std::io::Write;
-            writeln!(&log, "Tray selected private model: {model}").map_err(|e| e.to_string())?;
+            writeln!(&log, "Tray selected model: {model}").map_err(|e| e.to_string())?;
         }
         // A private automatic no-fit must be client-only, not an empty serve
         // list that can fall back to engine model selection. Explicit config wins.
@@ -367,6 +378,25 @@ impl App {
     fn sync_payments_menu(&mut self) {
         let want = settings::payments_visible(&self.settings.connection);
         let Some(ui) = self.ui.as_mut() else { return };
+        // Remove before insert so the shared slot index stays right.
+        if want && ui.people_shown {
+            match ui.menu.remove(&ui.people) {
+                Ok(()) => ui.people_shown = false,
+                Err(e) => self.error = Some(format!("menu: {e}")),
+            }
+        }
+        if !want && ui.payments_shown {
+            match ui.menu.remove(&ui.payments) {
+                Ok(()) => ui.payments_shown = false,
+                Err(e) => self.error = Some(format!("menu: {e}")),
+            }
+        }
+        if !want && !ui.people_shown {
+            match ui.menu.insert(&ui.people, PEOPLE_INDEX) {
+                Ok(()) => ui.people_shown = true,
+                Err(e) => self.error = Some(format!("menu: {e}")),
+            }
+        }
         if want == ui.payments_shown {
             return;
         }
@@ -379,6 +409,24 @@ impl App {
             Ok(()) => ui.payments_shown = want,
             Err(e) => self.error = Some(format!("menu: {e}")),
         }
+    }
+
+    /// One line for the top of the menu: what the engine is doing now.
+    fn status_line(&self) -> String {
+        if let Some(error) = &self.error {
+            return error
+                .lines()
+                .next()
+                .unwrap_or("Mesh needs attention")
+                .to_string();
+        }
+        if self.stopping.is_some() || self.pending_settings.is_some() {
+            return "Mesh is restarting…".into();
+        }
+        if self.child.is_none() || !self.snapshot.running {
+            return "Mesh is starting…".into();
+        }
+        status::describe(&self.snapshot)
     }
 
     fn pay_target(&self) -> Option<(u16, u32)> {
@@ -513,6 +561,11 @@ impl App {
         self.follow_share_rules();
         if !menu_open {
             self.sync_payments_menu();
+            let text = self.status_line();
+            if let Some(ui) = self.ui.as_ref().filter(|ui| ui.status.text() != text) {
+                ui.status.set_text(&text);
+                let _ = ui._tray.set_tooltip(Some(format!("Mesh · {text}")));
+            }
         }
         let target = self.pay_target();
         let public = settings::payments_visible(&self.settings.connection);

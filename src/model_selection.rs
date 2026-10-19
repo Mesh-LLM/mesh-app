@@ -9,10 +9,9 @@ const SMALL: &str = "unsloth/Qwen3.5-4B-GGUF@e87f176479d0855a907a41277aca2f8ee7a
 const GEMMA: &str = "unsloth/gemma-4-12b-it-GGUF@fc034cfff751157913579611efad8462ac1be606:Q4_K_M";
 const LARGE: &str = "unsloth/Qwen3.8-27B-GGUF@4ca720788d1e01f1bff70c033e0d0028fd02e502:UD-Q4_K_M";
 
-pub fn local_model(connection: &Connection) -> Result<Option<String>, String> {
-    if !matches!(connection, Connection::Private { .. }) {
-        return Ok(None);
-    }
+/// The same hardware-fit pick on the public and private mesh: on public the
+/// engine's own auto mode otherwise stays on standby with nothing loaded.
+pub fn local_model(_connection: &Connection) -> Result<Option<String>, String> {
     let total = memory_bytes()?;
     // Small hosts participate without automatically loading a local model.
     if total < 16 * GIB {
@@ -129,6 +128,5 @@ mod tests {
             }
         }
         assert_eq!(choose(16 * GIB, 5 * GIB, true).unwrap(), None);
-        assert_eq!(local_model(&Connection::Automatic).unwrap(), None);
     }
 }
