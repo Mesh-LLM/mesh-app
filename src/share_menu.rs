@@ -1,6 +1,6 @@
 //! Share-when control: spare-power and time-of-day conditions that pause
 //! sharing without changing the user's Share compute choice.
-use mesh_tray::share_rules::{self, Gate, Sampler, ShareRules};
+use mesh_tray::share_rules::{self, Gate, Readings, Sampler, ShareRules};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
@@ -10,7 +10,11 @@ const CHECK_EVERY: Duration = Duration::from_secs(15);
 pub struct ShareControl {
     gate: Gate,
     rules_tx: Sender<ShareRules>,
-    results: Receiver<Result<(), String>>,
+    results: Receiver<(Result<(), String>, bool)>,
+    /// No full reading yet: the next one decides without debounce.
+    first: bool,
+    /// Spare power is on but no fresh weather or grid reading exists.
+    unknown: bool,
 }
 
 impl ShareControl {
@@ -18,12 +22,22 @@ impl ShareControl {
         let (rules_tx, rules_rx) = mpsc::channel::<ShareRules>();
         let (tx, results) = mpsc::channel();
         let first = rules.clone();
-        // First decision is synchronous so launch never flaps.
+        // Launch decides from the clock alone (no network wait before the
+        // engine starts); the first full reading, taken at once in the
+        // background, then decides without debounce.
         let mut sampler = Sampler::default();
-        let gate = Gate::starting(share_rules::evaluate(&first, sampler.sample(&first)));
+        let gate = Gate::starting(share_rules::evaluate(&first, Readings::clock()));
         std::thread::spawn(move || {
             let mut rules = first;
             loop {
+                let now = sampler.sample(&rules);
+                let unknown = now.power_unknown(&rules);
+                if tx
+                    .send((share_rules::evaluate(&rules, now), unknown))
+                    .is_err()
+                {
+                    return;
+                }
                 match rules_rx.recv_timeout(CHECK_EVERY) {
                     Ok(next) => rules = next,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -32,16 +46,14 @@ impl ShareControl {
                 while let Ok(next) = rules_rx.try_recv() {
                     rules = next;
                 }
-                let now = sampler.sample(&rules);
-                if tx.send(share_rules::evaluate(&rules, now)).is_err() {
-                    return;
-                }
             }
         });
         Self {
             gate,
             rules_tx,
             results,
+            first: true,
+            unknown: false,
         }
     }
 
@@ -70,8 +82,15 @@ impl ShareControl {
     /// Drain background checks; returns true when share/pause flipped.
     pub fn tick(&mut self) -> bool {
         let mut flipped = false;
-        while let Ok(result) = self.results.try_recv() {
-            flipped |= self.gate.observe(result);
+        while let Ok((result, unknown)) = self.results.try_recv() {
+            self.unknown = unknown;
+            if std::mem::take(&mut self.first) {
+                let was = self.gate.allows();
+                self.gate = Gate::starting(result);
+                flipped |= was != self.gate.allows();
+            } else {
+                flipped |= self.gate.observe(result);
+            }
         }
         flipped
     }
@@ -85,6 +104,9 @@ impl ShareControl {
     pub fn status_text(&self, rules: &ShareRules, user_sharing: bool) -> String {
         match (user_sharing, self.gate.status()) {
             (false, _) => "Sharing is off".to_string(),
+            (true, Ok(())) if rules.spare_power && (self.first || self.unknown) => {
+                "Sharing: power status unknown (checking weather and grid)".to_string()
+            }
             (true, Ok(())) if rules.any() => "Sharing now".to_string(),
             (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),
             (true, Err(reason)) => reason.clone(),

@@ -11,9 +11,13 @@ pub const SUNNY_W_M2: f64 = 200.0;
 pub const WEATHER_EVERY: Duration = Duration::from_secs(10 * 60);
 /// AEMO dispatch runs every 5 minutes.
 pub const GRID_EVERY: Duration = Duration::from_secs(5 * 60);
-/// A changed answer must hold this many consecutive checks before it flips
-/// sharing, so a passing cloud does not restart the engine.
+/// A changed answer must hold this many consecutive checks (15s apart) before
+/// it flips sharing. Weather is cached for 10 minutes, so these are usually
+/// re-evaluations of the same reading: this guards against a single odd
+/// evaluation (e.g. a clock edge), not a passing cloud.
 pub const STABLE_CHECKS: u32 = 2;
+/// A reading older than this is treated as unknown rather than reused.
+pub const STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
 pub struct Location {
@@ -107,6 +111,21 @@ pub struct Readings {
     pub nsw_price: Option<f64>,
     /// Local minutes since midnight.
     pub minute: Option<u16>,
+}
+
+impl Readings {
+    /// Clock only: no network, so it can decide at launch without blocking.
+    pub fn clock() -> Self {
+        Self {
+            minute: Some(local_minute()),
+            ..Default::default()
+        }
+    }
+
+    /// Spare power is on but neither source has a usable reading.
+    pub fn power_unknown(&self, rules: &ShareRules) -> bool {
+        rules.spare_power && self.irradiance.is_none() && self.nsw_price.is_none()
+    }
 }
 
 /// `Ok(())` to share, or `Err(reason)` shown in the menu.
@@ -294,11 +313,16 @@ pub fn parse_location(text: &str) -> Result<Location, String> {
 
 /// Background sampler: weather at most every [`WEATHER_EVERY`], or at once
 /// when the location changes. The IP location is looked up once per run.
+/// A good reading and when it was taken.
+type Good = (f64, Instant);
+
 #[derive(Default)]
 pub struct Sampler {
     ip: Option<(Instant, Option<Location>)>,
-    weather: Option<(Location, Instant, Option<f64>)>,
-    grid: Option<(Instant, Option<f64>)>,
+    /// (location, last attempt, last good value and when it was read).
+    weather: Option<(Location, Instant, Option<Good>)>,
+    /// (last attempt, last good value and when it was read).
+    grid: Option<(Instant, Option<Good>)>,
 }
 
 impl Sampler {
@@ -327,9 +351,11 @@ impl Sampler {
     fn grid(&mut self) -> Option<f64> {
         if self.grid.is_none_or(|(t, _)| t.elapsed() >= GRID_EVERY) {
             let previous = self.grid.and_then(|(_, p)| p);
-            self.grid = Some((Instant::now(), nsw_price().ok().or(previous)));
+            let now = Instant::now();
+            let read = nsw_price().ok().map(|p| (p, now));
+            self.grid = Some((now, read.or(previous)));
         }
-        self.grid.and_then(|(_, p)| p)
+        unless_stale(self.grid.and_then(|(_, p)| p))
     }
 
     fn sunshine(&mut self, at: Location) -> Option<f64> {
@@ -341,11 +367,19 @@ impl Sampler {
                 .weather
                 .and_then(|(l, _, w)| (l == at).then_some(w))
                 .flatten();
-            let w = irradiance(at).ok().or(previous);
-            self.weather = Some((at, Instant::now(), w));
+            let now = Instant::now();
+            let w = irradiance(at).ok().map(|w| (w, now)).or(previous);
+            self.weather = Some((at, now, w));
         }
-        self.weather.and_then(|(_, _, w)| w)
+        unless_stale(self.weather.and_then(|(_, _, w)| w))
     }
+}
+
+/// A failed refresh keeps the last good value only until it is stale.
+fn unless_stale(reading: Option<Good>) -> Option<f64> {
+    reading
+        .filter(|(_, at)| at.elapsed() < STALE_AFTER)
+        .map(|(v, _)| v)
 }
 
 #[cfg(test)]
@@ -363,6 +397,28 @@ mod tests {
             nsw_price: p,
             minute: Some(minute),
         }
+    }
+
+    #[test]
+    fn launch_decides_from_clock_without_network() {
+        let rules = ShareRules {
+            spare_power: true,
+            ..Default::default()
+        };
+        let now = Readings::clock();
+        assert!(now.power_unknown(&rules));
+        assert_eq!(evaluate(&rules, now), Ok(()));
+    }
+
+    #[test]
+    fn stale_readings_become_unknown() {
+        let now = Instant::now();
+        assert_eq!(unless_stale(Some((5.0, now))), Some(5.0));
+        let old = now.checked_sub(STALE_AFTER + Duration::from_secs(1));
+        if let Some(old) = old {
+            assert_eq!(unless_stale(Some((5.0, old))), None);
+        }
+        assert_eq!(unless_stale(None), None);
     }
 
     #[test]
