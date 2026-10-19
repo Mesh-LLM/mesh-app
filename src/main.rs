@@ -40,10 +40,6 @@ struct Ui {
     _tray: TrayIcon,
 }
 
-/// Position of the Payments submenu in the tray menu (after Invites).
-const PAYMENTS_INDEX: usize = 7;
-/// Invites take the same slot as Payments (they are never shown together).
-const PEOPLE_INDEX: usize = 7;
 
 struct App {
     settings: settings::Settings,
@@ -388,45 +384,6 @@ impl App {
     }
 
     /// Our own runtime's management port and pid, only once it is ready.
-    fn sync_payments_menu(&mut self) {
-        // Payments and Invites are panel controls now, never menu items.
-        if self.ui.is_some() {
-            return;
-        }
-        let want = settings::payments_visible(&self.settings.connection);
-        let Some(ui) = self.ui.as_mut() else { return };
-        // Remove before insert so the shared slot index stays right.
-        if want && ui.people_shown {
-            match ui.menu.remove(&ui.people) {
-                Ok(()) => ui.people_shown = false,
-                Err(e) => self.error = Some(format!("menu: {e}")),
-            }
-        }
-        if !want && ui.payments_shown {
-            match ui.menu.remove(&ui.payments) {
-                Ok(()) => ui.payments_shown = false,
-                Err(e) => self.error = Some(format!("menu: {e}")),
-            }
-        }
-        if !want && !ui.people_shown {
-            match ui.menu.insert(&ui.people, PEOPLE_INDEX) {
-                Ok(()) => ui.people_shown = true,
-                Err(e) => self.error = Some(format!("menu: {e}")),
-            }
-        }
-        if want == ui.payments_shown {
-            return;
-        }
-        let result = if want {
-            ui.menu.insert(&ui.payments, PAYMENTS_INDEX)
-        } else {
-            ui.menu.remove(&ui.payments)
-        };
-        match result {
-            Ok(()) => ui.payments_shown = want,
-            Err(e) => self.error = Some(format!("menu: {e}")),
-        }
-    }
 
     /// One line for the top of the menu: what the engine is doing now.
     fn status_line(&self) -> String {
@@ -523,8 +480,10 @@ impl App {
             tray_pid: std::process::id(),
         };
         if self.published.as_ref() != Some(&state) {
-            let _ = mesh_tray::panel_ipc::write_state(&self.root, &state);
-            self.published = Some(state);
+            // Cache only on success, so a failed write retries next tick.
+            if mesh_tray::panel_ipc::write_state(&self.root, &state).is_ok() {
+                self.published = Some(state);
+            }
         }
     }
 
@@ -618,7 +577,6 @@ impl App {
             .tick(&rules, self.settings.share_compute, !menu_open);
         self.follow_share_rules();
         if !menu_open {
-            self.sync_payments_menu();
             let text = self.status_line();
             if let Some(ui) = self.ui.as_ref().filter(|ui| ui.status.text() != menu_line(&text, self.error.is_some())) {
                 ui.status.set_text(&menu_line(&text, self.error.is_some()));
@@ -1301,8 +1259,10 @@ fn open_panel() {
     static PANEL: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
     let mut panel = PANEL.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(child) = panel.as_mut() {
+        // Still open: replace it, so Settings always brings a window forward.
         if matches!(child.try_wait(), Ok(None)) {
-            return; // still open
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
     let Ok(exe) = std::env::current_exe() else {
