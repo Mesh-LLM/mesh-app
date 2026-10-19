@@ -128,7 +128,7 @@ fn logo() -> Div {
     const PX: f32 = 1.5;
     let raw = include_bytes!("../../assets/mesh-jellyfish.rgba");
     let mut d = div().relative().flex_none().size(px(N as f32 * PX));
-    for (i, p) in raw.chunks_exact(4).enumerate() {
+    for (i, p) in raw.as_chunks::<4>().0.iter().enumerate() {
         if p[3] < 24 {
             continue;
         }

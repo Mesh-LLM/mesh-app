@@ -6,7 +6,7 @@ import re
 import tomllib
 
 REPO = "https://github.com/Mesh-LLM/mesh-llm"
-DEPENDENCIES = ("mesh-llm-sdk", "mesh-llm-host-runtime", "mesh-llm-identity")
+DEPENDENCIES = ("mesh-llm-sdk",)
 
 
 def engine_revision(manifest, lock):
@@ -20,7 +20,7 @@ def engine_revision(manifest, lock):
             raise ValueError(f"{name} has an ambiguous source")
         revisions.add(dep["rev"])
     if len(revisions) != 1:
-        raise ValueError("SDK, host and identity revisions differ")
+        raise ValueError("Engine revisions differ")
     revision = revisions.pop()
     source = f"git+{REPO}?rev={revision}#{revision}"
     for name in DEPENDENCIES:

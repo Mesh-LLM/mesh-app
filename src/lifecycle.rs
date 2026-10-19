@@ -20,6 +20,9 @@ use std::time::{Duration, Instant};
 pub const ENGINE_ARG: &str = "--engine";
 /// How long a cooperative stop may take before the child is killed.
 const STOP_GRACE: Duration = Duration::from_secs(60);
+/// How long a stop received mid-start waits for startup to finish so the
+/// engine can then shut down cleanly.
+const STOP_DURING_START: Duration = Duration::from_secs(10);
 
 /// Everything the child needs to build its SDK config, sent as one JSON line
 /// on stdin. The child builds the config with the same [`config`] function
@@ -271,9 +274,20 @@ pub fn run_engine_process() -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     runtime.block_on(async {
+        let start = node.start();
+        tokio::pin!(start);
         let handle = tokio::select! {
-            started = node.start() => started.map_err(|e| format!("{e:#}"))?,
-            _ = &mut eof_rx => return Ok(()),
+            started = &mut start => started.map_err(|e| format!("{e:#}"))?,
+            _ = &mut eof_rx => {
+                // Stop arrived mid-start. Dropping the start future abandons
+                // the runtime thread unjoined (the process then exits under
+                // it, leaving its config snapshot behind). If startup is about
+                // to finish, let it, then stop cleanly; otherwise give up.
+                match tokio::time::timeout(STOP_DURING_START, &mut start).await {
+                    Ok(Ok(handle)) => handle,
+                    _ => return Ok(()),
+                }
+            }
         };
         let _ = eof_rx.await;
         handle.stop().await.map_err(|e| format!("{e:#}"))
