@@ -23,6 +23,8 @@ struct Panel {
     app: AppConfig,
     auto: Option<&'static str>,
     error: Option<String>,
+    /// Mode just picked (private?), shown at once until saved or cancelled.
+    picked: Option<(bool, std::time::Instant)>,
 }
 
 impl Panel {
@@ -38,7 +40,16 @@ impl Panel {
             settings,
             auto,
             error: None,
+            picked: None,
             root,
+        }
+    }
+
+    fn pick(&mut self, private: bool, cx: &mut Context<Self>) {
+        let saved = matches!(self.settings.connection, Connection::Private { .. });
+        if private != saved && self.picked.is_none() {
+            self.picked = Some((private, std::time::Instant::now()));
+            self.act(if private { "private" } else { "public" }, cx);
         }
     }
 
@@ -118,7 +129,7 @@ fn sats(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(c);
@@ -129,7 +140,16 @@ fn sats(n: u64) -> String {
 impl Render for Panel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let st = self.state.clone();
-        let private = matches!(self.settings.connection, Connection::Private { .. });
+        let saved_private = matches!(self.settings.connection, Connection::Private { .. });
+        // Show the pick at once; drop it once saved, or after the confirm
+        // dialog has had time to be answered (cancel reverts).
+        if let Some((want, at)) = self.picked {
+            if (want == saved_private && !st.busy) || at.elapsed() > Duration::from_secs(60) {
+                self.picked = None;
+            }
+        }
+        let switching = self.picked.is_some();
+        let private = self.picked.map_or(saved_private, |(p, _)| p);
         let rules = self.settings.share_rules.clone();
         let model = self.model();
 
@@ -138,10 +158,10 @@ impl Render for Panel {
             .items_center()
             .gap_3()
             .child(
-                img(concat!(
-                    env!("CARGO_MANIFEST_DIR"),
-                    "/assets/mesh-jellyfish.png"
-                ))
+                img(std::sync::Arc::new(Image::from_bytes(
+                    ImageFormat::Png,
+                    include_bytes!("../../assets/mesh-jellyfish.png").to_vec(),
+                )))
                 .size_10(),
             )
             .child(
@@ -158,36 +178,33 @@ impl Render for Panel {
                 .gap_2()
                 .child(
                     chip("public", "Public", !private)
-                        .on_click(cx.listener(|p, _, _, cx| p.act("public", cx))),
+                        .on_click(cx.listener(|p, _, _, cx| p.pick(false, cx))),
                 )
                 .child(
                     chip("private", "Private", private)
-                        .on_click(cx.listener(|p, _, _, cx| p.act("private", cx))),
-                ),
-        );
-        network = if private {
-            network
-                .child(muted("Share with people you invite. No payments."))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            chip("invite", "Invite someone…", false)
-                                .on_click(cx.listener(|p, _, _, cx| p.act("invite", cx))),
-                        )
-                        .child(
-                            chip("join", "Join with an invite…", false)
-                                .on_click(cx.listener(|p, _, _, cx| p.act("join", cx))),
-                        ),
+                        .on_click(cx.listener(|p, _, _, cx| p.pick(true, cx))),
                 )
-        } else {
-            network.child(muted("Join the public mesh. Pay and get paid in sats."))
-        };
+                .when(switching, |d| d.child(muted("Switching…"))),
+        );
+        if private && !switching {
+            network = network.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        chip("invite", "Invite someone…", false)
+                            .on_click(cx.listener(|p, _, _, cx| p.act("invite", cx))),
+                    )
+                    .child(
+                        chip("join", "Join with an invite…", false)
+                            .on_click(cx.listener(|p, _, _, cx| p.act("join", cx))),
+                    ),
+            );
+        }
 
         let share = card("SHARE")
             .child(
-                switch("compute", "Share this computer", st.sharing)
+                switch("compute", "Share compute", st.sharing)
                     .on_click(cx.listener(|p, _, _, cx| p.act("compute", cx))),
             )
             .child(muted(if st.busy {
@@ -242,14 +259,24 @@ impl Render for Panel {
             )
             .on_click(cx.listener(|p, _, _, cx| p.edit(|a| a.model = None, cx))),
         );
-        for (i, rung) in LADDER.iter().enumerate() {
+        // Only the rungs below the automatic pick: smaller, cheaper options.
+        let below = LADDER
+            .iter()
+            .position(|r| Some(r.model) == self.auto)
+            .map_or(0, |i| i + 1);
+        for (i, rung) in LADDER.iter().enumerate().skip(below) {
             if !model_selection::fits(rung.model) {
                 continue;
             }
+            let size = if i + 1 == LADDER.len() {
+                "tiny"
+            } else {
+                "small"
+            };
             picks = picks.child(
                 chip(
                     ("rung", i),
-                    rung.label,
+                    format!("{} ({size})", rung.label),
                     self.app.chosen_model() == Some(rung.model),
                 )
                 .on_click(cx.listener(move |p, _, _, cx| {
@@ -274,7 +301,7 @@ impl Render for Panel {
                     cx,
                 )
             };
-            let mut c = card("GET PAID").child(
+            let mut c = card("EARN FOR COMPUTE SHARED").child(
                 switch(
                     "earn",
                     format!("Charge for {}", app_config::label(m)),
@@ -334,7 +361,7 @@ impl Render for Panel {
         });
 
         let pay = (!private).then(|| {
-            card("PAY")
+            card("PAY FOR INFERENCE")
                 .child(div().child(match (st.wallet, st.balance_sats) {
                     (true, Some(b)) => format!("Wallet balance: {} sats", sats(b)),
                     (true, None) => "Wallet balance: checking…".into(),
@@ -363,7 +390,7 @@ impl Render for Panel {
             .gap_2()
             .justify_end()
             .child(
-                chip("chat", "Open Chat", false)
+                chip("chat", "Launch Console", false)
                     .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
             )
             .child(
@@ -429,7 +456,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        let bounds = Bounds::centered(None, size(px(420.), px(640.)), cx);
+        let bounds = Bounds::centered(None, size(px(440.), px(780.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
@@ -455,7 +482,7 @@ fn main() {
                 .await;
             // The tray is gone: the panel has nothing to control.
             if next.state.tray_pid != 0 && !alive(next.state.tray_pid) {
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
                 break;
             }
             if view

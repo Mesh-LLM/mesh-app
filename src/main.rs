@@ -151,7 +151,7 @@ impl App {
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
-        let panel = MenuItem::with_id("panel", "Open Mesh…", true, None);
+        let panel = MenuItem::with_id("panel", "Settings…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let private_mode = matches!(
             self.settings.connection,
@@ -445,7 +445,11 @@ impl App {
         }
         // Engine ids can be content hashes; show the ladder name instead.
         let mut text = status::describe(&self.snapshot);
-        if let Some(label) = self.spawned_model.as_deref().map(mesh_tray::app_config::label) {
+        if let Some(label) = self
+            .spawned_model
+            .as_deref()
+            .map(mesh_tray::app_config::label)
+        {
             for id in &self.snapshot.serving_models {
                 let short = id.rsplit('/').next().unwrap_or(id);
                 text = text.replace(id.as_str(), label).replace(short, label);

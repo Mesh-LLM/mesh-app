@@ -17,10 +17,6 @@ impl ComputeMenu {
         }
     }
 
-    pub fn item(&self) -> &CheckMenuItem {
-        &self.item
-    }
-
     /// `busy` briefly disables the item while the engine restarts, so
     /// overlapping start/stop requests cannot be queued.
     pub fn sync(&self, sharing: bool, busy: bool) {
