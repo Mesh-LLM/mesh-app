@@ -75,6 +75,8 @@ struct App {
     /// (pid, model, price) last pushed to the engine.
     applied_price: Option<(u32, String, Option<mesh_tray::app_config::Price>)>,
     published: Option<mesh_tray::panel_ipc::State>,
+    /// Settings clicks while the panel is open (see `panel_ipc::State::raise`).
+    raise: u64,
 }
 
 fn icon() -> Icon {
@@ -119,6 +121,7 @@ impl App {
             app: mesh_tray::app_config::AppConfig::load(&root),
             applied_price: None,
             published: None,
+            raise: 0,
             root,
             settings,
             pending_settings: None,
@@ -199,7 +202,7 @@ impl App {
             _tray: tray,
         });
         self.start();
-        open_panel();
+        let _ = open_panel();
         Ok(())
     }
 
@@ -448,7 +451,12 @@ impl App {
         }
         match id {
             "chat" => self.open("/chat"),
-            "panel" => open_panel(),
+            "panel" => {
+                if !open_panel() {
+                    self.raise += 1;
+                    self.publish_state();
+                }
+            }
             "compute" => self.toggle_compute(),
             "public" => self.change_mode(settings::Connection::Automatic),
             "private" => self.change_mode(settings::Connection::Private { invite: None }),
@@ -478,6 +486,7 @@ impl App {
             balance_sats: self.pay.balance().map(|m| m / 1000),
             wallet: self.pay.has_wallet(),
             tray_pid: std::process::id(),
+            raise: self.raise,
         };
         if self.published.as_ref() != Some(&state) {
             // Cache only on success, so a failed write retries next tick.
@@ -1254,19 +1263,18 @@ mod transaction_tests {
 #[path = "native_portable.rs"]
 mod portable_test;
 
-/// Open the GPUI panel (sibling `mesh-panel` binary), or leave the open one.
-fn open_panel() {
+/// Open the GPUI panel (sibling `mesh-panel` binary). Returns false when one
+/// is already open; the caller then asks it to come forward.
+fn open_panel() -> bool {
     static PANEL: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
     let mut panel = PANEL.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(child) = panel.as_mut() {
-        // Still open: replace it, so Settings always brings a window forward.
         if matches!(child.try_wait(), Ok(None)) {
-            let _ = child.kill();
-            let _ = child.wait();
+            return false;
         }
     }
     let Ok(exe) = std::env::current_exe() else {
-        return;
+        return true;
     };
     let path = exe.with_file_name("mesh-panel");
     match std::process::Command::new(&path).spawn() {
@@ -1276,4 +1284,5 @@ fn open_panel() {
             &format!("{}: {e}", path.display()),
         ),
     }
+    true
 }

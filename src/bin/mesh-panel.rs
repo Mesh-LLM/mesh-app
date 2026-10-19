@@ -470,10 +470,11 @@ fn main() {
             ..Default::default()
         };
         let r = root.clone();
-        let (_, view) = gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Panel::load(r)))
+        let (window, view) = gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Panel::load(r)))
             .expect("open panel window");
         cx.activate(true);
         let view = view.downgrade();
+        let mut raised = None;
         cx.spawn(async move |cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
             let r = root.clone();
@@ -486,6 +487,14 @@ fn main() {
                 cx.update(|cx| cx.quit());
                 break;
             }
+            // Settings was picked while open: come forward (and unminimize).
+            if raised.is_some_and(|r| r != next.state.raise) {
+                let _ = window.update(cx, |_, w, cx| {
+                    cx.activate(true);
+                    w.activate_window();
+                });
+            }
+            raised = Some(next.state.raise);
             if view
                 .update(cx, |p, cx| {
                     p.settings = next.settings;

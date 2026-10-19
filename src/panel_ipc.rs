@@ -18,6 +18,8 @@ pub struct State {
     pub wallet: bool,
     /// The tray's pid; the panel quits when it is gone.
     pub tray_pid: u32,
+    /// Bumped by Settings while the panel is open: bring the window forward.
+    pub raise: u64,
 }
 
 fn commands(root: &Path) -> PathBuf {
