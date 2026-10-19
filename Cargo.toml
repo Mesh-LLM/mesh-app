@@ -51,6 +51,10 @@ harness = false
 name = "embedded_restart"
 harness = false
 
+[[test]]
+name = "profile_wallet"
+harness = false
+
 
 [profile.release]
 strip = true

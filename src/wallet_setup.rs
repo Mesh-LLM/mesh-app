@@ -116,8 +116,76 @@ pub fn install() -> Result<(), String> {
     Ok(())
 }
 
+/// Earlier tray builds ran Lexe as the built-in `wallet-lexe` plugin with its
+/// data in `payments/lexe/`. The installed `lexe-wallet` plugin keeps its data
+/// in `payments/wallets/lexe-wallet/`. Copy (never move) the old wallet there
+/// and re-point the ledger pin, so the funded wallet opens instead of a new,
+/// empty one. Does nothing once migrated or when there is no old wallet.
+pub fn migrate_builtin_wallet(profile: &std::path::Path) -> Result<bool, String> {
+    let payments = profile.join("payments");
+    let old = payments.join("lexe");
+    let new = payments.join("wallets").join(NAME);
+    if !old.join("seedphrase.txt").is_file() || new.join("seedphrase.txt").exists() {
+        return Ok(false);
+    }
+    let status = std::process::Command::new("/bin/cp")
+        .arg("-Rp")
+        .arg(&old)
+        .arg(&new)
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() {
+        return Err(format!(
+            "could not copy {} to {}",
+            old.display(),
+            new.display()
+        ));
+    }
+    let pin = payments.join("wallet-provider.json");
+    if let Ok(text) = std::fs::read_to_string(&pin) {
+        let mut value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        if value["plugin"] == "wallet-lexe" {
+            value["plugin"] = NAME.into();
+            std::fs::write(&pin, serde_json::to_vec_pretty(&value).unwrap())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn migrates_builtin_lexe_wallet_once_by_copy() {
+        let profile = tempfile::tempdir().unwrap();
+        let p = profile.path().join("payments");
+        std::fs::create_dir_all(p.join("lexe/prod-mainnet-sgx")).unwrap();
+        std::fs::write(p.join("lexe/seedphrase.txt"), "seed").unwrap();
+        std::fs::write(
+            p.join("wallet-provider.json"),
+            r#"{"plugin":"wallet-lexe","wallet_id":"w"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(p.join("wallets")).unwrap();
+        assert!(super::migrate_builtin_wallet(profile.path()).unwrap());
+        let new = p.join("wallets/lexe-wallet");
+        assert_eq!(
+            std::fs::read_to_string(new.join("seedphrase.txt")).unwrap(),
+            "seed"
+        );
+        assert!(p.join("lexe/seedphrase.txt").exists(), "original kept");
+        let pin: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(p.join("wallet-provider.json")).unwrap())
+                .unwrap();
+        assert_eq!(pin["plugin"], super::NAME);
+        assert_eq!(pin["wallet_id"], "w");
+        assert!(
+            !super::migrate_builtin_wallet(profile.path()).unwrap(),
+            "once"
+        );
+    }
+
     use super::*;
 
     #[test]

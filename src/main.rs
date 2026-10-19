@@ -229,6 +229,9 @@ impl App {
         // it exists without unlocking it; the runtime child unlocks the key, so
         // the user sees one credential prompt, not two.
         let profile = settings::mesh_profile()?;
+        if let Ok(true) = mesh_tray::wallet_setup::migrate_builtin_wallet(&profile) {
+            eprintln!("Copied the built-in Lexe wallet to the installed wallet plugin's folder");
+        }
         if mesh_tray::private_reset::pending(&self.root) {
             return Err("An interrupted reset must finish first. Choose Reset settings.".into());
         }

@@ -65,7 +65,7 @@ impl ShareControl {
             submenu: Submenu::new("Share when", true),
             spare: CheckMenuItem::with_id(
                 "share:spare",
-                "There's spare power (sunny, or NSW surplus)",
+                "Only when sunny or there's surplus energy",
                 true,
                 rules.spare_power,
                 None,
@@ -86,7 +86,6 @@ impl ShareControl {
                 &items.status,
                 &muda::PredefinedMenuItem::separator(),
                 &items.spare,
-                &items.hours,
                 &muda::PredefinedMenuItem::separator(),
                 &items.location,
             ])

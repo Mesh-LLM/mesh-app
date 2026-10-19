@@ -120,8 +120,8 @@ fn round_trip() {
 
     let price = Pricing {
         input_msat_per_million: 100_000,
-        output_msat_per_million: 100_000,
-        cache_discount_percent: 0,
+        output_msat_per_million: 300_000,
+        cache_discount_percent: 50,
     };
     let _: serde_json::Value = step(
         "save price",
@@ -154,6 +154,16 @@ fn round_trip() {
         c.execute(&Command::Transactions { limit: 50 }),
     );
     assert!(txs.iter().all(|tx| tx.status != PaymentStatus::Succeeded));
+
+    // What switching to Private does: spending off, every price removed.
+    mesh_tray::payment_reset::disable(&c).expect("private off");
+    eprintln!("  private off: ok ({:?})", t.elapsed());
+    let prices: BTreeMap<String, Pricing> = step(
+        "read pricing after private",
+        t,
+        c.execute(&Command::Pricing),
+    );
+    assert!(prices.is_empty(), "private must leave no prices");
 
     rt.block_on(handle.stop()).expect("engine stop");
     eprintln!("  engine stopped ({:?})", t.elapsed());
