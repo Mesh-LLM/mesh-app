@@ -12,6 +12,60 @@ pub struct Snapshot {
     pub node_state: String,
     /// Model the engine is loading or serving, when it has one.
     pub model_name: String,
+    /// Live inference counters, when the engine reports them.
+    pub activity: Option<Activity>,
+}
+
+/// What the node is doing right now, from `/api/status` `routing_metrics`
+/// (the same session counters the Buzz compute popover shows). Counters are
+/// for this engine run, not lifetime totals.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct Activity {
+    /// Requests this node is handling right now.
+    pub active: u64,
+    /// Average generation speed, in tenths of a token per second.
+    pub tps_tenths: Option<u64>,
+    pub output_tokens: u64,
+    pub completed: u64,
+    /// Other nodes seen, and how many of them are serving a model.
+    pub peers: u64,
+    pub serving_peers: u64,
+}
+
+/// Project the engine status into `Activity`; `None` without routing metrics.
+pub fn activity(value: &serde_json::Value) -> Option<Activity> {
+    let m = value.get("routing_metrics")?.as_object()?;
+    let count = |k: &str| m.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+    let me = value["node_id"].as_str();
+    let peers = |serving: bool| {
+        value["peers"]
+            .as_array()
+            .map(|ps| {
+                ps.iter()
+                    .filter(|p| !serving || p["state"].as_str() == Some("serving"))
+                    .filter_map(|p| p["id"].as_str())
+                    .filter(|id| !id.is_empty() && Some(*id) != me)
+                    .collect::<std::collections::HashSet<_>>()
+                    .len() as u64
+            })
+            .unwrap_or(0)
+    };
+    Some(Activity {
+        active: m
+            .get("local_node")
+            .and_then(|l| l["current_inflight_requests"].as_u64())
+            .unwrap_or(0),
+        tps_tenths: m
+            .get("avg_tokens_per_second")
+            .and_then(|v| v.as_f64())
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .map(|v| (v * 10.0).round() as u64),
+        output_tokens: count("completion_tokens_observed"),
+        completed: count("successful_requests"),
+        peers: peers(false),
+        serving_peers: peers(true),
+    })
 }
 
 /// Short, human status for the menu, from the engine's own state.
@@ -82,6 +136,7 @@ pub fn snapshot(port: u16) -> Snapshot {
     Snapshot {
         pid,
         running: true,
+        activity: activity(&value),
         node_state: value["node_state"].as_str().unwrap_or_default().to_string(),
         model_name: value["model_name"].as_str().unwrap_or_default().to_string(),
         serving_models: value["serving_models"]
@@ -220,6 +275,29 @@ mod private_tests {
 #[cfg(test)]
 mod describe_tests {
     use super::*;
+
+    #[test]
+    fn activity_reads_session_counters_and_other_peers() {
+        let v = serde_json::json!({"node_id":"me","routing_metrics":{
+            "completion_tokens_observed":1912,"successful_requests":7,
+            "local_node":{"current_inflight_requests":2},"avg_tokens_per_second":12.46},
+            "peers":[{"id":"me","state":"serving"},{"id":"a","state":"serving"},
+                     {"id":"a","state":"serving"},{"id":"b","state":"client"}]});
+        assert_eq!(
+            activity(&v),
+            Some(Activity {
+                active: 2,
+                tps_tenths: Some(125),
+                output_tokens: 1912,
+                completed: 7,
+                peers: 2,
+                serving_peers: 1,
+            })
+        );
+        assert_eq!(activity(&serde_json::json!({"peers":[]})), None);
+        let idle = activity(&serde_json::json!({"routing_metrics":{"avg_tokens_per_second":0.0}}));
+        assert_eq!(idle.unwrap().tps_tenths, None);
+    }
 
     fn snap(state: &str, model: &str) -> Snapshot {
         Snapshot {

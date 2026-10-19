@@ -59,7 +59,7 @@ impl Panel {
         }
     }
 
-    fn act(&mut self, id: &'static str, cx: &mut Context<Self>) {
+    fn act(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Err(e) = panel_ipc::send(&self.root, id) {
             self.error = Some(format!("Could not reach Mesh: {e}"));
         }
@@ -312,6 +312,93 @@ fn muted(text: impl Into<SharedString>) -> Div {
     div().text_xs().text_color(rgb(MUTED)).child(text.into())
 }
 
+/// " (≈ $1.23)" when a BTC/USD rate is known, else nothing.
+fn usd(n: u64, st: &State) -> String {
+    st.usd_per_btc_cents
+        .map(|c| format!(" (≈ {})", mesh_tray::fx::usd(n, c as f64 / 100.0)))
+        .unwrap_or_default()
+}
+
+/// Move a minute-of-day by `delta` hours, wrapping at midnight.
+fn shift(minute: u16, delta: i32) -> u16 {
+    (i32::from(minute) + delta * 60).rem_euclid(1440) as u16
+}
+
+/// "From − 10:00 +   To − 15:00 +": steps the sharing window an hour at a time.
+fn hours_editor(h: mesh_tray::share_rules::Hours, cx: &mut Context<Panel>) -> Div {
+    let fmt = |m: u16| format!("{:02}:{:02}", m / 60, m % 60);
+    let stepper = |which: &'static str, value: u16, cx: &mut Context<Panel>| {
+        let step = move |delta: i32| {
+            move |p: &mut Panel, _: &ClickEvent, _: &mut Window, cx: &mut Context<Panel>| {
+                let (mut start, mut end) = (h.start, h.end);
+                if which == "start" {
+                    start = shift(start, delta);
+                } else {
+                    end = shift(end, delta);
+                }
+                if start != end {
+                    p.act(&format!("share:hours={}-{}", fmt(start), fmt(end)), cx);
+                }
+            }
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(muted(if which == "start" { "From" } else { "To" }))
+            .child(chip((which, 0usize), "−", false).on_click(cx.listener(step(-1))))
+            .child(div().w(px(44.)).flex().justify_center().child(fmt(value)))
+            .child(chip((which, 1usize), "+", false).on_click(cx.listener(step(1))))
+    };
+    div()
+        .flex()
+        .gap_4()
+        .child(stepper("start", h.start, cx))
+        .child(stepper("end", h.end, cx))
+}
+
+/// Live inference on this node: a quiet card, lit while requests are running.
+fn activity_card(a: mesh_tray::status::Activity) -> Div {
+    let live = a.active > 0;
+    let speed = a
+        .tps_tenths
+        .map(|t| format!(" · {}.{} tok/s", t / 10, t % 10))
+        .unwrap_or_default();
+    let now = if live {
+        format!(
+            "Running {} request{} now{speed}",
+            a.active,
+            if a.active == 1 { "" } else { "s" }
+        )
+    } else {
+        format!("Idle{speed}")
+    };
+    card("ACTIVITY")
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().size(px(8.)).rounded_full().bg(rgb(if live {
+                    0x3ccf7a
+                } else {
+                    IDLE
+                })))
+                .child(now),
+        )
+        .child(muted(format!(
+            "{} tokens generated · {} requests done since Mesh started",
+            sats(a.output_tokens),
+            sats(a.completed)
+        )))
+        .child(muted(format!(
+            "{} other node{} in the Mesh, {} sharing a model",
+            a.peers,
+            if a.peers == 1 { "" } else { "s" },
+            a.serving_peers
+        )))
+}
+
 fn sats(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -423,6 +510,7 @@ impl Render for Panel {
                     )
                     .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
                 )
+                .when(rules.hours_on, |d| d.child(hours_editor(rules.hours, cx)))
             });
 
         let mut picks = div().flex().flex_wrap().gap_2().child(
@@ -501,9 +589,11 @@ impl Render for Panel {
                 None => c.child(muted("Free")),
                 Some(pr) => c
                     .child(div().child(format!(
-                        "{} sats in · {} sats out, per 1M tokens",
+                        "{} sats in{} · {} sats out{}, per 1M tokens",
                         sats(pr.input_sats),
-                        sats(pr.output_sats)
+                        usd(pr.input_sats, &st),
+                        sats(pr.output_sats),
+                        usd(pr.output_sats, &st)
                     )))
                     .child(
                         div()
@@ -541,7 +631,7 @@ impl Render for Panel {
         let pay = (!private).then(|| {
             card("PAY FOR INFERENCE")
                 .child(div().child(match (st.wallet, st.balance_sats) {
-                    (true, Some(b)) => format!("Wallet balance: {} sats", sats(b)),
+                    (true, Some(b)) => format!("Wallet balance: {} sats{}", sats(b), usd(b, &st)),
                     (true, None) => "Wallet balance: checking…".into(),
                     (false, _) => "No wallet yet. One is set up the first time you need it.".into(),
                 }))
@@ -605,6 +695,7 @@ impl Render for Panel {
             .child(header)
             .child(network)
             .child(share)
+            .when_some(st.activity, |d, a| d.child(activity_card(a)))
             .child(model_card)
             .when(earn.is_some() || pay.is_some(), |d| {
                 d.child(

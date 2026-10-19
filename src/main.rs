@@ -12,7 +12,7 @@ use mesh_tray::payment_reset;
 mod qr;
 mod settings_actions;
 mod share_menu;
-mod status;
+use mesh_tray::status;
 
 use lifecycle::Engine;
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -65,6 +65,8 @@ struct App {
     published: Option<mesh_tray::panel_ipc::State>,
     /// Settings clicks while the panel is open (see `panel_ipc::State::raise`).
     raise: u64,
+    /// BTC/USD in cents (0 = unknown), refreshed in the background.
+    usd_per_btc: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 fn icon() -> Icon {
@@ -110,6 +112,7 @@ impl App {
             applied_price: None,
             published: None,
             raise: 0,
+            usd_per_btc: mesh_tray::fx::spawn_refresher(),
             root,
             settings,
             pending_settings: None,
@@ -448,6 +451,9 @@ impl App {
             public: settings::payments_visible(&self.settings.connection),
             balance_sats: self.pay.balance().map(|m| m / 1000),
             wallet: self.pay.has_wallet(),
+            usd_per_btc_cents: Some(self.usd_per_btc.load(std::sync::atomic::Ordering::Relaxed))
+                .filter(|c| *c > 0),
+            activity: self.snapshot.activity.filter(|_| self.snapshot.running),
             tray_pid: std::process::id(),
             raise: self.raise,
         };
