@@ -72,6 +72,12 @@ struct App {
     share: share_menu::ShareControl,
     /// Whether the running engine was started serving.
     spawned_share: bool,
+    /// Model the running engine was started with.
+    spawned_model: Option<String>,
+    /// Panel-edited preferences (`mesh-app.toml`), re-read every poll.
+    app: mesh_tray::app_config::AppConfig,
+    /// (pid, model, price) last pushed to the engine.
+    applied_price: Option<(u32, String, Option<mesh_tray::app_config::Price>)>,
 }
 
 fn icon() -> Icon {
@@ -112,6 +118,9 @@ impl App {
         Self {
             share,
             spawned_share: false,
+            spawned_model: None,
+            app: mesh_tray::app_config::AppConfig::load(&root),
+            applied_price: None,
             root,
             settings,
             pending_settings: None,
@@ -140,6 +149,7 @@ impl App {
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
+        let panel = MenuItem::with_id("panel", "Mesh Panel…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let private_mode = matches!(
             self.settings.connection,
@@ -162,6 +172,7 @@ impl App {
         let status = MenuItem::with_id("status", "Mesh is starting…", false, None);
         menu.append_items(&[
             &status,
+            &panel,
             &chat,
             compute.item(),
             &share_when,
@@ -216,7 +227,7 @@ impl App {
         }
     }
 
-    fn spawn(&self) -> Result<Engine, String> {
+    fn spawn(&mut self) -> Result<Engine, String> {
         for port in [self.settings.console_port, self.settings.api_port] {
             if std::net::TcpStream::connect_timeout(
                 &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
@@ -294,9 +305,12 @@ impl App {
             )
             .map_err(|e| e.to_string())?;
             None
+        } else if let Some(chosen) = self.app.chosen_model() {
+            Some(chosen.to_string())
         } else {
             mesh_tray::model_selection::local_model(&self.settings.connection)?
         };
+        self.spawned_model = model.clone();
         if let Some(model) = model.as_deref() {
             use std::io::Write;
             writeln!(&log, "Tray selected model: {model}").map_err(|e| e.to_string())?;
@@ -459,6 +473,7 @@ impl App {
             }
             match event.id.as_ref() {
                 "chat" => self.open("/chat"),
+                "panel" => open_panel(),
                 "compute" => self.toggle_compute(),
                 "public" => self.change_mode(settings::Connection::Automatic),
                 "private" => self.change_mode(settings::Connection::Private { invite: None }),
@@ -583,6 +598,7 @@ impl App {
                 self.complete_reset(result);
             }
         }
+        self.apply_price();
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(self.settings.console_port).is_ok();
             self.next_poll = Instant::now() + POLL;
@@ -618,8 +634,41 @@ impl App {
     }
 
     /// The user's choice, unless a power/sunshine rule pauses it.
+    /// Push the panel's price for the served model once per engine run.
+    /// Mesh owns pricing; this only replays the saved preference.
+    fn apply_price(&mut self) {
+        if !settings::payments_visible(&self.settings.connection) {
+            return;
+        }
+        let (Some((port, pid)), Some(model)) = (
+            self.pay_target(),
+            self.snapshot.serving_models.first().cloned(),
+        ) else {
+            return;
+        };
+        let price = self.app.prices.get(&model).copied();
+        let want = Some((pid, model.clone(), price));
+        if self.applied_price == want {
+            return;
+        }
+        self.applied_price = want;
+        std::thread::spawn(move || {
+            use mesh_tray::payments::{Client, Command, Pricing};
+            let value = price.map(|p| Pricing {
+                input_msat_per_million: p.input_sats * 1000,
+                output_msat_per_million: p.output_sats * 1000,
+                cache_discount_percent: 0,
+            });
+            let r = Client::new(port, pid).execute::<serde_json::Value>(&Command::SetPricing {
+                model: model.clone(),
+                value,
+            });
+            eprintln!("Panel price for {model}: {price:?} -> {r:?}");
+        });
+    }
+
     fn effective_share(&self) -> bool {
-        self.settings.share_compute && self.share.allows()
+        self.settings.share_compute && (self.share.allows() || self.app.share_now)
     }
 
     /// Restart the engine when a rule flips whether it should serve.
@@ -629,7 +678,14 @@ impl App {
             && self.stopping.is_none()
             && self.pending_settings.is_none()
             && !self.resetting;
-        if idle && self.effective_share() != self.spawned_share {
+        let next = mesh_tray::app_config::AppConfig::load(&self.root);
+        if next != self.app {
+            self.app = next;
+        }
+        let model_changed = self.spawned_share
+            && self.app.chosen_model().is_some()
+            && self.app.chosen_model() != self.spawned_model.as_deref();
+        if idle && (self.effective_share() != self.spawned_share || model_changed) {
             self.queue_settings(self.settings.clone());
         }
     }
@@ -1184,3 +1240,17 @@ mod transaction_tests {
 #[cfg(all(test, target_os = "macos"))]
 #[path = "native_portable.rs"]
 mod portable_test;
+
+/// Open the GPUI panel: a sibling `mesh-panel` binary (or the app bundle's).
+fn open_panel() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let panel = exe.with_file_name("mesh-panel");
+    if let Err(e) = std::process::Command::new(&panel).spawn() {
+        native::notice(
+            "Could not open the Mesh panel",
+            &format!("{}: {e}", panel.display()),
+        );
+    }
+}

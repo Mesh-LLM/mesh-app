@@ -254,14 +254,26 @@ pub fn run_engine_process() -> Result<(), String> {
         .enable_all()
         .build()
         .map_err(|e| e.to_string())?;
-    runtime.block_on(async {
-        let handle = node.start().await.map_err(|e| format!("{e:#}"))?;
-        // EOF: the tray asked us to stop, or the tray is gone.
-        tokio::task::spawn_blocking(move || {
+    // Watch for EOF from the very start: if the tray dies while the model is
+    // still downloading or loading, the engine must not outlive it holding
+    // the console port (that is what blocked later starts).
+    let (eof_tx, mut eof_rx) = tokio::sync::oneshot::channel::<()>();
+    std::thread::Builder::new()
+        .name("engine-parent-watch".into())
+        .spawn(move || {
             let _ = std::io::stdin().read_to_end(&mut Vec::new());
+            let _ = eof_tx.send(());
+            // Cooperative stop gets a bounded grace period, then hard exit.
+            std::thread::sleep(STOP_GRACE);
+            std::process::exit(0);
         })
-        .await
         .map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let handle = tokio::select! {
+            started = node.start() => started.map_err(|e| format!("{e:#}"))?,
+            _ = &mut eof_rx => return Ok(()),
+        };
+        let _ = eof_rx.await;
         handle.stop().await.map_err(|e| format!("{e:#}"))
     })
 }
