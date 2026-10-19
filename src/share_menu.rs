@@ -136,6 +136,16 @@ impl ShareControl {
         }
     }
 
+    /// One line for the panel: sharing now, or why it is paused.
+    pub fn status_text(&self, rules: &ShareRules, user_sharing: bool) -> String {
+        match (user_sharing, self.gate.status()) {
+            (false, _) => "Sharing is off".to_string(),
+            (true, Ok(())) if rules.any() => "Sharing now".to_string(),
+            (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),
+            (true, Err(reason)) => reason.clone(),
+        }
+    }
+
     fn render(&self, rules: &ShareRules, user_sharing: bool) {
         let Some(m) = &self.menu else { return };
         let text = match (user_sharing, self.gate.status()) {

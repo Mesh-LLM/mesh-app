@@ -78,6 +78,7 @@ struct App {
     app: mesh_tray::app_config::AppConfig,
     /// (pid, model, price) last pushed to the engine.
     applied_price: Option<(u32, String, Option<mesh_tray::app_config::Price>)>,
+    published: Option<mesh_tray::panel_ipc::State>,
 }
 
 fn icon() -> Icon {
@@ -121,6 +122,7 @@ impl App {
             spawned_model: None,
             app: mesh_tray::app_config::AppConfig::load(&root),
             applied_price: None,
+            published: None,
             root,
             settings,
             pending_settings: None,
@@ -149,7 +151,7 @@ impl App {
     fn build(&mut self) -> Result<(), String> {
         let menu = Menu::new();
         let chat = MenuItem::with_id("chat", "Open Chat…", true, None);
-        let panel = MenuItem::with_id("panel", "Mesh Panel…", true, None);
+        let panel = MenuItem::with_id("panel", "Open Mesh…", true, None);
         let quit = MenuItem::with_id("quit", "Quit Mesh", true, None);
         let private_mode = matches!(
             self.settings.connection,
@@ -170,17 +172,14 @@ impl App {
         let rules = self.settings.share_rules.clone();
         let share_when = self.share.submenu(&rules)?.clone();
         let status = MenuItem::with_id("status", "Mesh is starting…", false, None);
+        // Every control lives in the panel; the tray menu stays minimal.
+        let _ = (&public, &private, &reset, &share_when);
         menu.append_items(&[
             &status,
+            &PredefinedMenuItem::separator(),
             &panel,
             &chat,
-            compute.item(),
-            &share_when,
             &PredefinedMenuItem::separator(),
-            &public,
-            &private,
-            &PredefinedMenuItem::separator(),
-            &reset,
             &quit,
         ])
         .map_err(|e| e.to_string())?;
@@ -203,8 +202,8 @@ impl App {
             status,
             _tray: tray,
         });
-        self.sync_payments_menu();
         self.start();
+        open_panel();
         Ok(())
     }
 
@@ -390,6 +389,10 @@ impl App {
 
     /// Our own runtime's management port and pid, only once it is ready.
     fn sync_payments_menu(&mut self) {
+        // Payments and Invites are panel controls now, never menu items.
+        if self.ui.is_some() {
+            return;
+        }
         let want = settings::payments_visible(&self.settings.connection);
         let Some(ui) = self.ui.as_mut() else { return };
         // Remove before insert so the shared slot index stays right.
@@ -440,7 +443,15 @@ impl App {
         if self.child.is_none() || !self.snapshot.running {
             return "Mesh is starting…".into();
         }
-        status::describe(&self.snapshot)
+        // Engine ids can be content hashes; show the ladder name instead.
+        let mut text = status::describe(&self.snapshot);
+        if let Some(label) = self.spawned_model.as_deref().map(mesh_tray::app_config::label) {
+            for id in &self.snapshot.serving_models {
+                let short = id.rsplit('/').next().unwrap_or(id);
+                text = text.replace(id.as_str(), label).replace(short, label);
+            }
+        }
+        text
     }
 
     fn pay_target(&self) -> Option<(u16, u32)> {
@@ -452,37 +463,70 @@ impl App {
         .then(|| (self.settings.console_port, child.id()))
     }
 
+    /// One action, from the tray menu or the panel.
+    fn dispatch(&mut self, id: &str) {
+        if self.resetting && id != "quit" {
+            return;
+        }
+        let target = self.pay_target();
+        let models = self.snapshot.serving_models.clone();
+        if id.starts_with("pay:") && !settings::payments_visible(&self.settings.connection) {
+            return;
+        }
+        if self.pay.click(id, target, &models) {
+            return;
+        }
+        if id.starts_with("share:") {
+            self.change_share_rules(id);
+            return;
+        }
+        match id {
+            "chat" => self.open("/chat"),
+            "panel" => open_panel(),
+            "compute" => self.toggle_compute(),
+            "public" => self.change_mode(settings::Connection::Automatic),
+            "private" => self.change_mode(settings::Connection::Private { invite: None }),
+            "invite" => self.invite(),
+            "join" => self.join(),
+            "reset" => self.reset_settings(),
+            "quit" => self.quit(),
+            _ => {}
+        }
+    }
+
+    /// What the panel shows; written only when it changes.
+    fn publish_state(&mut self) {
+        let (sharing, busy) = self.compute_view();
+        let model = self
+            .spawned_model
+            .as_deref()
+            .filter(|_| self.snapshot.running && !self.snapshot.serving_models.is_empty())
+            .map(|m| mesh_tray::app_config::label(m).to_string());
+        let state = mesh_tray::panel_ipc::State {
+            status: self.status_line(),
+            sharing,
+            busy,
+            share_status: self.share.status_text(&self.settings.share_rules, sharing),
+            serving: model,
+            public: settings::payments_visible(&self.settings.connection),
+            balance_sats: self.pay.balance().map(|m| m / 1000),
+            wallet: self.pay.has_wallet(),
+            tray_pid: std::process::id(),
+        };
+        if self.published.as_ref() != Some(&state) {
+            let _ = mesh_tray::panel_ipc::write_state(&self.root, &state);
+            self.published = Some(state);
+        }
+    }
+
     fn tick(&mut self) {
+        let mut ids: Vec<String> = Vec::new();
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if self.resetting && event.id.as_ref() != "quit" {
-                continue;
-            }
-            let target = self.pay_target();
-            let models = self.snapshot.serving_models.clone();
-            if event.id.as_ref().starts_with("pay:")
-                && !settings::payments_visible(&self.settings.connection)
-            {
-                continue;
-            }
-            if self.pay.click(event.id.as_ref(), target, &models) {
-                continue;
-            }
-            if event.id.as_ref().starts_with("share:") {
-                self.change_share_rules(event.id.as_ref());
-                continue;
-            }
-            match event.id.as_ref() {
-                "chat" => self.open("/chat"),
-                "panel" => open_panel(),
-                "compute" => self.toggle_compute(),
-                "public" => self.change_mode(settings::Connection::Automatic),
-                "private" => self.change_mode(settings::Connection::Private { invite: None }),
-                "invite" => self.invite(),
-                "join" => self.join(),
-                "reset" => self.reset_settings(),
-                "quit" => self.quit(),
-                _ => {}
-            }
+            ids.push(event.id.as_ref().to_string());
+        }
+        ids.extend(mesh_tray::panel_ipc::take_commands(&self.root));
+        for id in ids {
+            self.dispatch(&id);
         }
         while let Ok(snapshot) = self.rx.try_recv() {
             self.polling = false;
@@ -599,6 +643,7 @@ impl App {
             }
         }
         self.apply_price();
+        self.publish_state();
         if !self.polling && Instant::now() >= self.next_poll {
             self.polling = self.tx.send(self.settings.console_port).is_ok();
             self.next_poll = Instant::now() + POLL;
@@ -645,7 +690,10 @@ impl App {
         ) else {
             return;
         };
-        let price = self.app.price_for(&model);
+        let price = self
+            .spawned_model
+            .as_deref()
+            .and_then(|m| self.app.price_for(m));
         let want = Some((pid, model.clone(), price));
         if self.applied_price == want {
             return;
@@ -666,10 +714,9 @@ impl App {
         });
     }
 
-    /// The user's choice, unless a power/sunshine rule pauses it (or the
-    /// panel's "share now" overrides the rules).
+    /// The user's choice, unless a power/sunshine rule pauses it.
     fn effective_share(&self) -> bool {
-        self.settings.share_compute && (self.share.allows() || self.app.share_now)
+        self.settings.share_compute && self.share.allows()
     }
 
     /// Restart the engine when a rule flips whether it should serve.

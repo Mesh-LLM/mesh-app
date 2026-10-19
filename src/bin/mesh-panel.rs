@@ -1,362 +1,469 @@
-//! Mesh panel, opened from the tray. Shows engine status and edits the app's
-//! own preferences in `~/.mesh-app/mesh-app.toml`: which ladder model to
-//! share, its price, and "share now". The tray owns the engine and applies
-//! these (restart for a model change, price once the model is served).
+//! Mesh panel, opened from the tray: every control in one window. The tray
+//! owns the engine; the panel sends it actions (`panel_ipc::send`) and shows
+//! the state it publishes. Model and price are the app's own preferences in
+//! `mesh-app.toml`, applied by the tray.
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
-use mesh_tray::app_config::{self, AppConfig, LADDER};
-use mesh_tray::payments::{format_sats, Client, Command, Pricing};
-use mesh_tray::{model_selection, settings, settings::Connection, status};
-use std::collections::BTreeMap;
+use mesh_tray::app_config::{self, AppConfig, Price, FREE, LADDER};
+use mesh_tray::panel_ipc::{self, State};
+use mesh_tray::{model_selection, settings, settings::Connection};
+use std::path::PathBuf;
 use std::time::Duration;
 
-/// Price of the served model, read fresh from the engine (it owns prices).
-fn price(port: u16, snap: &status::Snapshot) -> String {
-    let (Some(pid), Some(model)) = (snap.pid, snap.serving_models.first()) else {
-        return "— (no model loaded)".into();
-    };
-    match Client::new(port, pid).execute::<BTreeMap<String, Pricing>>(&Command::Pricing) {
-        Ok(m) => match m.get(model) {
-            Some(p) => format!(
-                "{} / {} sats per 1M in/out",
-                format_sats(p.input_msat_per_million),
-                format_sats(p.output_msat_per_million)
-            ),
-            None => "free".into(),
-        },
-        Err(_) => "unknown".into(),
-    }
-}
+const BG: u32 = 0x14161a;
+const CARD: u32 = 0x1c1f24;
+const MUTED: u32 = 0x8a8f98;
+const ACCENT: u32 = 0x2f6fed;
+const IDLE: u32 = 0x2a2e35;
 
 struct Panel {
-    settings: Option<settings::Settings>,
-    snap: status::Snapshot,
-    price: String,
+    root: PathBuf,
+    settings: settings::Settings,
+    state: State,
     app: AppConfig,
+    auto: Option<&'static str>,
     error: Option<String>,
 }
 
 impl Panel {
-    fn refresh(&mut self) {
-        if let Ok(root) = settings::data_root() {
-            self.app = AppConfig::load(&root);
-        }
-        match settings::data_root().and_then(|root| settings::Settings::load(&root)) {
-            Ok(s) => {
-                self.snap = status::snapshot(s.console_port);
-                self.price = price(s.console_port, &self.snap);
-                self.settings = Some(s);
-                self.error = None;
-            }
-            Err(e) => self.error = Some(e),
+    fn load(root: PathBuf) -> Self {
+        let settings = settings::Settings::load(&root).unwrap_or_default();
+        let auto = model_selection::local_model(&settings.connection)
+            .ok()
+            .flatten()
+            .and_then(|m| LADDER.iter().find(|r| r.model == m).map(|r| r.model));
+        Self {
+            state: panel_ipc::read_state(&root).unwrap_or_default(),
+            app: AppConfig::load(&root),
+            settings,
+            auto,
+            error: None,
+            root,
         }
     }
-}
 
-impl Panel {
-    fn edit(&mut self, f: impl FnOnce(&mut AppConfig), cx: &mut Context<Self>) {
-        f(&mut self.app);
-        match settings::data_root().and_then(|root| self.app.save(&root)) {
-            Ok(()) => self.error = None,
-            Err(e) => self.error = Some(format!("Could not save: {e}")),
+    fn act(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        if let Err(e) = panel_ipc::send(&self.root, id) {
+            self.error = Some(format!("Could not reach Mesh: {e}"));
         }
         cx.notify();
     }
 
-    /// The model the panel is editing: explicit choice, else the auto pick.
-    fn current_model(&self, auto: Option<&str>) -> Option<String> {
-        self.app.model.clone().or(auto.map(str::to_string))
+    fn edit(&mut self, f: impl FnOnce(&mut AppConfig), cx: &mut Context<Self>) {
+        f(&mut self.app);
+        self.error = self
+            .app
+            .save(&self.root)
+            .err()
+            .map(|e| format!("Could not save: {e}"));
+        cx.notify();
+    }
+
+    /// The model being configured: the explicit choice, else the auto pick.
+    fn model(&self) -> Option<&'static str> {
+        self.app.chosen_model().or(self.auto)
     }
 }
 
-fn button(id: impl Into<ElementId>, text: impl Into<SharedString>, on: bool) -> Stateful<Div> {
+fn card(title: &'static str) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .p_3()
+        .rounded_lg()
+        .bg(rgb(CARD))
+        .child(div().text_xs().text_color(rgb(MUTED)).child(title))
+}
+
+fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, on: bool) -> Stateful<Div> {
     div()
         .id(id.into())
-        .px_2()
+        .px_3()
         .py_1()
         .rounded_md()
         .cursor_pointer()
-        .bg(if on { rgb(0x2f6fed) } else { rgb(0x262a31) })
-        .hover(|d| d.bg(rgb(0x3a404a)))
+        .bg(rgb(if on { ACCENT } else { IDLE }))
+        .hover(|d| d.opacity(0.85))
         .child(text.into())
 }
 
-fn row(label: &'static str, value: String) -> Div {
+/// A labelled on/off switch row.
+fn switch(id: &'static str, label: impl Into<SharedString>, on: bool) -> Stateful<Div> {
     div()
+        .id(id)
         .flex()
+        .items_center()
         .justify_between()
-        .gap_4()
-        .child(div().text_color(rgb(0x8a8f98)).child(label))
-        .child(div().child(value))
+        .cursor_pointer()
+        .child(div().child(label.into()))
+        .child(
+            div()
+                .w(px(34.))
+                .h(px(18.))
+                .rounded_full()
+                .p(px(2.))
+                .flex()
+                .when(on, |d| d.justify_end())
+                .bg(rgb(if on { ACCENT } else { IDLE }))
+                .child(div().size(px(14.)).rounded_full().bg(rgb(0xffffff))),
+        )
+}
+
+fn muted(text: impl Into<SharedString>) -> Div {
+    div().text_xs().text_color(rgb(MUTED)).child(text.into())
+}
+
+fn sats(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
 }
 
 impl Render for Panel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let s = self.settings.clone().unwrap_or_default();
-        let mode = match &s.connection {
-            Connection::Automatic => "Public".to_string(),
-            Connection::Private { invite: Some(_) } => "Private (joined)".to_string(),
-            Connection::Private { invite: None } => "Private (own mesh)".to_string(),
-        };
-        let engine = if self.snap.running {
-            status::describe(&self.snap)
-        } else {
-            "Not running".to_string()
-        };
-        let rules = &s.share_rules;
-        let mut when = Vec::new();
-        if rules.spare_power {
-            when.push("spare power".to_string());
-        }
-        if rules.hours_on {
-            when.push(rules.hours.label());
-        }
-        let when = if when.is_empty() {
-            "always".into()
-        } else {
-            when.join(", ")
-        };
+        let st = self.state.clone();
+        let private = matches!(self.settings.connection, Connection::Private { .. });
+        let rules = self.settings.share_rules.clone();
+        let model = self.model();
 
-        div()
-            .size_full()
+        let header = div()
             .flex()
-            .flex_col()
-            .gap_2()
-            .p_4()
-            .bg(rgb(0x14161a))
-            .text_color(rgb(0xe6e8eb))
-            .text_sm()
+            .items_center()
+            .gap_3()
+            .child(
+                img(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/assets/mesh-jellyfish.png"
+                ))
+                .size_10(),
+            )
             .child(
                 div()
                     .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        img(concat!(
-                            env!("CARGO_MANIFEST_DIR"),
-                            "/assets/mesh-jellyfish.png"
-                        ))
-                        .size_10(),
-                    )
-                    .child(div().text_lg().child("Mesh")),
-            )
-            .child(row("Status", engine))
-            .child(row("Network", mode))
-            .child(row(
-                "Share compute",
-                if s.share_compute {
-                    "on".into()
-                } else {
-                    "off".into()
-                },
-            ))
-            .child(row("Share when", when))
-            .when(!self.snap.serving_models.is_empty(), |d| {
-                d.child(row("Serving", self.snap.serving_models.join(", ")))
-            })
-            .child(
-                div()
-                    .mt_2()
-                    .text_color(rgb(0x8a8f98))
-                    .child("Model to share"),
-            )
-            .child({
-                let auto = model_selection::local_model(&s.connection).ok().flatten();
-                let mut list = div().flex().flex_col().gap_1().child(
-                    button(
-                        "auto",
-                        format!(
-                            "Automatic ({})",
-                            auto.as_deref()
-                                .map(app_config::label)
-                                .unwrap_or("none fits")
-                        ),
-                        self.app.model.is_none(),
-                    )
-                    .on_click(cx.listener(|p, _, _, cx| p.edit(|a| a.model = None, cx))),
-                );
-                for (i, rung) in LADDER.iter().enumerate() {
-                    let fits = model_selection::fits(rung.model);
-                    let on = self.app.model.as_deref() == Some(rung.model);
-                    let text = format!(
-                        "{}{}",
-                        rung.label,
-                        if fits {
-                            ""
-                        } else {
-                            " — too big for this machine"
-                        }
-                    );
-                    let b = button(("rung", i), text, on);
-                    list = list.child(if fits {
-                        b.on_click(cx.listener(move |p, _, _, cx| {
-                            p.edit(|a| a.model = Some(LADDER[i].model.to_string()), cx)
-                        }))
-                    } else {
-                        b.text_color(rgb(0x5c616b))
-                    });
-                }
-                list
-            })
-            .child({
-                let auto = model_selection::local_model(&s.connection).ok().flatten();
-                let model = self.current_model(auto.as_deref());
-                let mut price_row = div().flex().items_center().gap_2().mt_2();
-                match model {
-                    None => price_row = price_row.child("Price: no model to price"),
-                    Some(model) => {
-                        let saved = self.app.price_for(&model);
-                        let suggested = LADDER
-                            .iter()
-                            .find(|r| r.model == model)
-                            .map(|r| r.suggested);
-                        let text = match saved {
-                            Some(p) => {
-                                format!("{} / {} sats per 1M in/out", p.input_sats, p.output_sats)
-                            }
-                            None => "Free".into(),
-                        };
-                        price_row = price_row
-                            .child(div().text_color(rgb(0x8a8f98)).child("Price"))
-                            .child(div().flex_1().child(text));
-                        if let Some(sug) = suggested {
-                            let m = model.clone();
-                            price_row = price_row.child(
-                                button(
-                                    "suggested",
-                                    format!("Suggested {}/{}", sug.input_sats, sug.output_sats),
-                                    saved == Some(sug),
-                                )
-                                .on_click(cx.listener(
-                                    move |p, _, _, cx| {
-                                        let m = m.clone();
-                                        p.edit(
-                                            |a| {
-                                                a.prices.insert(m, sug);
-                                            },
-                                            cx,
-                                        )
-                                    },
-                                )),
-                            );
-                        }
-                        for (id, f) in [("down", 0.5f64), ("up", 2.0)] {
-                            let m = model.clone();
-                            let base = saved.or(suggested);
-                            price_row = price_row.child(
-                                button(id, if id == "up" { "×2" } else { "½" }, false).on_click(
-                                    cx.listener(move |p, _, _, cx| {
-                                        let Some(b) = base else { return };
-                                        let scale = |v: u64| ((v as f64 * f).round() as u64).max(1);
-                                        let np = app_config::Price {
-                                            input_sats: scale(b.input_sats),
-                                            output_sats: scale(b.output_sats),
-                                        };
-                                        let m = m.clone();
-                                        p.edit(
-                                            |a| {
-                                                a.prices.insert(m, np);
-                                            },
-                                            cx,
-                                        )
-                                    }),
-                                ),
-                            );
-                        }
-                        let m = model.clone();
-                        price_row =
-                            price_row.child(button("free", "Free", saved.is_none()).on_click(
-                                cx.listener(move |p, _, _, cx| {
-                                    let m = m.clone();
-                                    p.edit(
-                                        |a| {
-                                            a.prices.insert(m, app_config::FREE);
-                                        },
-                                        cx,
-                                    )
-                                }),
-                            ));
-                    }
-                }
-                price_row
-            })
-            .child(row("Price now (engine)", self.price.clone()))
-            .child(
-                div().flex().items_center().gap_2().mt_2().child(
-                    button(
-                        "share-now",
-                        if self.app.share_now {
-                            "Sharing now (ignores Share when)"
-                        } else {
-                            "Share now, ignore Share when"
-                        },
-                        self.app.share_now,
-                    )
-                    .on_click(
-                        cx.listener(|p, _, _, cx| p.edit(|a| a.share_now = !a.share_now, cx)),
-                    ),
+                    .flex_col()
+                    .child(div().text_lg().child("Mesh"))
+                    .child(muted(st.status.clone())),
+            );
+
+        let mut network = card("NETWORK").child(
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    chip("public", "Public", !private)
+                        .on_click(cx.listener(|p, _, _, cx| p.act("public", cx))),
+                )
+                .child(
+                    chip("private", "Private", private)
+                        .on_click(cx.listener(|p, _, _, cx| p.act("private", cx))),
                 ),
+        );
+        network = if private {
+            network
+                .child(muted("Share with people you invite. No payments."))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            chip("invite", "Invite someone…", false)
+                                .on_click(cx.listener(|p, _, _, cx| p.act("invite", cx))),
+                        )
+                        .child(
+                            chip("join", "Join with an invite…", false)
+                                .on_click(cx.listener(|p, _, _, cx| p.act("join", cx))),
+                        ),
+                )
+        } else {
+            network.child(muted("Join the public mesh. Pay and get paid in sats."))
+        };
+
+        let share = card("SHARE")
+            .child(
+                switch("compute", "Share this computer", st.sharing)
+                    .on_click(cx.listener(|p, _, _, cx| p.act("compute", cx))),
             )
+            .child(muted(if st.busy {
+                "Applying…".to_string()
+            } else {
+                st.share_status.clone()
+            }))
+            .when(st.sharing, |d| {
+                d.child(
+                    switch(
+                        "spare",
+                        "Only when sunny or there's surplus energy",
+                        rules.spare_power,
+                    )
+                    .on_click(cx.listener(|p, _, _, cx| p.act("share:spare", cx))),
+                )
+                .when(rules.spare_power, |d| {
+                    let loc = match rules.location {
+                        Some(l) => format!("Location {:.2}, {:.2} · change…", l.lat, l.lon),
+                        None => "Location from your IP address · change…".into(),
+                    };
+                    d.child(
+                        div()
+                            .id("location")
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(rgb(ACCENT))
+                            .child(loc)
+                            .on_click(cx.listener(|p, _, _, cx| p.act("share:location", cx))),
+                    )
+                })
+                .child(
+                    switch(
+                        "hours",
+                        format!("Only between {}", rules.hours.label()),
+                        rules.hours_on,
+                    )
+                    .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
+                )
+            });
+
+        let mut picks = div().flex().flex_wrap().gap_2().child(
+            chip(
+                "auto",
+                format!(
+                    "Automatic{}",
+                    self.auto
+                        .map(|m| format!(" · {}", app_config::label(m)))
+                        .unwrap_or_default()
+                ),
+                self.app.chosen_model().is_none(),
+            )
+            .on_click(cx.listener(|p, _, _, cx| p.edit(|a| a.model = None, cx))),
+        );
+        for (i, rung) in LADDER.iter().enumerate() {
+            if !model_selection::fits(rung.model) {
+                continue;
+            }
+            picks = picks.child(
+                chip(
+                    ("rung", i),
+                    rung.label,
+                    self.app.chosen_model() == Some(rung.model),
+                )
+                .on_click(cx.listener(move |p, _, _, cx| {
+                    p.edit(|a| a.model = Some(LADDER[i].model.to_string()), cx)
+                })),
+            );
+        }
+        let model_card = card("MODEL").child(picks).child(muted(match model {
+            Some(_) => "Mesh restarts to switch models.",
+            None => "This computer is too small to share a model.",
+        }));
+
+        let earn = model.filter(|_| !private).map(|m| {
+            let price = self.app.price_for(m);
+            let suggested = LADDER.iter().find(|r| r.model == m).map(|r| r.suggested);
+            let base = price.or(suggested);
+            let set = move |p: &mut Panel, v: Price, cx: &mut Context<Panel>| {
+                p.edit(
+                    |a| {
+                        a.prices.insert(m.to_string(), v);
+                    },
+                    cx,
+                )
+            };
+            let mut c = card("GET PAID").child(
+                switch(
+                    "earn",
+                    format!("Charge for {}", app_config::label(m)),
+                    price.is_some(),
+                )
+                .on_click(cx.listener(move |p, _, _, cx| {
+                    let next = if p.app.price_for(m).is_some() {
+                        FREE
+                    } else {
+                        suggested.unwrap_or(Price {
+                            input_sats: 100,
+                            output_sats: 100,
+                        })
+                    };
+                    set(p, next, cx)
+                })),
+            );
+            c = match price {
+                None => c.child(muted("Free for everyone on the mesh.")),
+                Some(pr) => c
+                    .child(div().child(format!(
+                        "{} sats in · {} sats out, per 1M tokens",
+                        sats(pr.input_sats),
+                        sats(pr.output_sats)
+                    )))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .children([("half", "Lower", 0.5f64), ("double", "Higher", 2.0)].map(
+                                |(id, text, f)| {
+                                    chip(id, text, false).on_click(cx.listener(
+                                        move |p, _, _, cx| {
+                                            let Some(b) = base else { return };
+                                            let s = |v: u64| ((v as f64 * f).round() as u64).max(1);
+                                            set(
+                                                p,
+                                                Price {
+                                                    input_sats: s(b.input_sats),
+                                                    output_sats: s(b.output_sats),
+                                                },
+                                                cx,
+                                            )
+                                        },
+                                    ))
+                                },
+                            ))
+                            .when_some(suggested.filter(|s| Some(*s) != price), |d, sug| {
+                                d.child(
+                                    chip("suggested", "Suggested", false)
+                                        .on_click(cx.listener(move |p, _, _, cx| set(p, sug, cx))),
+                                )
+                            }),
+                    ),
+            };
+            c
+        });
+
+        let pay = (!private).then(|| {
+            card("PAY")
+                .child(div().child(match (st.wallet, st.balance_sats) {
+                    (true, Some(b)) => format!("Wallet balance: {} sats", sats(b)),
+                    (true, None) => "Wallet balance: checking…".into(),
+                    (false, _) => "No wallet yet. One is set up the first time you need it.".into(),
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            chip("fund", "Add funds (QR)…", false)
+                                .on_click(cx.listener(|p, _, _, cx| p.act("pay:fund", cx))),
+                        )
+                        .child(
+                            chip("pay", "Pay for models…", false)
+                                .on_click(cx.listener(|p, _, _, cx| p.act("pay:pay", cx))),
+                        ),
+                )
+                .child(muted(
+                    "Paying lets Mesh use bigger models on other computers, up to a daily limit.",
+                ))
+        });
+
+        let footer = div()
+            .flex()
+            .gap_2()
+            .justify_end()
+            .child(
+                chip("chat", "Open Chat", false)
+                    .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
+            )
+            .child(
+                chip("reset", "Reset…", false)
+                    .on_click(cx.listener(|p, _, _, cx| p.act("reset", cx))),
+            )
+            .child(
+                chip("quit", "Quit Mesh", false)
+                    .on_click(cx.listener(|p, _, _, cx| p.act("quit", cx))),
+            );
+
+        div()
+            .id("panel")
+            .size_full()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_4()
+            .pt(px(36.))
+            .bg(rgb(BG))
+            .text_color(rgb(0xe6e8eb))
+            .text_sm()
+            .child(header)
+            .child(network)
+            .child(share)
+            .child(model_card)
+            .children(earn)
+            .children(pay)
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().text_color(rgb(0xff6b6b)).child(e))
             })
+            .child(footer)
+    }
+}
+
+fn alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        pid != 0 && unsafe { libc::kill(pid as i32, 0) } == 0
+    }
+    #[cfg(not(unix))]
+    {
+        pid != 0
     }
 }
 
 fn main() {
-    gpui_kit::application().run(|cx| {
+    let Ok(root) = settings::data_root() else {
+        return;
+    };
+    // One panel at a time.
+    let pidfile = root.join("panel.pid");
+    if let Some(pid) = std::fs::read_to_string(&pidfile)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+    {
+        if pid != std::process::id() && alive(pid) {
+            return;
+        }
+    }
+    let _ = std::fs::write(&pidfile, std::process::id().to_string());
+
+    gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        let bounds = Bounds::centered(None, size(px(460.), px(520.)), cx);
+        let bounds = Bounds::centered(None, size(px(420.), px(640.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: None,
+            titlebar: Some(TitlebarOptions {
+                title: Some("Mesh".into()),
+                appears_transparent: true,
+                ..Default::default()
+            }),
             kind: WindowKind::Normal,
+            focus: true,
             ..Default::default()
         };
-        let (_, view) = gpui_kit::open_window(options, cx, |_, cx| {
-            cx.new(|_| {
-                let mut p = Panel {
-                    settings: None,
-                    snap: Default::default(),
-                    price: String::new(),
-                    app: AppConfig::default(),
-                    error: None,
-                };
-                p.refresh();
-                p
-            })
-        })
-        .expect("open panel window");
+        let r = root.clone();
+        let (_, view) = gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Panel::load(r)))
+            .expect("open panel window");
+        cx.activate(true);
         let view = view.downgrade();
-        // Poll off the UI thread; the status call is blocking with a 2s timeout.
         cx.spawn(async move |cx| loop {
-            cx.background_executor().timer(Duration::from_secs(2)).await;
-            let (s, snap, pr) = cx
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let r = root.clone();
+            let next = cx
                 .background_executor()
-                .spawn(async {
-                    let s = settings::data_root().and_then(|r| settings::Settings::load(&r));
-                    let snap = s
-                        .as_ref()
-                        .map(|s| status::snapshot(s.console_port))
-                        .unwrap_or_default();
-                    let pr = s
-                        .as_ref()
-                        .map(|s| price(s.console_port, &snap))
-                        .unwrap_or_default();
-                    (s, snap, pr)
-                })
+                .spawn(async move { Panel::load(r) })
                 .await;
+            // The tray is gone: the panel has nothing to control.
+            if next.state.tray_pid != 0 && !alive(next.state.tray_pid) {
+                let _ = cx.update(|cx| cx.quit());
+                break;
+            }
             if view
                 .update(cx, |p, cx| {
-                    match s {
-                        Ok(s) => {
-                            p.settings = Some(s);
-                            p.error = None;
-                        }
-                        Err(e) => p.error = Some(e),
-                    }
-                    p.snap = snap;
-                    p.price = pr;
+                    p.settings = next.settings;
+                    p.state = next.state;
+                    p.app = next.app;
+                    p.auto = next.auto;
                     cx.notify();
                 })
                 .is_err()
@@ -367,4 +474,5 @@ fn main() {
         .detach();
         cx.on_window_closed(|cx, _| cx.quit()).detach();
     });
+    let _ = std::fs::remove_file(pidfile);
 }

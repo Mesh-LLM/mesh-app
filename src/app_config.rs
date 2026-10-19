@@ -1,5 +1,5 @@
 //! Mesh app preferences the panel edits: which ladder model to share, its
-//! price, and "share now". Stored as `~/.mesh-app/mesh-app.toml`; the tray
+//! and price. Stored as `~/.mesh-app/mesh-app.toml`; the tray
 //! reads it, picks the model and applies the price once the model is served.
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -16,8 +16,6 @@ pub struct Price {
 pub struct AppConfig {
     /// Ladder model to share; `None` = automatic hardware pick.
     pub model: Option<String>,
-    /// Ignore "Share when" rules and share now.
-    pub share_now: bool,
     /// Price per model, sats per 1M tokens. Absent = ladder suggestion;
     /// 0/0 = free.
     pub prices: BTreeMap<String, Price>,
@@ -123,7 +121,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut c = AppConfig {
             model: Some("not-on-ladder".into()),
-            share_now: true,
             ..Default::default()
         };
         c.prices.insert(

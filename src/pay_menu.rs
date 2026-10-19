@@ -212,6 +212,16 @@ impl Payments {
     }
 
     /// Main asks after every tick: restart the engine so it loads the wallet.
+    /// Last good balance (msat) unless the latest read failed.
+    pub fn balance(&self) -> Option<u64> {
+        self.balance
+            .filter(|_| !self.balance_failed && self.wallet())
+    }
+
+    pub fn has_wallet(&self) -> bool {
+        self.wallet()
+    }
+
     pub fn take_restart_request(&mut self) -> bool {
         std::mem::take(&mut self.restart_requested)
     }
