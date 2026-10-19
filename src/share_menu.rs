@@ -1,11 +1,11 @@
-//! "Share only when…" submenu: power and sunshine conditions that pause
+//! "Share only when sunny" submenu: a sunshine condition that pauses
 //! sharing without changing the user's Share compute choice.
 use mesh_tray::share_rules::{self, Gate, Sampler, ShareRules};
 use muda::{CheckMenuItem, MenuItem, Submenu};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
-/// How often power and (cached) weather are checked.
+/// How often the (cached) weather is re-evaluated.
 const CHECK_EVERY: Duration = Duration::from_secs(15);
 
 pub struct ShareControl {
@@ -17,7 +17,6 @@ pub struct ShareControl {
 
 struct Items {
     submenu: Submenu,
-    plugged: CheckMenuItem,
     sunny: CheckMenuItem,
     location: MenuItem,
     status: MenuItem,
@@ -62,15 +61,14 @@ impl ShareControl {
 
     pub fn submenu(&mut self, rules: &ShareRules) -> Result<&Submenu, String> {
         let items = Items {
-            submenu: Submenu::new("Share only when", true),
-            plugged: CheckMenuItem::with_id(
-                "share:plugged",
-                "Plugged in",
+            submenu: Submenu::new("Solar", true),
+            sunny: CheckMenuItem::with_id(
+                "share:sunny",
+                "Only when sunny",
                 true,
-                rules.plugged_in,
+                rules.sunny,
                 None,
             ),
-            sunny: CheckMenuItem::with_id("share:sunny", "Sunny here", true, rules.sunny, None),
             location: MenuItem::with_id("share:location", location_label(rules), true, None),
             status: MenuItem::with_id("share:status", "", false, None),
         };
@@ -79,7 +77,6 @@ impl ShareControl {
             .append_items(&[
                 &items.status,
                 &muda::PredefinedMenuItem::separator(),
-                &items.plugged,
                 &items.sunny,
                 &items.location,
             ])
@@ -93,13 +90,7 @@ impl ShareControl {
     pub fn click(&mut self, id: &str, current: &ShareRules) -> Option<ShareRules> {
         let mut next = current.clone();
         match id {
-            "share:plugged" => next.plugged_in = !next.plugged_in,
-            "share:sunny" => {
-                next.sunny = !next.sunny;
-                if next.sunny && next.location.is_none() {
-                    next.location = Some(ask_location()?);
-                }
-            }
+            "share:sunny" => next.sunny = !next.sunny,
             "share:location" => next.location = Some(ask_location()?),
             _ => return None,
         }
@@ -121,7 +112,6 @@ impl ShareControl {
     pub fn reset(&mut self, rules: &ShareRules) {
         let _ = self.rules_tx.send(rules.clone());
         if let Some(m) = &self.menu {
-            m.plugged.set_checked(rules.plugged_in);
             m.sunny.set_checked(rules.sunny);
             m.location.set_text(location_label(rules));
         }
@@ -131,7 +121,7 @@ impl ShareControl {
         let Some(m) = &self.menu else { return };
         let text = match (user_sharing, self.gate.status()) {
             (false, _) => "Sharing is off".to_string(),
-            (true, Ok(())) if rules.any() => "Sharing now".to_string(),
+            (true, Ok(())) if rules.sunny => "Sharing now".to_string(),
             (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),
             (true, Err(reason)) => reason.clone(),
         };
@@ -144,14 +134,14 @@ impl ShareControl {
 fn location_label(rules: &ShareRules) -> String {
     match rules.location {
         Some(l) => format!("Location: {:.2}, {:.2}…", l.lat, l.lon),
-        None => "Set location…".into(),
+        None => "Location: from IP address (change…)".into(),
     }
 }
 
 fn ask_location() -> Option<share_rules::Location> {
     let text = crate::native::prompt_card(
         "Where is your solar?",
-        "Enter latitude, longitude (for example -33.87, 151.21). Mesh checks current sunshine there with Open-Meteo every 10 minutes. Nothing else is sent.",
+        "By default Mesh uses your IP address's city. To be exact, enter latitude, longitude (for example -33.87, 151.21). Sunshine there is checked with Open-Meteo every 10 minutes.",
         "Save",
     )?;
     match share_rules::parse_location(&text) {

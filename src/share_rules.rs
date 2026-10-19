@@ -1,4 +1,4 @@
-//! When to share compute: optional conditions on power and sunshine that
+//! When to share compute: an optional sunshine condition that
 //! pause the user's "Share compute" choice without changing it. Separate from
 //! payments; the only effect is whether the engine serves.
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,7 @@ pub const SUNNY_W_M2: f64 = 200.0;
 /// Weather is re-fetched at most this often.
 pub const WEATHER_EVERY: Duration = Duration::from_secs(10 * 60);
 /// A changed answer must hold this many consecutive checks before it flips
-/// sharing, so a passing cloud or a cable wiggle does not restart the engine.
+/// sharing, so a passing cloud does not restart the engine.
 pub const STABLE_CHECKS: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
@@ -22,41 +22,24 @@ pub struct Location {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShareRules {
-    pub plugged_in: bool,
     pub sunny: bool,
+    /// Typed override; `None` means locate by IP address.
     pub location: Option<Location>,
 }
 
-impl ShareRules {
-    pub fn any(&self) -> bool {
-        self.plugged_in || self.sunny
-    }
-}
-
-/// What the conditions currently say. `None` means unknown (e.g. weather
-/// not fetched yet, or offline); unknown never pauses on its own.
+/// What the conditions currently say. `None` means unknown (offline, or not
+/// fetched yet); unknown never pauses on its own.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Readings {
-    pub on_mains: Option<bool>,
     pub irradiance: Option<f64>,
 }
 
 /// `Ok(())` to share, or `Err(reason)` shown in the menu.
 pub fn evaluate(rules: &ShareRules, now: Readings) -> Result<(), String> {
-    if rules.plugged_in && now.on_mains == Some(false) {
-        return Err("Paused: on battery".into());
+    match now.irradiance {
+        Some(w) if rules.sunny && w < SUNNY_W_M2 => Err(format!("Paused: not sunny ({w:.0} W/m²)")),
+        _ => Ok(()),
     }
-    if rules.sunny {
-        if rules.location.is_none() {
-            return Err("Paused: set your location".into());
-        }
-        if let Some(w) = now.irradiance {
-            if w < SUNNY_W_M2 {
-                return Err(format!("Paused: not sunny ({w:.0} W/m²)"));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Debounces [`evaluate`]: the decision only changes after
@@ -117,49 +100,25 @@ impl Gate {
     }
 }
 
-/// Whether the machine is on mains power. Desktops without a battery
-/// report mains; unknown platforms report `None`.
-pub fn on_mains() -> Option<bool> {
-    #[cfg(target_os = "macos")]
-    {
-        let out = std::process::Command::new("/usr/bin/pmset")
-            .args(["-g", "batt"])
-            .output()
-            .ok()?;
-        parse_pmset(&String::from_utf8_lossy(&out.stdout))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let dir = std::fs::read_dir("/sys/class/power_supply").ok()?;
-        let mut saw_battery = false;
-        for entry in dir.flatten() {
-            let p = entry.path();
-            let kind = std::fs::read_to_string(p.join("type")).unwrap_or_default();
-            match kind.trim() {
-                "Mains" => {
-                    if std::fs::read_to_string(p.join("online")).is_ok_and(|s| s.trim() == "1") {
-                        return Some(true);
-                    }
-                }
-                "Battery" => saw_battery = true,
-                _ => {}
-            }
-        }
-        Some(!saw_battery)
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    {
-        None
-    }
+/// Approximate location from this machine's public IP (city-level, via
+/// ipwho.is, no key). Used only when the user has not typed one.
+pub fn ip_location() -> Result<Location, String> {
+    let body: serde_json::Value = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .get("https://ipwho.is/")
+        .call()
+        .map_err(|e| e.to_string())?
+        .into_string()
+        .map_err(|e| e.to_string())
+        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))?;
+    parse_ip_location(&body)
 }
 
-pub fn parse_pmset(text: &str) -> Option<bool> {
-    if text.contains("'AC Power'") {
-        Some(true)
-    } else if text.contains("'Battery Power'") {
-        Some(false)
-    } else {
-        None
+pub fn parse_ip_location(body: &serde_json::Value) -> Result<Location, String> {
+    match (body["latitude"].as_f64(), body["longitude"].as_f64()) {
+        (Some(lat), Some(lon)) => Ok(Location { lat, lon }),
+        _ => Err("IP lookup had no location".into()),
     }
 }
 
@@ -206,36 +165,48 @@ pub fn parse_location(text: &str) -> Result<Location, String> {
     Ok(Location { lat, lon })
 }
 
-/// Background sampler: power every call, weather at most every
-/// [`WEATHER_EVERY`] (or immediately when the location changes).
+/// Background sampler: weather at most every [`WEATHER_EVERY`], or at once
+/// when the location changes. The IP location is looked up once per run.
 #[derive(Default)]
 pub struct Sampler {
+    ip: Option<(Instant, Option<Location>)>,
     weather: Option<(Location, Instant, Option<f64>)>,
 }
 
 impl Sampler {
+    fn location(&mut self, rules: &ShareRules) -> Option<Location> {
+        if rules.location.is_some() {
+            return rules.location;
+        }
+        let stale = self
+            .ip
+            .is_none_or(|(t, l)| l.is_none() && t.elapsed() >= WEATHER_EVERY);
+        if stale {
+            self.ip = Some((Instant::now(), ip_location().ok()));
+        }
+        self.ip.and_then(|(_, l)| l)
+    }
+
     pub fn sample(&mut self, rules: &ShareRules) -> Readings {
-        let on_mains = rules.plugged_in.then(on_mains).flatten();
-        let irradiance = match (rules.sunny, rules.location) {
-            (true, Some(at)) => {
-                let fresh = self
-                    .weather
-                    .is_some_and(|(l, t, _)| l == at && t.elapsed() < WEATHER_EVERY);
-                if !fresh {
-                    let previous = self
-                        .weather
-                        .and_then(|(l, _, w)| (l == at).then_some(w))
-                        .flatten();
-                    let w = irradiance(at).ok().or(previous);
-                    self.weather = Some((at, Instant::now(), w));
-                }
-                self.weather.and_then(|(_, _, w)| w)
-            }
-            _ => None,
+        if !rules.sunny {
+            return Readings::default();
+        }
+        let Some(at) = self.location(rules) else {
+            return Readings::default();
         };
+        let fresh = self
+            .weather
+            .is_some_and(|(l, t, _)| l == at && t.elapsed() < WEATHER_EVERY);
+        if !fresh {
+            let previous = self
+                .weather
+                .and_then(|(l, _, w)| (l == at).then_some(w))
+                .flatten();
+            let w = irradiance(at).ok().or(previous);
+            self.weather = Some((at, Instant::now(), w));
+        }
         Readings {
-            on_mains,
-            irradiance,
+            irradiance: self.weather.and_then(|(_, _, w)| w),
         }
     }
 }
@@ -251,43 +222,28 @@ mod tests {
 
     #[test]
     fn no_rules_always_share() {
-        assert!(evaluate(&ShareRules::default(), Readings::default()).is_ok());
+        let dim = Readings {
+            irradiance: Some(10.0),
+        };
+        assert!(evaluate(&ShareRules::default(), dim).is_ok());
     }
 
     #[test]
-    fn battery_pauses_only_when_rule_on() {
-        let r = Readings {
-            on_mains: Some(false),
-            irradiance: None,
-        };
-        assert!(evaluate(&ShareRules::default(), r).is_ok());
+    fn sunny_pauses_only_on_a_dim_reading() {
         let rules = ShareRules {
-            plugged_in: true,
-            ..Default::default()
+            sunny: true,
+            location: None,
         };
-        assert_eq!(evaluate(&rules, r).unwrap_err(), "Paused: on battery");
         assert!(
             evaluate(&rules, Readings::default()).is_ok(),
             "unknown never pauses"
         );
-    }
-
-    #[test]
-    fn sunny_needs_location_and_light() {
-        let mut rules = ShareRules {
-            sunny: true,
-            ..Default::default()
-        };
-        assert!(evaluate(&rules, Readings::default()).is_err());
-        rules.location = Some(SYD);
         let dim = Readings {
-            on_mains: None,
             irradiance: Some(40.0),
         };
         assert!(evaluate(&rules, dim).unwrap_err().contains("not sunny"));
         let bright = Readings {
             irradiance: Some(650.0),
-            ..dim
         };
         assert!(evaluate(&rules, bright).is_ok());
     }
@@ -308,11 +264,9 @@ mod tests {
         assert_eq!(parse_location(" -33.87 , 151.21 ").unwrap(), SYD);
         assert!(parse_location("sydney").is_err());
         assert!(parse_location("100, 0").is_err());
-        assert_eq!(
-            parse_pmset("Now drawing from 'AC Power'\n -InternalBattery-0"),
-            Some(true)
-        );
-        assert_eq!(parse_pmset("Now drawing from 'Battery Power'"), Some(false));
+        let ip = serde_json::json!({"latitude": -33.87, "longitude": 151.21});
+        assert_eq!(parse_ip_location(&ip).unwrap(), SYD);
+        assert!(parse_ip_location(&serde_json::json!({"success": false})).is_err());
         let body = serde_json::json!({"current": {"shortwave_radiation": 512.0}});
         assert_eq!(parse_irradiance(&body).unwrap(), 512.0);
     }
