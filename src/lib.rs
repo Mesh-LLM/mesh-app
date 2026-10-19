@@ -3,6 +3,7 @@ pub mod identity;
 mod model_hardware;
 pub mod model_selection;
 pub mod settings;
+pub mod status;
 pub mod share_rules;
 
 pub mod reset;

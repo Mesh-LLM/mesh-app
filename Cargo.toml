@@ -21,6 +21,7 @@ fs2 = "0.4"
 rfd = "0.16"
 qrcode = { version = "0.14", default-features = false }
 png = "0.17"
+gpui-kit = { version = "0.7", optional = true }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 winit = "0.30"
@@ -43,6 +44,18 @@ windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] 
 
 # Manual, real-engine wallet check in a throwaway profile. harness = false so
 # it can serve the engine's built-in blobstore re-exec itself.
+[features]
+panel = ["dep:gpui-kit"]
+
+[[bin]]
+name = "mesh-tray"
+path = "src/main.rs"
+
+[[bin]]
+name = "mesh-panel"
+path = "src/bin/mesh-panel.rs"
+required-features = ["panel"]
+
 [[test]]
 name = "isolated_wallet"
 harness = false
