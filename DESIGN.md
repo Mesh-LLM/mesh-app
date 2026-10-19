@@ -56,9 +56,12 @@ on a LAN — NAT traversal between houses is a separate, unsolved problem. Porta
 native paths compile but are not Windows/Linux product verification; Windows
 runtime isolation remains gated. No accessibility/keyboard/QR success claimed.
 
-Shutdown signals only the retained child: SIGTERM on macOS/Linux, forced
-termination through the Child handle on Windows. Windows graceful shutdown
-and product support remain deferred; no HTTP shutdown endpoint is assumed.
+The engine runs as a child process of the tray (`mesh-tray --engine`).
+Shutdown closes the child's stdin; the child stops its node and exits. If it
+has not exited within 60 seconds, the tray kills it through its Child handle.
+A stop that arrives while the engine is still starting waits up to 10 seconds
+for startup, then stops cleanly; past that, startup is abandoned and config
+snapshot cleanup is best-effort. No HTTP shutdown endpoint is assumed.
 
 ## Durable private restarts
 
@@ -117,7 +120,7 @@ shown as a switch in the panel. No model picker or payment
 policy is added. The switch reflects the saved serving preference, not proof
 that a model is healthy.
 
-Changing it cooperatively stops the retained embedded engine, waits for exit,
+Changing it cooperatively stops the engine child process, waits for exit,
 saves the preference, and restarts via the SDK serve/client entry point. Off
 skips automatic model selection and uses client mode, not an empty serve-model
 list (which could still load configured models). Connection, invites, identity,
@@ -157,13 +160,13 @@ Quit during a pending stop cancels the queued restart and waits for shutdown;
 it does not force-kill other processes. Payment errors may leave some preferences
 disabled, but never claim to have completed the reset.
 
-## Unexpected embedded exit
+## Unexpected engine exit
 
 The tray schedules at most one automatic restart per app launch, after three
 seconds. Quit cancels it; intentional settings stops do not schedule it. The
 existing SDK safety guard still refuses replacement when worker failure leaves
-runtime exit unproven. An in-process abort kills the tray too and cannot be
-recovered by this timer.
+runtime exit unproven. Because the engine is a separate process, an engine
+abort does not take the tray down with it.
 
 ## Installed wallet providers
 

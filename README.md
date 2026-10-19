@@ -44,7 +44,7 @@ plugin handles the Lightning wallet. The app enables the engine's payments
 support but does not bundle or compile in Lexe.
 
 For a reproducible setup, use the Mesh CLI built from this app's engine revision
-`89db585319fc04d7d50530900e466502273f1b68`. No numbered Mesh release containing
+`e81239b679f511edcc59e25bc3e7b5f6ac31294f`. No numbered Mesh release containing
 that engine change is claimed here. The v0.77.0 CLI already has `plugins install`,
 but running its older engine is not equivalent to this app's external-wallet
 engine. Install the native plugin as the same OS user who runs the app, then

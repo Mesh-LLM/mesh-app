@@ -96,4 +96,4 @@ partial success with spending potentially enabled. An interrupted retirement
 marker can be resumed without starting the engine.
 
 The embedded SDK, payment types and matching packaged native runtime are pinned
-to source commit `89db585319fc04d7d50530900e466502273f1b68` (external wallet plugins; no built-in Lexe SDK).
+to source commit `e81239b679f511edcc59e25bc3e7b5f6ac31294f` (external wallet plugins; no built-in Lexe SDK).

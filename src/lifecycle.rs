@@ -262,7 +262,7 @@ pub fn run_engine_process() -> Result<(), String> {
     // Watch for EOF from the very start: if the tray dies while the model is
     // still downloading or loading, the engine must not outlive it holding
     // the console port (that is what blocked later starts).
-    let (eof_tx, mut eof_rx) = tokio::sync::oneshot::channel::<()>();
+    let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
     std::thread::Builder::new()
         .name("engine-parent-watch".into())
         .spawn(move || {
@@ -273,30 +273,80 @@ pub fn run_engine_process() -> Result<(), String> {
             std::process::exit(0);
         })
         .map_err(|e| e.to_string())?;
-    runtime.block_on(async {
-        let start = node.start();
-        tokio::pin!(start);
-        let handle = tokio::select! {
-            started = &mut start => started.map_err(|e| format!("{e:#}"))?,
-            _ = &mut eof_rx => {
-                // Stop arrived mid-start. Dropping the start future abandons
-                // the runtime thread unjoined (the process then exits under
-                // it, leaving its config snapshot behind). If startup is about
-                // to finish, let it, then stop cleanly; otherwise give up.
-                match tokio::time::timeout(STOP_DURING_START, &mut start).await {
-                    Ok(Ok(handle)) => handle,
-                    _ => return Ok(()),
-                }
-            }
-        };
+    runtime.block_on(run_until_stop(
+        node.start(),
+        eof_rx,
+        STOP_DURING_START,
+        |handle| async move { handle.stop().await },
+    ))
+}
+
+/// Runs startup until the tray's EOF, then stops the started handle exactly
+/// once. If EOF arrives mid-start, startup gets `grace` to finish so its
+/// runtime is stopped cleanly; past that it is abandoned and snapshot
+/// cleanup is best-effort only.
+async fn run_until_stop<H, E, S, Fut>(
+    start: impl std::future::Future<Output = Result<H, E>>,
+    mut eof_rx: tokio::sync::oneshot::Receiver<()>,
+    grace: Duration,
+    stop: S,
+) -> Result<(), String>
+where
+    E: std::fmt::Display,
+    S: FnOnce(H) -> Fut,
+    Fut: std::future::Future<Output = Result<(), E>>,
+{
+    tokio::pin!(start);
+    let (handle, eof_seen) = tokio::select! {
+        started = &mut start => (started.map_err(|e| format!("{e:#}"))?, false),
+        _ = &mut eof_rx => match tokio::time::timeout(grace, &mut start).await {
+            Ok(Ok(handle)) => (handle, true),
+            _ => return Ok(()),
+        },
+    };
+    // A completed oneshot receiver panics if polled again.
+    if !eof_seen {
         let _ = eof_rx.await;
-        handle.stop().await.map_err(|e| format!("{e:#}"))
-    })
+    }
+    stop(handle).await.map_err(|e| format!("{e:#}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn eof_during_startup_stops_exactly_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let stops = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = stops.clone();
+        let start = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, String>(7u8)
+        };
+        run_until_stop(start, rx, Duration::from_secs(5), move |h| async move {
+            assert_eq!(h, 7);
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, String>(())
+        })
+        .await
+        .unwrap();
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn startup_past_grace_is_abandoned_without_stop() {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tx.send(()).unwrap();
+        let start = std::future::pending::<Result<u8, String>>();
+        run_until_stop(start, rx, Duration::from_millis(20), |_| async {
+            panic!("must not stop an unstarted engine")
+        })
+        .await
+        .unwrap();
+    }
     #[test]
     fn client_keeps_mesh_and_profile_without_serving_configuration() {
         let settings = Settings {
