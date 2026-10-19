@@ -96,7 +96,7 @@ jobs:
           # The runtime is llama.cpp + patch queue only. Refuse a release whose
           # runtime inputs differ from the pinned engine; use runtime=source then.
           git diff --exit-code --stat "$RUNTIME_RELEASE" HEAD -- \
-            third_party/llama.cpp scripts/prepare-llama.sh scripts/package-native-runtime.sh \
+            skippy/llama_cpp skippy/scripts/prepare-llama.sh skippy/scripts/package-native-runtime.sh \
             scripts/lib/macos-deployment-target.txt
           echo "MACOSX_DEPLOYMENT_TARGET=$(cat scripts/lib/macos-deployment-target.txt)" >> "$GITHUB_ENV"
           name=meshllm-native-runtime-darwin-aarch64-metal.tar.gz
