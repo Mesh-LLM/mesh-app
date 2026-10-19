@@ -50,7 +50,9 @@ pub fn builder(
         .console_ui(true)
         .config_path(profile.join("config.toml"))
         .isolated_config(false)
-        .startup_timeout(std::time::Duration::from_secs(180));
+        // Long: the engine may sit on a first-run keychain prompt. Killing it
+        // there just brings the prompt back, so the tray waits instead.
+        .startup_timeout(std::time::Duration::from_secs(1800));
     builder = if share_compute {
         let builder = builder.serve();
         match model {

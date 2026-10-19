@@ -441,6 +441,11 @@ impl App {
             return "Mesh is restarting…".into();
         }
         if self.child.is_none() || !self.snapshot.running {
+            // A first launch can sit on the macOS keychain prompt; say so
+            // instead of failing, since killing the engine re-prompts.
+            if self.started.is_some_and(|at| at.elapsed() > Duration::from_secs(15)) {
+                return "Starting… allow keychain access if asked".into();
+            }
             return "Mesh is starting…".into();
         }
         // Engine ids can be content hashes; show the ladder name instead.
@@ -601,16 +606,6 @@ impl App {
                     .into(),
             );
         }
-        if self
-            .started
-            .is_some_and(|at| at.elapsed() > Duration::from_secs(180))
-        {
-            self.started = None;
-            self.error = Some(
-                "Mesh startup timed out. Choose Open Chat for startup details; Quit stops only this instance."
-                    .into(),
-            );
-        }
         // Changing items while the user has the menu open makes macOS close
         // it; cosmetic updates wait until it is closed.
         let menu_open = native::menu_open();
@@ -625,8 +620,8 @@ impl App {
         if !menu_open {
             self.sync_payments_menu();
             let text = self.status_line();
-            if let Some(ui) = self.ui.as_ref().filter(|ui| ui.status.text() != text) {
-                ui.status.set_text(&text);
+            if let Some(ui) = self.ui.as_ref().filter(|ui| ui.status.text() != menu_line(&text, self.error.is_some())) {
+                ui.status.set_text(&menu_line(&text, self.error.is_some()));
                 let _ = ui._tray.set_tooltip(Some(format!("Mesh · {text}")));
             }
         }
@@ -967,6 +962,17 @@ fn capture_logs(_: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+/// One short menu-bar line; detail lives in the panel and tooltip.
+fn menu_line(status: &str, error: bool) -> String {
+    if error {
+        return "Needs attention · open Settings".into();
+    }
+    let s = status.trim_end_matches('…');
+    if s.chars().count() <= 28 { status.into() } else {
+        format!("{}…", s.chars().take(27).collect::<String>())
+    }
+}
+
 fn main() {
     let result = (|| {
         // The engine invokes its built-in blobstore through current_exe().
@@ -1225,7 +1231,7 @@ mod transaction_tests {
 
     #[cfg(unix)]
     #[test]
-    fn live_child_still_times_out_without_being_stopped_or_forgotten() {
+    fn slow_start_waits_for_keychain_without_stopping_or_erroring() {
         let root = tempfile::tempdir().unwrap();
         let mut app = app(root.path());
         app.polling = true;
@@ -1246,11 +1252,8 @@ mod transaction_tests {
         assert!(fresh_start_pending);
         assert_eq!(retained_pid, Some(pid));
         assert!(still_alive);
-        assert!(app.started.is_none());
-        let error = app.error.clone().unwrap();
-        assert!(error.starts_with("Mesh startup timed out."));
-        app.tick();
-        assert_eq!(app.error.as_deref(), Some(error.as_str()));
+        assert!(app.error.is_none());
+        assert!(app.status_line().contains("keychain"));
     }
 
     #[cfg(unix)]
@@ -1293,16 +1296,24 @@ mod transaction_tests {
 #[path = "native_portable.rs"]
 mod portable_test;
 
-/// Open the GPUI panel: a sibling `mesh-panel` binary (or the app bundle's).
+/// Open the GPUI panel (sibling `mesh-panel` binary), or leave the open one.
 fn open_panel() {
+    static PANEL: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+    let mut panel = PANEL.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(child) = panel.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return; // still open
+        }
+    }
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let panel = exe.with_file_name("mesh-panel");
-    if let Err(e) = std::process::Command::new(&panel).spawn() {
-        native::notice(
+    let path = exe.with_file_name("mesh-panel");
+    match std::process::Command::new(&path).spawn() {
+        Ok(child) => *panel = Some(child),
+        Err(e) => native::notice(
             "Could not open the Mesh panel",
-            &format!("{}: {e}", panel.display()),
-        );
+            &format!("{}: {e}", path.display()),
+        ),
     }
 }

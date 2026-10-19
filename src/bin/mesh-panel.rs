@@ -455,18 +455,6 @@ fn main() {
     let Ok(root) = settings::data_root() else {
         return;
     };
-    // One panel at a time.
-    let pidfile = root.join("panel.pid");
-    if let Some(pid) = std::fs::read_to_string(&pidfile)
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-    {
-        if pid != std::process::id() && alive(pid) {
-            return;
-        }
-    }
-    let _ = std::fs::write(&pidfile, std::process::id().to_string());
-
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
         let bounds = Bounds::centered(None, size(px(520.), px(900.)), cx);
@@ -514,5 +502,4 @@ fn main() {
         .detach();
         cx.on_window_closed(|cx, _| cx.quit()).detach();
     });
-    let _ = std::fs::remove_file(pidfile);
 }
