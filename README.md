@@ -1,4 +1,4 @@
-# Mesh for desktop - expermental/demo app 
+# Mesh desktop launcher
 
 Run [Mesh](https://github.com/Mesh-LLM/mesh-llm) from your menu bar or system tray.
 No command line, no model setup.
