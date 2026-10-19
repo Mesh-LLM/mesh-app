@@ -15,6 +15,9 @@ const CARD: u32 = 0x1c1f24;
 const MUTED: u32 = 0x8a8f98;
 const ACCENT: u32 = 0x2f6fed;
 const IDLE: u32 = 0x2a2e35;
+const SUN: u32 = 0xf5b942;
+const NIGHT: u32 = 0x22262e;
+const DAY: u32 = 0x3a3420;
 
 struct Panel {
     root: PathBuf,
@@ -25,6 +28,8 @@ struct Panel {
     error: Option<String>,
     /// Mode just picked (private?), shown at once until saved or cancelled.
     picked: Option<(bool, std::time::Instant)>,
+    /// "Pricing and wallet" expanded; hidden by default to keep it minimal.
+    more: bool,
 }
 
 impl Panel {
@@ -41,6 +46,7 @@ impl Panel {
             auto,
             error: None,
             picked: None,
+            more: false,
             root,
         }
     }
@@ -149,6 +155,159 @@ fn logo() -> Div {
     d
 }
 
+/// Approximate local sunrise/sunset in minutes since midnight (NOAA
+/// declination/hour-angle formula, no equation of time: within ~15 min).
+/// `None` in polar day/night.
+fn daylight(lat: f64, lon: f64) -> Option<(f64, f64)> {
+    use chrono::{Datelike, Offset};
+    let now = chrono::Local::now();
+    let day = f64::from(now.ordinal());
+    let tz = f64::from(now.offset().fix().local_minus_utc()) / 3600.0;
+    let decl = (23.44f64).to_radians() * ((360.0 / 365.0) * (day - 81.0)).to_radians().sin();
+    let cos_h = -lat.to_radians().tan() * decl.tan();
+    if !(-1.0..=1.0).contains(&cos_h) {
+        return None;
+    }
+    let half = cos_h.acos().to_degrees() / 15.0;
+    let noon = 12.0 - lon / 15.0 + tz;
+    let wrap = |h: f64| (h.rem_euclid(24.0)) * 60.0;
+    Some((wrap(noon - half), wrap(noon + half)))
+}
+
+fn in_span(m: f64, a: f64, b: f64) -> bool {
+    if a <= b {
+        (a..b).contains(&m)
+    } else {
+        m >= a || m < b
+    }
+}
+
+/// The day at a glance: a 24-hour strip shaded for daylight (when the
+/// location is typed), the chosen sharing hours, and the sun (or moon) at the
+/// current time riding an arc above it. Explanatory only; the tray decides.
+fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> Div {
+    const W: f32 = 456.;
+    const ARC: f32 = 34.;
+    const SLOTS: usize = 48;
+    let now = f64::from(mesh_tray::share_rules::local_minute());
+    let sun = rules.location.and_then(|l| daylight(l.lat, l.lon));
+    let (rise, set) = sun.unwrap_or((6.0 * 60.0, 18.0 * 60.0));
+    let up = in_span(now, rise, set);
+    let x = |m: f64| (m / 1440.0) as f32 * W;
+    // Height on the arc: a half sine across daylight, below the line at night.
+    let lift = |m: f64| {
+        let len = (set - rise).rem_euclid(1440.0).max(1.0);
+        let t = (m - rise).rem_euclid(1440.0) / len;
+        if t <= 1.0 {
+            (t * std::f64::consts::PI).sin() as f32
+        } else {
+            0.0
+        }
+    };
+    let mut arc = div().relative().w(px(W)).h(px(ARC + 12.));
+    for i in 0..=36 {
+        let m = rise + (set - rise).rem_euclid(1440.0) * f64::from(i) / 36.0;
+        arc = arc.child(
+            div()
+                .absolute()
+                .left(px(x(m.rem_euclid(1440.0)) - 1.))
+                .top(px(ARC + 6. - lift(m.rem_euclid(1440.0)) * ARC))
+                .size(px(2.))
+                .rounded_full()
+                .bg(rgba(0xf5b94255)),
+        );
+    }
+    let (dot, glow) = if up {
+        (SUN, 0xf5b94233)
+    } else {
+        (0xc9cfd8, 0xc9cfd822)
+    };
+    let top = ARC + 6. - lift(now) * ARC;
+    arc = arc
+        .child(
+            div()
+                .absolute()
+                .left(px(x(now) - 9.))
+                .top(px(top - 8.))
+                .size(px(18.))
+                .rounded_full()
+                .bg(rgba(glow)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(px(x(now) - 5.))
+                .top(px(top - 4.))
+                .size(px(10.))
+                .rounded_full()
+                .bg(rgb(dot)),
+        );
+
+    let mut bar = div()
+        .relative()
+        .flex()
+        .w(px(W))
+        .h(px(10.))
+        .rounded_md()
+        .overflow_hidden();
+    for i in 0..SLOTS {
+        let m = (i as f64 + 0.5) * 1440.0 / SLOTS as f64;
+        let mut c = if sun.is_some() && in_span(m, rise, set) {
+            DAY
+        } else {
+            NIGHT
+        };
+        if rules.hours_on && rules.hours.contains(m as u16) {
+            c = if sharing_now { ACCENT } else { 0x2a4170 };
+        }
+        bar = bar.child(div().flex_1().h_full().bg(rgb(c)));
+    }
+    bar = bar.child(
+        div()
+            .absolute()
+            .left(px(x(now) - 1.))
+            .top_0()
+            .w(px(2.))
+            .h_full()
+            .bg(rgb(0xffffff)),
+    );
+
+    let ticks = div().flex().justify_between().w(px(W)).children(
+        ["00", "06", "12", "18", "24"].map(|t| div().text_xs().text_color(rgb(MUTED)).child(t)),
+    );
+    let fmt = |m: f64| format!("{:02}:{:02}", (m as u32 / 60) % 24, m as u32 % 60);
+    let legend = match sun {
+        Some(_) => format!("Sunrise {} · sunset {} (approx.)", fmt(rise), fmt(set)),
+        None if rules.location.is_some() => "No sunrise or sunset today".into(),
+        None => "Set a location to show daylight".into(),
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(arc)
+        .child(bar)
+        .child(ticks)
+        .child(
+            div()
+                .flex()
+                .gap_3()
+                .text_xs()
+                .text_color(rgb(MUTED))
+                .child(legend)
+                .when(rules.hours_on, |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(div().size(px(8.)).rounded_sm().bg(rgb(ACCENT)))
+                            .child(format!("Sharing {}", rules.hours.label())),
+                    )
+                }),
+        )
+}
+
 fn muted(text: impl Into<SharedString>) -> Div {
     div().text_xs().text_color(rgb(MUTED)).child(text.into())
 }
@@ -229,6 +388,9 @@ impl Render for Panel {
             } else {
                 st.share_status.clone()
             }))
+            .when(st.sharing && rules.any(), |d| {
+                d.child(day_strip(&rules, !st.share_status.starts_with("Paused")))
+            })
             .when(st.sharing, |d| {
                 d.child(
                     switch(
@@ -444,8 +606,25 @@ impl Render for Panel {
             .child(network)
             .child(share)
             .child(model_card)
-            .children(earn)
-            .children(pay)
+            .when(earn.is_some() || pay.is_some(), |d| {
+                d.child(
+                    div()
+                        .id("more")
+                        .flex()
+                        .justify_between()
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(rgb(MUTED))
+                        .hover(|d| d.text_color(rgb(0xe6e8eb)))
+                        .child("PRICING AND WALLET")
+                        .child(if self.more { "Hide ▴" } else { "Show ▾" })
+                        .on_click(cx.listener(|p, _, _, cx| {
+                            p.more = !p.more;
+                            cx.notify();
+                        })),
+                )
+            })
+            .when(self.more, |d| d.children(earn).children(pay))
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().text_color(rgb(0xff6b6b)).child(e))
             })
