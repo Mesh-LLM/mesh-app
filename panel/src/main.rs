@@ -30,6 +30,10 @@ struct Panel {
     picked: Option<(bool, std::time::Instant)>,
     /// "Pricing and wallet" expanded; hidden by default to keep it minimal.
     more: bool,
+    /// "Use with your agent" expanded.
+    agent: bool,
+    /// What was last copied, shown as a confirmation for a few seconds.
+    copied: Option<(&'static str, std::time::Instant)>,
 }
 
 impl Panel {
@@ -47,6 +51,8 @@ impl Panel {
             error: None,
             picked: None,
             more: false,
+            agent: false,
+            copied: None,
             root,
         }
     }
@@ -73,6 +79,12 @@ impl Panel {
             .save(&self.root)
             .err()
             .map(|e| format!("Could not save: {e}"));
+        cx.notify();
+    }
+
+    fn copy(&mut self, what: &'static str, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.copied = Some((what, std::time::Instant::now()));
         cx.notify();
     }
 
@@ -650,6 +662,49 @@ impl Render for Panel {
                 )
         });
 
+        let api_port = self.settings.api_port;
+        let model_id = st.model_id.clone();
+        let copied = self
+            .copied
+            .filter(|(_, at)| at.elapsed() < Duration::from_secs(4))
+            .map(|(w, _)| w);
+        let agent_card = card("LOCAL API")
+            .child(div().child(format!(
+                "OpenAI-compatible API: {}",
+                mesh_tray::agent_setup::endpoint(api_port)
+            )))
+            .child(muted(match &st.serving {
+                Some(m) => format!("Model on this machine: {m}. No API key needed."),
+                None => "Models from the Mesh are listed at /v1/models. No API key needed.".into(),
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(chip("copy-prompt", "Copy setup prompt", true).on_click(cx.listener({
+                        let model_id = model_id.clone();
+                        move |p, _, _, cx| {
+                            let text = mesh_tray::agent_setup::prompt(api_port, model_id.as_deref());
+                            p.copy("prompt", text, cx)
+                        }
+                    })))
+                    .child(chip("copy-url", "Copy endpoint", false).on_click(cx.listener(
+                        move |p, _, _, cx| {
+                            p.copy("endpoint", mesh_tray::agent_setup::endpoint(api_port), cx)
+                        },
+                    )))
+                    .child(chip("copy-curl", "Copy test command", false).on_click(cx.listener(
+                        move |p, _, _, cx| {
+                            p.copy("test command", mesh_tray::agent_setup::curl_check(api_port), cx)
+                        },
+                    ))),
+            )
+            .child(muted(match copied {
+                Some(w) => format!("Copied {w}."),
+                None => "Paste the prompt into goose, pi or any agent: it sets itself up, keeps your existing providers, and checks with one request.".into(),
+            }));
+
         let footer = div()
             .flex()
             .gap_2()
@@ -716,6 +771,23 @@ impl Render for Panel {
                 )
             })
             .when(self.more, |d| d.children(earn).children(pay))
+            .child(
+                div()
+                    .id("agent")
+                    .flex()
+                    .justify_between()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .hover(|d| d.text_color(rgb(0xe6e8eb)))
+                    .child("USE WITH YOUR AGENT")
+                    .child(if self.agent { "Hide ▴" } else { "Show ▾" })
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.agent = !p.agent;
+                        cx.notify();
+                    })),
+            )
+            .when(self.agent, |d| d.child(agent_card))
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().text_color(rgb(0xff6b6b)).child(e))
             })

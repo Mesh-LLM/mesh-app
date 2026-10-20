@@ -13,6 +13,8 @@ pub struct State {
     pub share_status: String,
     /// Friendly name of the model being served, if any.
     pub serving: Option<String>,
+    /// Engine model id being served (for the agent setup prompt).
+    pub model_id: Option<String>,
     pub public: bool,
     pub balance_sats: Option<u64>,
     pub wallet: bool,

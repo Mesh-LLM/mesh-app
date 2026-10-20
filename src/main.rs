@@ -442,7 +442,12 @@ impl App {
             .as_deref()
             .filter(|_| self.snapshot.running && !self.snapshot.serving_models.is_empty())
             .map(|m| mesh_tray::app_config::label(m).to_string());
+        let model_id = self
+            .spawned_model
+            .clone()
+            .filter(|_| self.snapshot.running && !self.snapshot.serving_models.is_empty());
         let state = mesh_tray::panel_ipc::State {
+            model_id,
             status: self.status_line(),
             sharing,
             busy,
