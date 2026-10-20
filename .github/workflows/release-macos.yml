@@ -293,6 +293,24 @@ jobs:
             "artifacts/${{ steps.dist.outputs.base }}.dmg" \
             "artifacts/${{ steps.dist.outputs.base }}.dmg.sha256"
 
+      - name: Refresh dev-latest sticky download
+        if: github.event_name == 'workflow_dispatch' && inputs.publish && !startsWith(github.ref, 'refs/tags/v')
+        env:
+          APP_VERSION: ${{ steps.meta.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          # Stable URL for the README: releases/download/dev-latest/Mesh-macos-arm64.dmg
+          cp "artifacts/${{ steps.dist.outputs.base }}.dmg" Mesh-macos-arm64.dmg
+          shasum -a 256 Mesh-macos-arm64.dmg > Mesh-macos-arm64.dmg.sha256
+          notes="Rolling pointer to the newest dev build. Currently: build-${APP_VERSION}"
+          if gh release view dev-latest >/dev/null 2>&1; then
+            gh release edit dev-latest --prerelease --notes "$notes"
+          else
+            gh release create dev-latest --target "$GITHUB_SHA" --prerelease \
+              --title "Mesh dev (latest, macOS arm64)" --notes "$notes"
+          fi
+          gh release upload dev-latest --clobber Mesh-macos-arm64.dmg Mesh-macos-arm64.dmg.sha256
+
       - name: Clean signing credentials
         if: always()
         run: |

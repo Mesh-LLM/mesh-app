@@ -24,6 +24,8 @@ Some features are still experimental or examples
 
 ## Get started
 
+**[Download the latest macOS build (Apple Silicon)](https://github.com/Mesh-LLM/mesh-app/releases/download/dev-latest/Mesh-macos-arm64.dmg)**
+
 On macOS, open the DMG, drag **Mesh.app** into **Applications**, and launch it.
 Click the jellyfish in the menu bar. The app is in preview. Windows builds are
 [CI artifacts](https://github.com/Mesh-LLM/mesh-app/actions/workflows/ci.yml), and Linux is experimental.
