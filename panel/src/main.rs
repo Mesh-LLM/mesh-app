@@ -30,6 +30,15 @@ struct Panel {
     picked: Option<(bool, std::time::Instant)>,
     /// "Pricing and wallet" expanded; hidden by default to keep it minimal.
     more: bool,
+    /// "Use with your agent" expanded.
+    agent: bool,
+    /// "Activity" and "Advanced" expanded.
+    activity: bool,
+    advanced: bool,
+    /// Requests-done count last seen and when it went up: drives "SERVED".
+    served: (u64, Option<std::time::Instant>),
+    /// What was last copied, shown as a confirmation for a few seconds.
+    copied: Option<(&'static str, std::time::Instant)>,
 }
 
 impl Panel {
@@ -47,6 +56,11 @@ impl Panel {
             error: None,
             picked: None,
             more: false,
+            agent: false,
+            activity: false,
+            advanced: false,
+            served: (0, None),
+            copied: None,
             root,
         }
     }
@@ -59,7 +73,7 @@ impl Panel {
         }
     }
 
-    fn act(&mut self, id: &'static str, cx: &mut Context<Self>) {
+    fn act(&mut self, id: &str, cx: &mut Context<Self>) {
         if let Err(e) = panel_ipc::send(&self.root, id) {
             self.error = Some(format!("Could not reach Mesh: {e}"));
         }
@@ -73,6 +87,12 @@ impl Panel {
             .save(&self.root)
             .err()
             .map(|e| format!("Could not save: {e}"));
+        cx.notify();
+    }
+
+    fn copy(&mut self, what: &'static str, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.copied = Some((what, std::time::Instant::now()));
         cx.notify();
     }
 
@@ -312,6 +332,202 @@ fn muted(text: impl Into<SharedString>) -> Div {
     div().text_xs().text_color(rgb(MUTED)).child(text.into())
 }
 
+/// " (≈ $1.23)" when a BTC/USD rate is known, else nothing.
+fn usd(n: u64, st: &State) -> String {
+    st.usd_per_btc_cents
+        .map(|c| format!(" (≈ {})", mesh_tray::fx::usd(n, c as f64 / 100.0)))
+        .unwrap_or_default()
+}
+
+/// Move a minute-of-day by `delta` hours, wrapping at midnight.
+fn shift(minute: u16, delta: i32) -> u16 {
+    (i32::from(minute) + delta * 60).rem_euclid(1440) as u16
+}
+
+/// "From − 10:00 +   To − 15:00 +": steps the sharing window an hour at a time.
+fn hours_editor(h: mesh_tray::share_rules::Hours, cx: &mut Context<Panel>) -> Div {
+    let fmt = |m: u16| format!("{:02}:{:02}", m / 60, m % 60);
+    let stepper = |which: &'static str, value: u16, cx: &mut Context<Panel>| {
+        let step = move |delta: i32| {
+            move |p: &mut Panel, _: &ClickEvent, _: &mut Window, cx: &mut Context<Panel>| {
+                let (mut start, mut end) = (h.start, h.end);
+                if which == "start" {
+                    start = shift(start, delta);
+                } else {
+                    end = shift(end, delta);
+                }
+                if start != end {
+                    p.act(&format!("share:hours={}-{}", fmt(start), fmt(end)), cx);
+                }
+            }
+        };
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(muted(if which == "start" { "From" } else { "To" }))
+            .child(chip((which, 0usize), "−", false).on_click(cx.listener(step(-1))))
+            .child(div().w(px(44.)).flex().justify_center().child(fmt(value)))
+            .child(chip((which, 1usize), "+", false).on_click(cx.listener(step(1))))
+    };
+    div()
+        .flex()
+        .gap_4()
+        .child(stepper("start", h.start, cx))
+        .child(stepper("end", h.end, cx))
+}
+
+/// A collapsible section header ("TITLE   summary   Show ▾").
+fn fold(id: &'static str, title: &'static str, open: bool, summary: Option<Div>) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_2()
+        .cursor_pointer()
+        .text_xs()
+        .text_color(rgb(MUTED))
+        .hover(|d| d.text_color(rgb(0xe6e8eb)))
+        .child(title)
+        .child(div().flex_1().children(summary))
+        .child(if open { "Hide ▴" } else { "Show ▾" })
+}
+
+/// 3×5 dot font for the activity display (after the Buzz compute widget).
+fn glyph(c: char) -> &'static str {
+    match c {
+        'D' => "110101101101110",
+        'E' => "111100110100111",
+        'G' => "111100101101111",
+        'I' => "111010010010111",
+        'K' => "101101110101101",
+        'L' => "100100100100111",
+        'N' => "110101101101101",
+        'O' => "111101101101111",
+        'R' => "110101110101101",
+        'S' => "111100111001111",
+        'V' => "101101101101010",
+        'W' => "101101101111111",
+        _ => "000000000000000",
+    }
+}
+
+/// Seconds since the panel started, for animation phase.
+fn clock() -> f32 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f32()
+}
+
+/// A small dot-matrix display: the word in lit dots on a faint grid. While
+/// `live`, a bright band sweeps across the letters and the grid twinkles;
+/// otherwise it sits still (no motion that implies work is happening).
+fn dot_matrix(word: &str, color: u32, live: bool) -> Div {
+    const COLS: usize = 33;
+    const ROWS: usize = 7;
+    let mut lit = [[false; COLS]; ROWS];
+    let width = (word.chars().count() * 4).saturating_sub(1);
+    let x0 = COLS.saturating_sub(width) / 2;
+    for (i, c) in word.chars().enumerate() {
+        for (k, b) in glyph(c).bytes().enumerate() {
+            let (x, y) = (x0 + i * 4 + k % 3, 1 + k / 3);
+            if b == b'1' && x < COLS {
+                lit[y][x] = true;
+            }
+        }
+    }
+    let t = clock();
+    let sweep = (t * 14.0) % (COLS as f32 + 12.0) - 6.0;
+    let (r, g, b) = (
+        (color >> 16) as f32,
+        ((color >> 8) & 0xff) as f32,
+        (color & 0xff) as f32,
+    );
+    let dot = |x: usize, y: usize| -> u32 {
+        let a = if lit[y][x] {
+            if live {
+                let d = (x as f32 - sweep).abs();
+                0.55 + 0.45 * (1.0 - (d / 4.0).min(1.0))
+            } else {
+                0.8
+            }
+        } else if live {
+            // Cheap per-dot hash: a slow, sparse twinkle on the background.
+            let h = ((x * 73 + y * 151) % 97) as f32;
+            let w = ((t * 1.3 + h).sin() * 0.5 + 0.5).powi(12);
+            0.07 + 0.25 * w
+        } else {
+            0.07
+        };
+        let mix = |c: f32, bg: f32| (bg + (c - bg) * a) as u32;
+        (mix(r, 28.0) << 16) | (mix(g, 31.0) << 8) | mix(b, 36.0)
+    };
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(px(2.))
+        .py_1()
+        .children((0..ROWS).map(|y| {
+            div()
+                .flex()
+                .gap(px(2.))
+                .children((0..COLS).map(|x| div().size(px(5.)).rounded_full().bg(rgb(dot(x, y)))))
+        }))
+}
+
+/// Live inference on this node: a quiet card, lit while requests are running.
+fn activity_card(a: mesh_tray::status::Activity, served: bool) -> Div {
+    let live = a.active > 0;
+    let (word, color) = if live {
+        ("WORKING", 0x3ccf7a)
+    } else if served {
+        ("SERVED", 0x5aa0ff)
+    } else {
+        ("IDLE", MUTED)
+    };
+    let speed = a
+        .tps_tenths
+        .map(|t| format!(" · {}.{} tok/s", t / 10, t % 10))
+        .unwrap_or_default();
+    let now = if live {
+        format!(
+            "Running {} request{} now{speed}",
+            a.active,
+            if a.active == 1 { "" } else { "s" }
+        )
+    } else {
+        format!("Idle{speed}")
+    };
+    card("ACTIVITY")
+        .child(dot_matrix(word, color, live || served))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().size(px(8.)).rounded_full().bg(rgb(if live {
+                    0x3ccf7a
+                } else {
+                    IDLE
+                })))
+                .child(now),
+        )
+        .child(muted(format!(
+            "{} tokens generated · {} requests done since Mesh started",
+            sats(a.output_tokens),
+            sats(a.completed)
+        )))
+        .child(muted(format!(
+            "{} other node{} in the Mesh, {} sharing a model",
+            a.peers,
+            if a.peers == 1 { "" } else { "s" },
+            a.serving_peers
+        )))
+}
+
 fn sats(n: u64) -> String {
     let s = n.to_string();
     let mut out = String::new();
@@ -325,8 +541,27 @@ fn sats(n: u64) -> String {
 }
 
 impl Render for Panel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let st = self.state.clone();
+        if let Some(a) = st.activity {
+            // First reading only sets the baseline, so opening doesn't flash.
+            if self.served.1.is_none() {
+                self.served = (
+                    a.completed,
+                    Some(std::time::Instant::now() - Duration::from_secs(60)),
+                );
+            } else if a.completed > self.served.0 {
+                self.served = (a.completed, Some(std::time::Instant::now()));
+            }
+        }
+        let served = self
+            .served
+            .1
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(3));
+        let live = st.activity.is_some_and(|a| a.active > 0);
+        if self.activity && (live || served) {
+            window.request_animation_frame();
+        }
         let saved_private = matches!(self.settings.connection, Connection::Private { .. });
         // Show the pick at once; drop it once saved, or after the confirm
         // dialog has had time to be answered (cancel reverts).
@@ -423,6 +658,7 @@ impl Render for Panel {
                     )
                     .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
                 )
+                .when(rules.hours_on, |d| d.child(hours_editor(rules.hours, cx)))
             });
 
         let mut picks = div().flex().flex_wrap().gap_2().child(
@@ -501,9 +737,11 @@ impl Render for Panel {
                 None => c.child(muted("Free")),
                 Some(pr) => c
                     .child(div().child(format!(
-                        "{} sats in · {} sats out, per 1M tokens",
+                        "{} sats in{} · {} sats out{}, per 1M tokens",
                         sats(pr.input_sats),
-                        sats(pr.output_sats)
+                        usd(pr.input_sats, &st),
+                        sats(pr.output_sats),
+                        usd(pr.output_sats, &st)
                     )))
                     .child(
                         div()
@@ -541,7 +779,7 @@ impl Render for Panel {
         let pay = (!private).then(|| {
             card("PAY FOR INFERENCE")
                 .child(div().child(match (st.wallet, st.balance_sats) {
-                    (true, Some(b)) => format!("Wallet balance: {} sats", sats(b)),
+                    (true, Some(b)) => format!("Wallet balance: {} sats{}", sats(b), usd(b, &st)),
                     (true, None) => "Wallet balance: checking…".into(),
                     (false, _) => "No wallet yet. One is set up the first time you need it.".into(),
                 }))
@@ -560,30 +798,59 @@ impl Render for Panel {
                 )
         });
 
+        let api_port = self.settings.api_port;
+        let model_id = st.model_id.clone();
+        let copied = self
+            .copied
+            .filter(|(_, at)| at.elapsed() < Duration::from_secs(4))
+            .map(|(w, _)| w);
+        let agent_card = card("LOCAL API")
+            .child(div().child(format!(
+                "OpenAI-compatible API: {}",
+                mesh_tray::agent_setup::endpoint(api_port)
+            )))
+            .child(muted(match &st.serving {
+                Some(m) => format!("Model on this machine: {m}. No API key needed."),
+                None => "Models from the Mesh are listed at /v1/models. No API key needed.".into(),
+            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(chip("copy-prompt", "Copy setup prompt", true).on_click(cx.listener({
+                        let model_id = model_id.clone();
+                        move |p, _, _, cx| {
+                            let text = mesh_tray::agent_setup::prompt(api_port, model_id.as_deref());
+                            p.copy("prompt", text, cx)
+                        }
+                    })))
+                    .child(chip("copy-url", "Copy endpoint", false).on_click(cx.listener(
+                        move |p, _, _, cx| {
+                            p.copy("endpoint", mesh_tray::agent_setup::endpoint(api_port), cx)
+                        },
+                    )))
+                    .child(chip("copy-curl", "Copy test command", false).on_click(cx.listener(
+                        move |p, _, _, cx| {
+                            p.copy("test command", mesh_tray::agent_setup::curl_check(api_port), cx)
+                        },
+                    ))),
+            )
+            .child(muted(match copied {
+                Some(w) => format!("Copied {w}."),
+                None => "Paste the prompt into goose, pi or any agent: it sets itself up, keeps your existing providers, and checks with one request.".into(),
+            }));
+
         let footer = div()
             .flex()
             .gap_2()
             .justify_end()
             .items_center()
             .child(
-                div()
-                    .id("console")
-                    .text_sm()
-                    .text_color(rgb(MUTED))
-                    .cursor_pointer()
-                    .hover(|d| d.underline())
-                    .child("Console")
-                    .on_click(cx.listener(|p, _, _, cx| p.act("console", cx))),
-            )
-            .child(
                 chip("chat", "Chat", true)
                     .px_5()
                     .py_2()
                     .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
-            )
-            .child(
-                chip("reset", "Reset…", false)
-                    .on_click(cx.listener(|p, _, _, cx| p.act("reset", cx))),
             )
             .child(
                 chip("quit", "Quit Mesh", false)
@@ -605,6 +872,25 @@ impl Render for Panel {
             .child(header)
             .child(network)
             .child(share)
+            .when_some(st.activity, |d, a| {
+                let summary = div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { IDLE })))
+                    .child(if live {
+                        format!("{} running", a.active)
+                    } else {
+                        "Idle".into()
+                    });
+                d.child(fold("activity", "ACTIVITY", self.activity, Some(summary)).on_click(
+                    cx.listener(|p, _, _, cx| {
+                        p.activity = !p.activity;
+                        cx.notify();
+                    }),
+                ))
+                .when(self.activity, |d| d.child(activity_card(a, served)))
+            })
             .child(model_card)
             .when(earn.is_some() || pay.is_some(), |d| {
                 d.child(
@@ -625,6 +911,48 @@ impl Render for Panel {
                 )
             })
             .when(self.more, |d| d.children(earn).children(pay))
+            .child(
+                div()
+                    .id("agent")
+                    .flex()
+                    .justify_between()
+                    .cursor_pointer()
+                    .text_xs()
+                    .text_color(rgb(MUTED))
+                    .hover(|d| d.text_color(rgb(0xe6e8eb)))
+                    .child("USE WITH YOUR AGENT")
+                    .child(if self.agent { "Hide ▴" } else { "Show ▾" })
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.agent = !p.agent;
+                        cx.notify();
+                    })),
+            )
+            .when(self.agent, |d| d.child(agent_card))
+            .child(fold("advanced", "ADVANCED", self.advanced, None).on_click(cx.listener(
+                |p, _, _, cx| {
+                    p.advanced = !p.advanced;
+                    cx.notify();
+                },
+            )))
+            .when(self.advanced, |d| {
+                d.child(
+                    card("ADVANCED")
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(chip("console", "Open console", false).on_click(
+                                    cx.listener(|p, _, _, cx| p.act("console", cx)),
+                                ))
+                                .child(chip("reset", "Reset…", false).on_click(
+                                    cx.listener(|p, _, _, cx| p.act("reset", cx)),
+                                )),
+                        )
+                        .child(muted(
+                            "Console opens the engine web console. Reset restores default settings (it asks first; wallet funds and models are kept).",
+                        )),
+                )
+            })
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().text_color(rgb(0xff6b6b)).child(e))
             })

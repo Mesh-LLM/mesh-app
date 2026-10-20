@@ -13,9 +13,15 @@ pub struct State {
     pub share_status: String,
     /// Friendly name of the model being served, if any.
     pub serving: Option<String>,
+    /// Engine model id being served (for the agent setup prompt).
+    pub model_id: Option<String>,
     pub public: bool,
     pub balance_sats: Option<u64>,
     pub wallet: bool,
+    /// USD cents per BTC for the "≈ $" hints; `None` until a rate is known.
+    pub usd_per_btc_cents: Option<u64>,
+    /// Live inference counters for the Activity card.
+    pub activity: Option<crate::status::Activity>,
     /// The tray's pid; the panel quits when it is gone.
     pub tray_pid: u32,
     /// Bumped by Settings while the panel is open: bring the window forward.

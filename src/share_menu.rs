@@ -72,6 +72,11 @@ impl ShareControl {
                 next.hours = ask_hours(next.hours)?;
                 next.hours_on = true;
             }
+            // From the panel's inline controls: set the window directly.
+            _ if id.starts_with("share:hours=") => {
+                next.hours = share_rules::parse_hours(&id["share:hours=".len()..]).ok()?;
+                next.hours_on = true;
+            }
             "share:location" => next.location = Some(ask_location()?),
             _ => return None,
         }
