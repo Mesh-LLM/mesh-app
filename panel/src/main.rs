@@ -48,6 +48,7 @@ impl Panel {
             .ok()
             .flatten()
             .and_then(|m| LADDER.iter().find(|r| r.model == m).map(|r| r.model));
+        let activity = matches!(settings.connection, Connection::Private { .. });
         Self {
             state: panel_ipc::read_state(&root).unwrap_or_default(),
             app: AppConfig::load(&root),
@@ -57,7 +58,8 @@ impl Panel {
             picked: None,
             more: false,
             agent: false,
-            activity: false,
+            // Private mode opens with Activity expanded.
+            activity,
             advanced: false,
             served: (0, None),
             copied: None,
@@ -69,6 +71,9 @@ impl Panel {
         let saved = matches!(self.settings.connection, Connection::Private { .. });
         if private != saved && self.picked.is_none() {
             self.picked = Some((private, std::time::Instant::now()));
+            if private {
+                self.activity = true;
+            }
             self.act(if private { "private" } else { "public" }, cx);
         }
     }
