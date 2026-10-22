@@ -2,32 +2,71 @@
 //! owns the engine; the panel sends it actions (`panel_ipc::send`) and shows
 //! the state it publishes. Model and price are the app's own preferences in
 //! `mesh-app.toml`, applied by the tray.
+use gpui_kit::component::{
+    button::{Button, ButtonVariants},
+    switch::Switch,
+    Disableable, Selectable,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use mesh_tray::app_config::{self, AppConfig, Price, FREE, LADDER};
 use mesh_tray::panel_ipc::{self, State};
-use mesh_tray::{model_selection, settings, settings::Connection};
+use mesh_tray::settings;
 use std::path::PathBuf;
 use std::time::Duration;
 
-const BG: u32 = 0x14161a;
-const CARD: u32 = 0x1c1f24;
-const MUTED: u32 = 0x8a8f98;
-const ACCENT: u32 = 0x2f6fed;
-const IDLE: u32 = 0x2a2e35;
-const SUN: u32 = 0xf5b942;
-const NIGHT: u32 = 0x22262e;
-const DAY: u32 = 0x3a3420;
+#[derive(Clone, Copy)]
+struct Palette {
+    bg: u32,
+    card: u32,
+    muted: u32,
+    accent: u32,
+    idle: u32,
+    sun: u32,
+    night: u32,
+    day: u32,
+    text: u32,
+}
+impl Palette {
+    fn new(dark: bool) -> Self {
+        if dark {
+            Self {
+                bg: 0x14161a,
+                card: 0x1c1f24,
+                muted: 0x9a9fa8,
+                accent: 0x2f6fed,
+                idle: 0x2a2e35,
+                sun: 0xf5b942,
+                night: 0x22262e,
+                day: 0x3a3420,
+                text: 0xe6e8eb,
+            }
+        } else {
+            Self {
+                bg: 0xf4f5f7,
+                card: 0xffffff,
+                muted: 0x59616e,
+                accent: 0x245edb,
+                idle: 0xd4d8df,
+                sun: 0x976800,
+                night: 0xe5e8ee,
+                day: 0xf4e7bf,
+                text: 0x20242b,
+            }
+        }
+    }
+}
 
 struct Panel {
     root: PathBuf,
-    settings: settings::Settings,
     state: State,
     app: AppConfig,
     auto: Option<&'static str>,
     error: Option<String>,
     /// Mode just picked (private?), shown at once until saved or cancelled.
-    picked: Option<(bool, std::time::Instant)>,
+    picked: Option<(bool, u64)>,
+    conditions: bool,
+    preview: bool,
     /// "Pricing and wallet" expanded; hidden by default to keep it minimal.
     more: bool,
     /// "Use with your agent" expanded.
@@ -42,17 +81,52 @@ struct Panel {
 }
 
 impl Panel {
-    fn load(root: PathBuf) -> Self {
-        let settings = settings::Settings::load(&root).unwrap_or_default();
-        let auto = model_selection::local_model(&settings.connection)
-            .ok()
-            .flatten()
-            .and_then(|m| LADDER.iter().find(|r| r.model == m).map(|r| r.model));
-        let activity = matches!(settings.connection, Connection::Private { .. });
+    fn preview() -> Self {
+        let mut state = State {
+            status: "Connected · ready to chat".into(),
+            public: true,
+            sharing: true,
+            share_status: "Sharing enabled · serving Gemma 4 12B".into(),
+            serving: Some("Gemma 4 12B".into()),
+            api_port: 9447,
+            automatic_model: Some(LADDER[1].model.into()),
+            available_models: LADDER[1..].iter().map(|r| r.model.into()).collect(),
+            ..Default::default()
+        };
+        state
+            .preferences
+            .prices
+            .insert(LADDER[1].model.into(), FREE);
         Self {
-            state: panel_ipc::read_state(&root).unwrap_or_default(),
-            app: AppConfig::load(&root),
-            settings,
+            root: PathBuf::new(),
+            app: state.preferences.clone(),
+            state,
+            auto: Some(LADDER[1].model),
+            error: Some("Read-only preview · no live Mesh connection".into()),
+            picked: None,
+            conditions: false,
+            preview: true,
+            more: false,
+            agent: false,
+            activity: false,
+            advanced: false,
+            served: (0, None),
+            copied: None,
+        }
+    }
+
+    fn load(root: PathBuf) -> Self {
+        let state = panel_ipc::read_state(&root).unwrap_or_default();
+        let auto = state
+            .automatic_model
+            .as_deref()
+            .and_then(|m| LADDER.iter().find(|r| r.model == m).map(|r| r.model));
+        let activity = !state.public;
+        Self {
+            app: state.preferences.clone(),
+            state,
+            conditions: false,
+            preview: false,
             auto,
             error: None,
             picked: None,
@@ -68,9 +142,13 @@ impl Panel {
     }
 
     fn pick(&mut self, private: bool, cx: &mut Context<Self>) {
-        let saved = matches!(self.settings.connection, Connection::Private { .. });
+        if self.preview {
+            self.act("preview", cx);
+            return;
+        }
+        let saved = !self.state.public;
         if private != saved && self.picked.is_none() {
-            self.picked = Some((private, std::time::Instant::now()));
+            self.picked = Some((private, self.state.command_revision));
             if private {
                 self.activity = true;
             }
@@ -79,6 +157,11 @@ impl Panel {
     }
 
     fn act(&mut self, id: &str, cx: &mut Context<Self>) {
+        if self.preview {
+            self.error = Some("Preview only — no Mesh settings are changed.".into());
+            cx.notify();
+            return;
+        }
         if let Err(e) = panel_ipc::send(&self.root, id) {
             self.error = Some(format!("Could not reach Mesh: {e}"));
         }
@@ -86,12 +169,29 @@ impl Panel {
     }
 
     fn edit(&mut self, f: impl FnOnce(&mut AppConfig), cx: &mut Context<Self>) {
-        f(&mut self.app);
-        self.error = self
-            .app
-            .save(&self.root)
-            .err()
-            .map(|e| format!("Could not save: {e}"));
+        if self.preview || self.state.busy {
+            self.error = Some(
+                "Preview only or Mesh is applying a change; preferences were not saved.".into(),
+            );
+            cx.notify();
+            return;
+        }
+        let mut next = self.app.clone();
+        f(&mut next);
+        let action = if next.model != self.app.model {
+            Some(panel_ipc::Action::SetModel(next.model))
+        } else {
+            next.prices
+                .iter()
+                .find(|(m, p)| self.app.prices.get(*m) != Some(*p))
+                .map(|(m, p)| panel_ipc::Action::SetPrice {
+                    model: m.clone(),
+                    price: *p,
+                })
+        };
+        if let Some(action) = action {
+            self.error = panel_ipc::send_action(&self.root, &action).err();
+        }
         cx.notify();
     }
 
@@ -103,81 +203,66 @@ impl Panel {
 
     /// The model being configured: the explicit choice, else the auto pick.
     fn model(&self) -> Option<&'static str> {
-        self.app.chosen_model().or(self.auto)
+        self.app
+            .model
+            .as_deref()
+            .and_then(|m| LADDER.iter().find(|r| r.model == m).map(|r| r.model))
+            .or(self.auto)
     }
 }
 
-fn card(title: &'static str) -> Div {
+fn card(palette: Palette, title: &'static str) -> Div {
     div()
         .flex()
         .flex_col()
         .gap_2()
         .p_3()
         .rounded_lg()
-        .bg(rgb(CARD))
-        .child(div().text_xs().text_color(rgb(MUTED)).child(title))
+        .bg(rgb(palette.card))
+        .child(div().text_xs().text_color(rgb(palette.muted)).child(title))
 }
 
-fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, on: bool) -> Stateful<Div> {
-    div()
-        .id(id.into())
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .cursor_pointer()
-        .bg(rgb(if on { ACCENT } else { IDLE }))
-        .hover(|d| d.opacity(0.85))
-        .child(text.into())
+fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, on: bool) -> Button {
+    Button::new(id)
+        .label(text)
+        .selected(on)
+        .when(on, |b| b.primary())
+        .when(!on, |b| b.ghost())
 }
 
-/// A labelled on/off switch row.
-fn switch(id: &'static str, label: impl Into<SharedString>, on: bool) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .justify_between()
-        .cursor_pointer()
-        .child(div().child(label.into()))
-        .child(
-            div()
-                .w(px(34.))
-                .h(px(18.))
-                .rounded_full()
-                .p(px(2.))
-                .flex()
-                .when(on, |d| d.justify_end())
-                .bg(rgb(if on { ACCENT } else { IDLE }))
-                .child(div().size(px(14.)).rounded_full().bg(rgb(0xffffff))),
-        )
+fn switch(id: &'static str, label: impl Into<SharedString>, on: bool) -> Switch {
+    Switch::new(id).label(label.into()).checked(on)
 }
 
-/// The jellyfish, drawn from the tray's 32×32 RGBA raster as plain boxes:
-/// no image decoder or asset source involved, so it always renders.
 fn logo() -> Div {
-    const N: usize = 32;
-    const PX: f32 = 1.5;
-    let raw = include_bytes!("../../assets/mesh-jellyfish.rgba");
-    let mut d = div().relative().flex_none().size(px(N as f32 * PX));
-    for (i, p) in raw.as_chunks::<4>().0.iter().enumerate() {
-        if p[3] < 24 {
-            continue;
+    static IMAGE: std::sync::OnceLock<std::sync::Arc<RenderImage>> = std::sync::OnceLock::new();
+    let image = IMAGE.get_or_init(|| {
+        let mut bgra = include_bytes!("../../assets/mesh-jellyfish.rgba").to_vec();
+        for pixel in bgra.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
         }
-        let (x, y) = ((i % N) as f32, (i / N) as f32);
-        let c = (u32::from(p[0]) << 24)
-            | (u32::from(p[1]) << 16)
-            | (u32::from(p[2]) << 8)
-            | u32::from(p[3]);
-        d = d.child(
-            div()
-                .absolute()
-                .left(px(x * PX))
-                .top(px(y * PX))
-                .size(px(PX))
-                .bg(rgba(c)),
-        );
-    }
-    d
+        let buffer = image::RgbaImage::from_raw(32, 32, bgra).expect("bundled 32px logo");
+        std::sync::Arc::new(RenderImage::new(vec![image::Frame::new(buffer)]))
+    });
+    div()
+        .flex_none()
+        .size(px(48.))
+        .child(img(image.clone()).size_full())
+}
+
+fn accent_theme(cx: &mut App) {
+    use gpui_kit::component::Theme;
+    Theme::update(cx, |theme| {
+        theme.primary = rgb(0x2f6fed).into();
+        theme.primary_hover = rgb(0x245edb).into();
+        theme.primary_active = rgb(0x1d4fc0).into();
+        theme.primary_foreground = rgb(0xffffff).into();
+        theme.button_primary = theme.primary;
+        theme.button_primary_hover = theme.primary_hover;
+        theme.button_primary_active = theme.primary_active;
+        theme.button_primary_foreground = theme.primary_foreground;
+        theme.switch = theme.primary;
+    });
 }
 
 /// Approximate local sunrise/sunset in minutes since midnight (NOAA
@@ -210,7 +295,11 @@ fn in_span(m: f64, a: f64, b: f64) -> bool {
 /// The day at a glance: a 24-hour strip shaded for daylight (when the
 /// location is typed), the chosen sharing hours, and the sun (or moon) at the
 /// current time riding an arc above it. Explanatory only; the tray decides.
-fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> Div {
+fn day_strip(
+    palette: Palette,
+    rules: &mesh_tray::share_rules::ShareRules,
+    sharing_now: bool,
+) -> Div {
     const W: f32 = 456.;
     const ARC: f32 = 34.;
     const SLOTS: usize = 48;
@@ -243,7 +332,7 @@ fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> D
         );
     }
     let (dot, glow) = if up {
-        (SUN, 0xf5b94233)
+        (palette.sun, 0xf5b94233)
     } else {
         (0xc9cfd8, 0xc9cfd822)
     };
@@ -278,12 +367,16 @@ fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> D
     for i in 0..SLOTS {
         let m = (i as f64 + 0.5) * 1440.0 / SLOTS as f64;
         let mut c = if sun.is_some() && in_span(m, rise, set) {
-            DAY
+            palette.day
         } else {
-            NIGHT
+            palette.night
         };
         if rules.hours_on && rules.hours.contains(m as u16) {
-            c = if sharing_now { ACCENT } else { 0x2a4170 };
+            c = if sharing_now {
+                palette.accent
+            } else {
+                0x2a4170
+            };
         }
         bar = bar.child(div().flex_1().h_full().bg(rgb(c)));
     }
@@ -298,7 +391,8 @@ fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> D
     );
 
     let ticks = div().flex().justify_between().w(px(W)).children(
-        ["00", "06", "12", "18", "24"].map(|t| div().text_xs().text_color(rgb(MUTED)).child(t)),
+        ["00", "06", "12", "18", "24"]
+            .map(|t| div().text_xs().text_color(rgb(palette.muted)).child(t)),
     );
     let fmt = |m: f64| format!("{:02}:{:02}", (m as u32 / 60) % 24, m as u32 % 60);
     let legend = match sun {
@@ -318,7 +412,7 @@ fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> D
                 .flex()
                 .gap_3()
                 .text_xs()
-                .text_color(rgb(MUTED))
+                .text_color(rgb(palette.muted))
                 .child(legend)
                 .when(rules.hours_on, |d| {
                     d.child(
@@ -326,15 +420,18 @@ fn day_strip(rules: &mesh_tray::share_rules::ShareRules, sharing_now: bool) -> D
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(div().size(px(8.)).rounded_sm().bg(rgb(ACCENT)))
+                            .child(div().size(px(8.)).rounded_sm().bg(rgb(palette.accent)))
                             .child(format!("Sharing {}", rules.hours.label())),
                     )
                 }),
         )
 }
 
-fn muted(text: impl Into<SharedString>) -> Div {
-    div().text_xs().text_color(rgb(MUTED)).child(text.into())
+fn muted(palette: Palette, text: impl Into<SharedString>) -> Div {
+    div()
+        .text_xs()
+        .text_color(rgb(palette.muted))
+        .child(text.into())
 }
 
 /// " (≈ $1.23)" when a BTC/USD rate is known, else nothing.
@@ -350,7 +447,11 @@ fn shift(minute: u16, delta: i32) -> u16 {
 }
 
 /// "From − 10:00 +   To − 15:00 +": steps the sharing window an hour at a time.
-fn hours_editor(h: mesh_tray::share_rules::Hours, cx: &mut Context<Panel>) -> Div {
+fn hours_editor(
+    palette: Palette,
+    h: mesh_tray::share_rules::Hours,
+    cx: &mut Context<Panel>,
+) -> Div {
     let fmt = |m: u16| format!("{:02}:{:02}", m / 60, m % 60);
     let stepper = |which: &'static str, value: u16, cx: &mut Context<Panel>| {
         let step = move |delta: i32| {
@@ -370,7 +471,7 @@ fn hours_editor(h: mesh_tray::share_rules::Hours, cx: &mut Context<Panel>) -> Di
             .flex()
             .items_center()
             .gap_1()
-            .child(muted(if which == "start" { "From" } else { "To" }))
+            .child(muted(palette, if which == "start" { "From" } else { "To" }))
             .child(chip((which, 0usize), "−", false).on_click(cx.listener(step(-1))))
             .child(div().w(px(44.)).flex().justify_center().child(fmt(value)))
             .child(chip((which, 1usize), "+", false).on_click(cx.listener(step(1))))
@@ -383,19 +484,31 @@ fn hours_editor(h: mesh_tray::share_rules::Hours, cx: &mut Context<Panel>) -> Di
 }
 
 /// A collapsible section header ("TITLE   summary   Show ▾").
-fn fold(id: &'static str, title: &'static str, open: bool, summary: Option<Div>) -> Stateful<Div> {
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .gap_2()
-        .cursor_pointer()
-        .text_xs()
-        .text_color(rgb(MUTED))
-        .hover(|d| d.text_color(rgb(0xe6e8eb)))
-        .child(title)
-        .child(div().flex_1().children(summary))
-        .child(if open { "Hide ▴" } else { "Show ▾" })
+fn fold(
+    palette: Palette,
+    id: &'static str,
+    title: &'static str,
+    open: bool,
+    summary: Option<Div>,
+) -> Button {
+    Button::new(id)
+        .ghost()
+        .w_full()
+        .accessibility_label(format!(
+            "{title}, {}",
+            if open { "expanded" } else { "collapsed" }
+        ))
+        .child(
+            div()
+                .flex()
+                .w_full()
+                .items_center()
+                .gap_2()
+                .text_color(rgb(palette.muted))
+                .child(title)
+                .child(div().flex_1().children(summary))
+                .child(if open { "Hide ▴" } else { "Show ▾" }),
+        )
 }
 
 /// 3×5 dot font for the activity display (after the Buzz compute widget).
@@ -484,14 +597,14 @@ fn dot_matrix(word: &str, color: u32, live: bool) -> Div {
 }
 
 /// Live inference on this node: a quiet card, lit while requests are running.
-fn activity_card(a: mesh_tray::status::Activity, served: bool) -> Div {
+fn activity_card(palette: Palette, a: mesh_tray::status::Activity, served: bool) -> Div {
     let live = a.active > 0;
     let (word, color) = if live {
         ("WORKING", 0x3ccf7a)
     } else if served {
         ("SERVED", 0x5aa0ff)
     } else {
-        ("IDLE", MUTED)
+        ("IDLE", palette.muted)
     };
     let speed = a
         .tps_tenths
@@ -506,7 +619,7 @@ fn activity_card(a: mesh_tray::status::Activity, served: bool) -> Div {
     } else {
         format!("Idle{speed}")
     };
-    card("ACTIVITY")
+    card(palette, "ACTIVITY")
         .child(dot_matrix(word, color, live || served))
         .child(
             div()
@@ -516,21 +629,27 @@ fn activity_card(a: mesh_tray::status::Activity, served: bool) -> Div {
                 .child(div().size(px(8.)).rounded_full().bg(rgb(if live {
                     0x3ccf7a
                 } else {
-                    IDLE
+                    palette.idle
                 })))
                 .child(now),
         )
-        .child(muted(format!(
-            "{} tokens generated · {} requests done since Mesh started",
-            sats(a.output_tokens),
-            sats(a.completed)
-        )))
-        .child(muted(format!(
-            "{} other node{} in the Mesh, {} sharing a model",
-            a.peers,
-            if a.peers == 1 { "" } else { "s" },
-            a.serving_peers
-        )))
+        .child(muted(
+            palette,
+            format!(
+                "{} tokens generated · {} requests done since Mesh started",
+                sats(a.output_tokens),
+                sats(a.completed)
+            ),
+        ))
+        .child(muted(
+            palette,
+            format!(
+                "{} other node{} in the Mesh, {} sharing a model",
+                a.peers,
+                if a.peers == 1 { "" } else { "s" },
+                a.serving_peers
+            ),
+        ))
 }
 
 fn sats(n: u64) -> String {
@@ -547,6 +666,19 @@ fn sats(n: u64) -> String {
 
 impl Render for Panel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let dark = match std::env::var("MESH_PANEL_PREVIEW_THEME")
+            .ok()
+            .as_deref()
+            .filter(|_| self.preview)
+        {
+            Some("light") => false,
+            Some("dark") => true,
+            _ => matches!(
+                window.appearance(),
+                WindowAppearance::Dark | WindowAppearance::VibrantDark
+            ),
+        };
+        let palette = Palette::new(dark);
         let st = self.state.clone();
         if let Some(a) = st.activity {
             // First reading only sets the baseline, so opening doesn't flash.
@@ -567,17 +699,17 @@ impl Render for Panel {
         if self.activity && (live || served) {
             window.request_animation_frame();
         }
-        let saved_private = matches!(self.settings.connection, Connection::Private { .. });
+        let saved_private = !self.state.public;
         // Show the pick at once; drop it once saved, or after the confirm
         // dialog has had time to be answered (cancel reverts).
-        if let Some((want, at)) = self.picked {
-            if (want == saved_private && !st.busy) || at.elapsed() > Duration::from_secs(60) {
+        if let Some((_, revision)) = self.picked {
+            if st.command_revision != revision {
                 self.picked = None;
             }
         }
         let switching = self.picked.is_some();
         let private = self.picked.map_or(saved_private, |(p, _)| p);
-        let rules = self.settings.share_rules.clone();
+        let rules = st.rules.clone();
         let model = self.model();
 
         let header = div().flex().items_center().gap_3().child(logo()).child(
@@ -585,22 +717,24 @@ impl Render for Panel {
                 .flex()
                 .flex_col()
                 .child(div().text_lg().child("Mesh"))
-                .child(muted(st.status.clone())),
+                .child(muted(palette, st.status.clone())),
         );
 
-        let mut network = card("NETWORK").child(
+        let mut network = card(palette, "Network").child(
             div()
                 .flex()
                 .gap_2()
                 .child(
                     chip("public", "Public", !private)
+                        .disabled(st.busy || switching)
                         .on_click(cx.listener(|p, _, _, cx| p.pick(false, cx))),
                 )
                 .child(
                     chip("private", "Private", private)
+                        .disabled(st.busy || switching)
                         .on_click(cx.listener(|p, _, _, cx| p.pick(true, cx))),
                 )
-                .when(switching, |d| d.child(muted("Switching…"))),
+                .when(switching, |d| d.child(muted(palette, "Switching…"))),
         );
         if private && !switching {
             network = network.child(
@@ -618,20 +752,41 @@ impl Render for Panel {
             );
         }
 
-        let share = card("SHARE")
+        let share = card(palette, "Sharing")
             .child(
                 switch("compute", "Share compute", st.sharing)
+                    .disabled(st.busy)
                     .on_click(cx.listener(|p, _, _, cx| p.act("compute", cx))),
             )
-            .child(muted(if st.busy {
-                "Applying…".to_string()
-            } else {
-                st.share_status.clone()
-            }))
-            .when(st.sharing && rules.any(), |d| {
-                d.child(day_strip(&rules, !st.share_status.starts_with("Paused")))
+            .child(muted(
+                palette,
+                if st.busy {
+                    "Applying…".to_string()
+                } else {
+                    st.share_status.clone()
+                },
+            ))
+            .when(st.sharing && self.conditions && rules.any(), |d| {
+                d.child(day_strip(
+                    palette,
+                    &rules,
+                    !st.share_status.starts_with("Paused"),
+                ))
             })
-            .when(st.sharing, |d| {
+            .child(
+                fold(
+                    palette,
+                    "conditions",
+                    "Sharing conditions",
+                    self.conditions,
+                    None,
+                )
+                .on_click(cx.listener(|p, _, _, cx| {
+                    p.conditions = !p.conditions;
+                    cx.notify();
+                })),
+            )
+            .when(st.sharing && self.conditions, |d| {
                 d.child(
                     switch(
                         "spare",
@@ -650,7 +805,7 @@ impl Render for Panel {
                             .id("location")
                             .cursor_pointer()
                             .text_xs()
-                            .text_color(rgb(ACCENT))
+                            .text_color(rgb(palette.accent))
                             .child(loc)
                             .on_click(cx.listener(|p, _, _, cx| p.act("share:location", cx))),
                     )
@@ -663,7 +818,9 @@ impl Render for Panel {
                     )
                     .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
                 )
-                .when(rules.hours_on, |d| d.child(hours_editor(rules.hours, cx)))
+                .when(rules.hours_on, |d| {
+                    d.child(hours_editor(palette, rules.hours, cx))
+                })
             });
 
         let mut picks = div().flex().flex_wrap().gap_2().child(
@@ -675,7 +832,7 @@ impl Render for Panel {
                         .map(|m| format!(" · {}", app_config::label(m)))
                         .unwrap_or_default()
                 ),
-                self.app.chosen_model().is_none(),
+                self.app.model.is_none(),
             )
             .on_click(cx.listener(|p, _, _, cx| p.edit(|a| a.model = None, cx))),
         );
@@ -685,7 +842,7 @@ impl Render for Panel {
             .position(|r| Some(r.model) == self.auto)
             .map_or(0, |i| i + 1);
         for (i, rung) in LADDER.iter().enumerate().skip(below) {
-            if !model_selection::fits(rung.model) {
+            if !st.available_models.iter().any(|m| m == rung.model) {
                 continue;
             }
             let size = if i + 1 == LADDER.len() {
@@ -697,16 +854,18 @@ impl Render for Panel {
                 chip(
                     ("rung", i),
                     format!("{} ({size})", rung.label),
-                    self.app.chosen_model() == Some(rung.model),
+                    self.app.model.as_deref() == Some(rung.model),
                 )
                 .on_click(cx.listener(move |p, _, _, cx| {
                     p.edit(|a| a.model = Some(LADDER[i].model.to_string()), cx)
                 })),
             );
         }
-        let model_card = card("MODEL").child(picks).when(model.is_none(), |d| {
-            d.child(muted("Too small to share a model"))
-        });
+        let model_card = card(palette, "Model")
+            .child(picks)
+            .when(model.is_none(), |d| {
+                d.child(muted(palette, "Too small to share a model"))
+            });
 
         let earn = model.filter(|_| !private).map(|m| {
             let price = self.app.price_for(m);
@@ -720,7 +879,7 @@ impl Render for Panel {
                     cx,
                 )
             };
-            let mut c = card("EARN FOR COMPUTE SHARED").child(
+            let mut c = card(palette, "Earn for compute shared").child(
                 switch(
                     "earn",
                     format!("Charge for {}", app_config::label(m)),
@@ -739,7 +898,7 @@ impl Render for Panel {
                 })),
             );
             c = match price {
-                None => c.child(muted("Free")),
+                None => c.child(muted(palette, "Free")),
                 Some(pr) => c
                     .child(div().child(format!(
                         "{} sats in{} · {} sats out{}, per 1M tokens",
@@ -782,7 +941,7 @@ impl Render for Panel {
         });
 
         let pay = (!private).then(|| {
-            card("PAY FOR INFERENCE")
+            card(palette, "Pay for inference")
                 .child(div().child(match (st.wallet, st.balance_sats) {
                     (true, Some(b)) => format!("Wallet balance: {} sats{}", sats(b), usd(b, &st)),
                     (true, None) => "Wallet balance: checking…".into(),
@@ -803,18 +962,18 @@ impl Render for Panel {
                 )
         });
 
-        let api_port = self.settings.api_port;
+        let api_port = st.api_port;
         let model_id = st.model_id.clone();
         let copied = self
             .copied
             .filter(|(_, at)| at.elapsed() < Duration::from_secs(4))
             .map(|(w, _)| w);
-        let agent_card = card("LOCAL API")
+        let agent_card = card(palette, "Local API")
             .child(div().child(format!(
                 "OpenAI-compatible API: {}",
                 mesh_tray::agent_setup::endpoint(api_port)
             )))
-            .child(muted(match &st.serving {
+            .child(muted(palette, match &st.serving {
                 Some(m) => format!("Model on this machine: {m}. No API key needed."),
                 None => "Models from the Mesh are listed at /v1/models. No API key needed.".into(),
             }))
@@ -841,40 +1000,23 @@ impl Render for Panel {
                         },
                     ))),
             )
-            .child(muted(match copied {
+            .child(muted(palette, match copied {
                 Some(w) => format!("Copied {w}."),
                 None => "Paste the prompt into goose, pi or any agent: it sets itself up, keeps your existing providers, and checks with one request.".into(),
             }));
 
-        let footer = div()
-            .flex()
-            .gap_2()
-            .justify_end()
-            .items_center()
-            .child(
-                chip("chat", "Chat", true)
-                    .px_5()
-                    .py_2()
-                    .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
-            )
-            .child(
-                chip("quit", "Quit Mesh", false)
-                    .on_click(cx.listener(|p, _, _, cx| p.act("quit", cx))),
-            );
-
-        div()
+        let content = div()
             .id("panel")
-            .size_full()
+            .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
             .flex()
             .flex_col()
             .gap_3()
             .p_4()
-            .pt(px(36.))
-            .bg(rgb(BG))
-            .text_color(rgb(0xe6e8eb))
+            .bg(rgb(palette.bg))
+            .text_color(rgb(palette.text))
             .text_sm()
-            .child(header)
             .child(network)
             .child(share)
             .when_some(st.activity, |d, a| {
@@ -882,33 +1024,24 @@ impl Render for Panel {
                     .flex()
                     .items_center()
                     .gap_1()
-                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { IDLE })))
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { palette.idle })))
                     .child(if live {
                         format!("{} running", a.active)
                     } else {
                         "Idle".into()
                     });
-                d.child(fold("activity", "ACTIVITY", self.activity, Some(summary)).on_click(
+                d.child(fold(palette, "activity", "ACTIVITY", self.activity, Some(summary)).on_click(
                     cx.listener(|p, _, _, cx| {
                         p.activity = !p.activity;
                         cx.notify();
                     }),
                 ))
-                .when(self.activity, |d| d.child(activity_card(a, served)))
+                .when(self.activity, |d| d.child(activity_card(palette, a, served)))
             })
             .child(model_card)
             .when(earn.is_some() || pay.is_some(), |d| {
                 d.child(
-                    div()
-                        .id("more")
-                        .flex()
-                        .justify_between()
-                        .cursor_pointer()
-                        .text_xs()
-                        .text_color(rgb(MUTED))
-                        .hover(|d| d.text_color(rgb(0xe6e8eb)))
-                        .child("PRICING AND WALLET")
-                        .child(if self.more { "Hide ▴" } else { "Show ▾" })
+                    fold(palette, "more", "Pricing and wallet", self.more, None)
                         .on_click(cx.listener(|p, _, _, cx| {
                             p.more = !p.more;
                             cx.notify();
@@ -917,23 +1050,14 @@ impl Render for Panel {
             })
             .when(self.more, |d| d.children(earn).children(pay))
             .child(
-                div()
-                    .id("agent")
-                    .flex()
-                    .justify_between()
-                    .cursor_pointer()
-                    .text_xs()
-                    .text_color(rgb(MUTED))
-                    .hover(|d| d.text_color(rgb(0xe6e8eb)))
-                    .child("USE WITH YOUR AGENT")
-                    .child(if self.agent { "Hide ▴" } else { "Show ▾" })
+                fold(palette, "agent", "Use with your agent", self.agent, None)
                     .on_click(cx.listener(|p, _, _, cx| {
                         p.agent = !p.agent;
                         cx.notify();
                     })),
             )
             .when(self.agent, |d| d.child(agent_card))
-            .child(fold("advanced", "ADVANCED", self.advanced, None).on_click(cx.listener(
+            .child(fold(palette, "advanced", "Advanced", self.advanced, None).on_click(cx.listener(
                 |p, _, _, cx| {
                     p.advanced = !p.advanced;
                     cx.notify();
@@ -941,7 +1065,7 @@ impl Render for Panel {
             )))
             .when(self.advanced, |d| {
                 d.child(
-                    card("ADVANCED")
+                    card(palette, "Advanced")
                         .child(
                             div()
                                 .flex()
@@ -953,15 +1077,35 @@ impl Render for Panel {
                                     cx.listener(|p, _, _, cx| p.act("reset", cx)),
                                 )),
                         )
-                        .child(muted(
+                        .child(muted(palette,
                             "Console opens the engine web console. Reset restores default settings (it asks first; wallet funds and models are kept).",
                         )),
                 )
             })
-            .when_some(self.error.clone(), |d, e| {
-                d.child(div().text_color(rgb(0xff6b6b)).child(e))
+            .when_some(self.error.clone().or(st.error), |d, e| {
+                d.child(div().text_color(rgb(if self.preview { palette.muted } else if dark { 0xff8585 } else { 0xb42318 })).child(e))
             })
-            .child(footer)
+            .into_any_element();
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(rgb(palette.bg))
+            .text_color(rgb(palette.text))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .p_4()
+                    .pt(px(36.))
+                    .child(header)
+                    .child(
+                        chip("chat", "Chat", true)
+                            .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
+                    ),
+            )
+            .child(content)
     }
 }
 
@@ -977,12 +1121,27 @@ fn alive(pid: u32) -> bool {
 }
 
 fn main() {
-    let Ok(root) = settings::data_root() else {
+    #[cfg(all(feature = "visual-test", target_os = "macos"))]
+    if let Some(output) =
+        std::env::args().find_map(|a| a.strip_prefix("--capture=").map(str::to_owned))
+    {
+        capture_preview(&output);
         return;
+    }
+
+    // A read-only visual preview never reads the user's profile or starts an engine.
+    let preview = std::env::args().any(|a| a == "--preview");
+    let root = if preview {
+        PathBuf::new()
+    } else {
+        let Ok(root) = settings::data_root() else {
+            return;
+        };
+        root
     };
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        let bounds = Bounds::centered(None, size(px(520.), px(900.)), cx);
+        let bounds = Bounds::centered(None, size(px(520.), px(720.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
@@ -995,10 +1154,38 @@ fn main() {
             ..Default::default()
         };
         let r = root.clone();
-        let (window, view) =
-            gpui_kit::open_window(options, cx, move |_, cx| cx.new(|_| Panel::load(r)))
-                .expect("open panel window");
+        let (window, view) = gpui_kit::open_window(options, cx, move |w, cx| {
+            use gpui_kit::component::{Theme, ThemeMode};
+            Theme::sync_system_appearance(Some(w), cx);
+            accent_theme(cx);
+            if preview {
+                match std::env::var("MESH_PANEL_PREVIEW_THEME").ok().as_deref() {
+                    Some("light") => Theme::change(ThemeMode::Light, Some(w), cx),
+                    Some("dark") => Theme::change(ThemeMode::Dark, Some(w), cx),
+                    _ => (),
+                }
+            }
+            accent_theme(cx);
+            w.observe_window_appearance(|w, cx| {
+                Theme::sync_system_appearance(Some(w), cx);
+                accent_theme(cx);
+                cx.refresh_windows();
+            })
+            .detach();
+            cx.new(|_| {
+                if preview {
+                    Panel::preview()
+                } else {
+                    Panel::load(r)
+                }
+            })
+        })
+        .expect("open panel window");
         cx.activate(true);
+        if preview {
+            cx.on_window_closed(|cx, _| cx.quit()).detach();
+            return;
+        }
         let view = view.downgrade();
         let mut raised = None;
         cx.spawn(async move |cx| loop {
@@ -1023,11 +1210,13 @@ fn main() {
             raised = Some(next.state.raise);
             if view
                 .update(cx, |p, cx| {
-                    p.settings = next.settings;
+                    let changed = p.state != next.state;
                     p.state = next.state;
                     p.app = next.app;
                     p.auto = next.auto;
-                    cx.notify();
+                    if changed || p.copied.is_some() {
+                        cx.notify();
+                    }
                 })
                 .is_err()
             {
@@ -1037,4 +1226,55 @@ fn main() {
         .detach();
         cx.on_window_closed(|cx, _| cx.quit()).detach();
     });
+}
+
+/// Uses the real Metal renderer without screen-recording permission or a live engine.
+#[cfg(all(feature = "visual-test", target_os = "macos"))]
+fn capture_preview(output: &str) {
+    use gpui_kit::{
+        assets::Assets,
+        component::{Theme, ThemeMode},
+    };
+    let mut cx = HeadlessAppContext::with_platform(
+        gpui_kit::platform::current_platform(true).text_system(),
+        std::sync::Arc::new(Assets),
+        gpui_kit::platform::current_headless_renderer,
+    );
+    cx.update(gpui_kit::init);
+    let dark = std::env::var("MESH_PANEL_PREVIEW_THEME").as_deref() == Ok("dark");
+    cx.update(|cx| {
+        Theme::change(
+            if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+            None,
+            cx,
+        )
+    });
+    cx.update(accent_theme);
+    let (handle, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Default::default(),
+                        size: size(px(520.), px(720.)),
+                    })),
+                    focus: false,
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |_, cx| cx.new(|_| Panel::preview()),
+            )
+        })
+        .unwrap();
+    let _ = cx.update_window(handle, |_, w, cx| w.draw(cx)).unwrap();
+    cx.capture_screenshot(handle)
+        .expect("Metal preview rendering")
+        .save(output)
+        .unwrap();
+    let _ = view;
 }

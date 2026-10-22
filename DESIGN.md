@@ -176,3 +176,27 @@ installed `wallet.v1` providers run as their own executables, managed by Mesh.
 Provider discovery uses the shared user plugin store, not app bundle resources.
 See README for installation and the fresh-profile restriction of Lexe v0.1.0.
 No wallet migration or silent provider fallback is performed by the app.
+
+
+## GUI refinement candidate
+
+The tray owns model/pricing preferences as well as launcher settings. The panel
+reads one published `panel_ipc::State` snapshot; model and price edits use typed
+queued actions. Hardware eligibility is cached for the app lifetime; the automatic
+recommendation refreshes at engine start, not on the panel timer. Engine startup
+still makes its own current-memory check. External edits to `mesh-app.toml` take
+effect after relaunch, not by live polling.
+
+The panel follows system light/dark appearance. Secondary buttons are transparent
+(ghost style); the window background stays opaque for reliable text contrast.
+Chat remains above the scrolling settings. Sharing conditions are disclosed on
+demand. Toolkit buttons/switches replace click-only div controls; OS VoiceOver
+verification remains separate from compilation.
+
+`mesh-panel --preview` is read-only sample data, with no profile reads, command
+writes, engine launch, or wallet activity. Set `MESH_PANEL_PREVIEW_THEME=light`
+or `dark` only for a fixed preview appearance. Normal operation ignores that
+variable. The optional `visual-test` feature enables macOS Metal headless image
+capture via `--capture=/absolute/path.png`. This feature uses the pinned GPUI
+backend test support directly; the umbrella Kit test feature currently resolves
+conflicting optional fast-backend dependencies in this workspace.
