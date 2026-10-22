@@ -3,9 +3,10 @@
 //! the state it publishes. Model and price are the app's own preferences in
 //! `mesh-app.toml`, applied by the tray.
 use gpui_kit::component::{
-    button::{Button, ButtonVariants},
+    button::{Button, ButtonGroup, ButtonVariants},
+    menu::{DropdownMenu, PopupMenuItem},
     switch::Switch,
-    Disableable, Selectable,
+    Disableable, Selectable, Sizable,
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -88,6 +89,7 @@ impl Panel {
             sharing: true,
             share_status: "Sharing enabled · serving Gemma 4 12B".into(),
             serving: Some("Gemma 4 12B".into()),
+            activity: Some(mesh_tray::status::Activity::default()),
             api_port: 9447,
             automatic_model: Some(LADDER[1].model.into()),
             available_models: LADDER[1..].iter().map(|r| r.model.into()).collect(),
@@ -211,6 +213,44 @@ impl Panel {
     }
 }
 
+/// Keep routine on/off state on the switch; only explain exceptions.
+fn sharing_notice(state: &State) -> Option<String> {
+    if state.busy {
+        return Some("Applying…".into());
+    }
+    if !state.sharing {
+        return None;
+    }
+    let text = state.share_status.as_str();
+    if text.is_empty()
+        || matches!(text, "Sharing now" | "Sharing whenever Mesh runs")
+        || text.starts_with("Sharing enabled · serving")
+    {
+        None
+    } else {
+        Some(text.into())
+    }
+}
+
+/// Automatic is always first. Keep the current explicit choice visible even
+/// when it is no longer eligible, so the selector never misrepresents settings.
+fn model_choices(state: &State) -> Vec<(Option<String>, String)> {
+    let mut choices = vec![(None, "Automatic (default)".into())];
+    for rung in LADDER {
+        if state.available_models.iter().any(|m| m == rung.model)
+            || state.preferences.model.as_deref() == Some(rung.model)
+        {
+            choices.push((Some(rung.model.into()), rung.label.into()));
+        }
+    }
+    if let Some(model) = &state.preferences.model {
+        if !choices.iter().any(|(m, _)| m.as_ref() == Some(model)) {
+            choices.push((Some(model.clone()), model.clone()));
+        }
+    }
+    choices
+}
+
 fn card(palette: Palette, title: &'static str) -> Div {
     div()
         .flex()
@@ -219,7 +259,9 @@ fn card(palette: Palette, title: &'static str) -> Div {
         .p_3()
         .rounded_lg()
         .bg(rgb(palette.card))
-        .child(div().text_xs().text_color(rgb(palette.muted)).child(title))
+        .when(!title.is_empty(), |d| {
+            d.child(div().text_xs().text_color(rgb(palette.muted)).child(title))
+        })
 }
 
 fn chip(id: impl Into<ElementId>, text: impl Into<SharedString>, on: bool) -> Button {
@@ -720,19 +762,26 @@ impl Render for Panel {
                 .child(muted(palette, st.status.clone())),
         );
 
-        let mut network = card(palette, "Network").child(
+        let mut network = card(palette, "").child(
             div()
                 .flex()
-                .gap_2()
+                .items_center()
+                .justify_between()
+                .child("Network")
                 .child(
-                    chip("public", "Public", !private)
+                    ButtonGroup::new("network-mode")
+                        .bg(rgb(palette.idle))
+                        .rounded_md()
+                        .compact()
+                        .small()
                         .disabled(st.busy || switching)
-                        .on_click(cx.listener(|p, _, _, cx| p.pick(false, cx))),
-                )
-                .child(
-                    chip("private", "Private", private)
-                        .disabled(st.busy || switching)
-                        .on_click(cx.listener(|p, _, _, cx| p.pick(true, cx))),
+                        .child(chip("public", "Public", !private))
+                        .child(chip("private", "Private", private))
+                        .on_click(cx.listener(|p, selected: &Vec<usize>, _, cx| {
+                            if let Some(index) = selected.first() {
+                                p.pick(*index == 1, cx);
+                            }
+                        })),
                 )
                 .when(switching, |d| d.child(muted(palette, "Switching…"))),
         );
@@ -752,20 +801,15 @@ impl Render for Panel {
             );
         }
 
-        let share = card(palette, "Sharing")
+        let share = card(palette, "")
             .child(
                 switch("compute", "Share compute", st.sharing)
                     .disabled(st.busy)
                     .on_click(cx.listener(|p, _, _, cx| p.act("compute", cx))),
             )
-            .child(muted(
-                palette,
-                if st.busy {
-                    "Applying…".to_string()
-                } else {
-                    st.share_status.clone()
-                },
-            ))
+            .when_some(sharing_notice(&st), |d, notice| {
+                d.child(muted(palette, notice))
+            })
             .when(st.sharing && self.conditions && rules.any(), |d| {
                 d.child(day_strip(
                     palette,
@@ -823,46 +867,55 @@ impl Render for Panel {
                 })
             });
 
-        let mut picks = div().flex().flex_wrap().gap_2().child(
-            chip(
-                "auto",
+        let choices = model_choices(&st);
+        let selected = self.app.model.clone();
+        let label = selected
+            .as_deref()
+            .map(app_config::label)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
                 format!(
                     "Automatic{}",
                     self.auto
                         .map(|m| format!(" · {}", app_config::label(m)))
                         .unwrap_or_default()
-                ),
-                self.app.model.is_none(),
-            )
-            .on_click(cx.listener(|p, _, _, cx| p.edit(|a| a.model = None, cx))),
-        );
-        // Only the rungs below the automatic pick: smaller, cheaper options.
-        let below = LADDER
-            .iter()
-            .position(|r| Some(r.model) == self.auto)
-            .map_or(0, |i| i + 1);
-        for (i, rung) in LADDER.iter().enumerate().skip(below) {
-            if !st.available_models.iter().any(|m| m == rung.model) {
-                continue;
-            }
-            let size = if i + 1 == LADDER.len() {
-                "tiny"
-            } else {
-                "small"
-            };
-            picks = picks.child(
-                chip(
-                    ("rung", i),
-                    format!("{} ({size})", rung.label),
-                    self.app.model.as_deref() == Some(rung.model),
                 )
-                .on_click(cx.listener(move |p, _, _, cx| {
-                    p.edit(|a| a.model = Some(LADDER[i].model.to_string()), cx)
-                })),
-            );
-        }
-        let model_card = card(palette, "Model")
-            .child(picks)
+            });
+        let panel = cx.entity().downgrade();
+        let model_card = card(palette, "")
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child("Model")
+                    .child(
+                        Button::new("model-picker")
+                            .ghost()
+                            .small()
+                            .label(label)
+                            .icon(gpui_kit::component::IconName::ChevronDown)
+                            .accessibility_label("Model, choose automatic or a specific model")
+                            .disabled(st.busy)
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for (value, label) in &choices {
+                                    let panel = panel.clone();
+                                    let value = value.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(label.clone())
+                                            .checked(value == selected)
+                                            .on_click(move |_, _, cx| {
+                                                let _ = panel.update(cx, |p, cx| {
+                                                    p.edit(|a| a.model = value.clone(), cx)
+                                                });
+                                            }),
+                                    );
+                                }
+                                menu
+                            }),
+                    ),
+            )
             .when(model.is_none(), |d| {
                 d.child(muted(palette, "Too small to share a model"))
             });
@@ -1019,25 +1072,6 @@ impl Render for Panel {
             .text_sm()
             .child(network)
             .child(share)
-            .when_some(st.activity, |d, a| {
-                let summary = div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { palette.idle })))
-                    .child(if live {
-                        format!("{} running", a.active)
-                    } else {
-                        "Idle".into()
-                    });
-                d.child(fold(palette, "activity", "ACTIVITY", self.activity, Some(summary)).on_click(
-                    cx.listener(|p, _, _, cx| {
-                        p.activity = !p.activity;
-                        cx.notify();
-                    }),
-                ))
-                .when(self.activity, |d| d.child(activity_card(palette, a, served)))
-            })
             .child(model_card)
             .when(earn.is_some() || pay.is_some(), |d| {
                 d.child(
@@ -1081,6 +1115,25 @@ impl Render for Panel {
                             "Console opens the engine web console. Reset restores default settings (it asks first; wallet funds and models are kept).",
                         )),
                 )
+            })
+            .when_some(st.activity, |d, a| {
+                let summary = div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { palette.idle })))
+                    .child(if live {
+                        format!("{} running", a.active)
+                    } else {
+                        "Idle".into()
+                    });
+                d.child(fold(palette, "activity", "Activity", self.activity, Some(summary)).on_click(
+                    cx.listener(|p, _, _, cx| {
+                        p.activity = !p.activity;
+                        cx.notify();
+                    }),
+                ))
+                .when(self.activity, |d| d.child(activity_card(palette, a, served)))
             })
             .when_some(self.error.clone().or(st.error), |d, e| {
                 d.child(div().text_color(rgb(if self.preview { palette.muted } else if dark { 0xff8585 } else { 0xb42318 })).child(e))
@@ -1277,4 +1330,52 @@ fn capture_preview(output: &str) {
         .save(output)
         .unwrap();
     let _ = view;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{model_choices, sharing_notice, State, LADDER};
+
+    #[test]
+    fn sharing_only_explains_exceptional_states() {
+        let mut state = State {
+            sharing: false,
+            share_status: "Sharing is off".into(),
+            ..Default::default()
+        };
+        assert_eq!(sharing_notice(&state), None);
+        state.sharing = true;
+        for status in ["Sharing now", "Sharing whenever Mesh runs", ""] {
+            state.share_status = status.into();
+            assert_eq!(sharing_notice(&state), None);
+        }
+        for status in [
+            "Paused: outside 10:00–15:00",
+            "Sharing: power status unknown (checking weather and grid)",
+        ] {
+            state.share_status = status.into();
+            assert_eq!(sharing_notice(&state).as_deref(), Some(status));
+        }
+        state.busy = true;
+        state.sharing = false;
+        assert_eq!(sharing_notice(&state).as_deref(), Some("Applying…"));
+    }
+
+    #[test]
+    fn model_menu_has_default_first_and_preserves_explicit_choice() {
+        let mut state = State {
+            available_models: vec![LADDER[1].model.into()],
+            ..Default::default()
+        };
+        let choices = model_choices(&state);
+        assert_eq!(choices[0], (None, "Automatic (default)".into()));
+        assert_eq!(choices.len(), 2);
+        state.preferences.model = Some(LADDER[0].model.into());
+        assert_eq!(model_choices(&state).len(), 3);
+        state.preferences.model = Some("custom/model".into());
+        assert_eq!(
+            model_choices(&state).last().unwrap().0.as_deref(),
+            Some("custom/model")
+        );
+    }
 }
