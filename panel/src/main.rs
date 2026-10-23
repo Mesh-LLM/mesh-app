@@ -1042,11 +1042,6 @@ impl Render for Panel {
                         move |p, _, _, cx| {
                             p.copy("endpoint", mesh_tray::agent_setup::endpoint(api_port), cx)
                         },
-                    )))
-                    .child(chip("copy-curl", "Copy test command", false).on_click(cx.listener(
-                        move |p, _, _, cx| {
-                            p.copy("test command", mesh_tray::agent_setup::curl_check(api_port), cx)
-                        },
                     ))),
             )
             .child(muted(palette, match copied {
