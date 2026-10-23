@@ -611,7 +611,7 @@ impl App {
             .is_some_and(|at| at.elapsed() > Duration::from_secs(20))
         {
             self.error = Some(
-                "Mesh is still stopping. App remains open and will finish the requested change when shutdown completes. No other processes were stopped."
+                "Mesh is still stopping…\nWaiting for the owned engine to exit before applying the change. No other processes were stopped."
                     .into(),
             );
         }
@@ -1211,6 +1211,14 @@ mod transaction_tests {
             .as_deref()
             .unwrap()
             .starts_with("Could not save connection or finish reset:"));
+    }
+
+    #[test]
+    fn multiline_warning_keeps_header_short() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.error = Some("Mesh is still stopping…\nWaiting for the owned engine to exit.".into());
+        assert_eq!(app.status_line(), "Mesh is still stopping…");
     }
 
     #[cfg(unix)]

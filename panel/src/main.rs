@@ -94,6 +94,9 @@ impl Panel {
             available_models: LADDER[1..].iter().map(|r| r.model.into()).collect(),
             ..Default::default()
         };
+        if std::env::var("MESH_PANEL_PREVIEW_LONG_STATUS").as_deref() == Ok("1") {
+            state.status = "Mesh is still stopping. App remains open and will finish the requested change when shutdown completes. No other processes were stopped.".into();
+        }
         let conditions = std::env::var("MESH_PANEL_PREVIEW_CONDITIONS").as_deref() == Ok("1");
         if conditions {
             state.sharing = false;
@@ -755,13 +758,22 @@ impl Render for Panel {
         let rules = st.rules.clone();
         let model = self.model();
 
-        let header = div().flex().items_center().gap_3().child(logo()).child(
-            div()
-                .flex()
-                .flex_col()
-                .child(div().text_lg().child("Mesh"))
-                .child(muted(palette, st.status.clone())),
-        );
+        let header = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(logo())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(div().text_lg().child("Mesh"))
+                    .min_w_0()
+                    .flex_1()
+                    .child(muted(palette, st.status.clone()).w_full().truncate()),
+            );
 
         let mut network = card(palette, "").child(
             div()
@@ -1135,6 +1147,7 @@ impl Render for Panel {
                     .child(header)
                     .child(
                         chip("chat", "Chat", true)
+                            .flex_shrink_0()
                             .on_click(cx.listener(|p, _, _, cx| p.act("chat", cx))),
                     ),
             )

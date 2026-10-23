@@ -195,6 +195,10 @@ fn supervise(
     loop {
         match child.try_wait() {
             Ok(Some(status)) if deadline.is_some() => {
+                eprintln!(
+                    "Engine {} exited during cooperative stop: {status}",
+                    child.id()
+                );
                 return if status.success() {
                     Ok(())
                 } else {
@@ -216,10 +220,20 @@ fn supervise(
             )
         {
             // Stop requested, or the UI owner dropped the engine.
+            eprintln!(
+                "Requesting engine {} stop; allowing {}s grace",
+                child.id(),
+                STOP_GRACE.as_secs()
+            );
             drop(stdin.take());
             deadline = Some(Instant::now() + STOP_GRACE);
         }
         if deadline.is_some_and(|d| Instant::now() >= d) {
+            eprintln!(
+                "Engine {} exceeded {}s stop grace; terminating owned child",
+                child.id(),
+                STOP_GRACE.as_secs()
+            );
             let _ = child.kill();
             let _ = child.wait();
             return Ok(());
