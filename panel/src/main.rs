@@ -441,7 +441,7 @@ fn day_strip(
     let legend = match sun {
         Some(_) => format!("Sunrise {} · sunset {} (approx.)", fmt(rise), fmt(set)),
         None if rules.location.is_some() => "No sunrise or sunset today".into(),
-        None => "Set a location to show daylight".into(),
+        None => "Approximate daylight".into(),
     };
     div()
         .flex()
@@ -815,7 +815,7 @@ impl Render for Panel {
                 st.sharing && !st.share_status.starts_with("Paused"),
             ))
             .child(
-                switch("spare", "Only when sunny", rules.spare_power)
+                switch("spare", "Share only when sunny", rules.spare_power)
                     .on_click(cx.listener(|p, _, _, cx| p.act("share:spare", cx))),
             )
             .when(rules.spare_power, |d| {
@@ -836,7 +836,7 @@ impl Render for Panel {
             .child(
                 switch(
                     "hours",
-                    format!("Only between {}", rules.hours.label()),
+                    format!("Share between {}", rules.hours.label()),
                     rules.hours_on,
                 )
                 .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
