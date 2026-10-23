@@ -9,8 +9,6 @@ use std::time::{Duration, Instant};
 pub const SUNNY_W_M2: f64 = 200.0;
 /// Weather is re-fetched at most this often.
 pub const WEATHER_EVERY: Duration = Duration::from_secs(10 * 60);
-/// AEMO dispatch runs every 5 minutes.
-pub const GRID_EVERY: Duration = Duration::from_secs(5 * 60);
 /// A changed answer must hold this many consecutive checks (15s apart) before
 /// it flips sharing. Weather is cached for 10 minutes, so these are usually
 /// re-evaluations of the same reading: this guards against a single odd
@@ -28,8 +26,7 @@ pub struct Location {
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShareRules {
-    /// Share only when there is spare power: sunny here, or (in NSW) the
-    /// grid price is zero or negative.
+    /// Share only when sunny here. Keep the persisted name for compatibility.
     pub spare_power: bool,
     /// Share only between `hours` (local time).
     pub hours_on: bool,
@@ -107,8 +104,6 @@ pub fn parse_hours(text: &str) -> Result<Hours, String> {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Readings {
     pub irradiance: Option<f64>,
-    /// NSW1 dispatch price, $/MWh; only read when the location is in NSW.
-    pub nsw_price: Option<f64>,
     /// Local minutes since midnight.
     pub minute: Option<u16>,
 }
@@ -122,9 +117,9 @@ impl Readings {
         }
     }
 
-    /// Spare power is on but neither source has a usable reading.
+    /// Sunshine condition is on but weather has no usable reading.
     pub fn power_unknown(&self, rules: &ShareRules) -> bool {
-        rules.spare_power && self.irradiance.is_none() && self.nsw_price.is_none()
+        rules.spare_power && self.irradiance.is_none()
     }
 }
 
@@ -134,29 +129,12 @@ pub fn evaluate(rules: &ShareRules, now: Readings) -> Result<(), String> {
         return Err(format!("Paused: outside {}", rules.hours.label()));
     }
     if rules.spare_power {
-        let sunny = now.irradiance.map(|w| w >= SUNNY_W_M2);
-        let surplus = now.nsw_price.map(|p| p <= 0.0);
-        // Either source saying yes is enough; unknown never pauses.
-        let no = sunny != Some(true) && surplus != Some(true);
-        let known = sunny.is_some() || surplus.is_some();
-        if no && known {
-            return Err(match (now.irradiance, now.nsw_price) {
-                (Some(w), Some(p)) => {
-                    format!("Paused: not sunny ({w:.0} W/m²), NSW ${p:.0}/MWh")
-                }
-                (Some(w), None) => format!("Paused: not sunny ({w:.0} W/m²)"),
-                (None, Some(p)) => format!("Paused: NSW grid ${p:.0}/MWh"),
-                (None, None) => unreachable!("known"),
-            });
+        // Preserve the existing offline policy: unknown weather never pauses.
+        if let Some(w) = now.irradiance.filter(|w| *w < SUNNY_W_M2) {
+            return Err(format!("Paused: not sunny ({w:.0} W/m²)"));
         }
     }
     Ok(())
-}
-
-/// Rough NSW + ACT bounding box; good enough to decide whether the NSW
-/// market price is relevant to where the user is.
-pub fn in_nsw(at: Location) -> bool {
-    (-37.6..=-28.1).contains(&at.lat) && (140.9..=153.7).contains(&at.lon)
 }
 
 pub fn local_minute() -> u16 {
@@ -245,29 +223,6 @@ pub fn parse_ip_location(body: &serde_json::Value) -> Result<Location, String> {
     }
 }
 
-/// NSW1 wholesale price from AEMO's public 5-minute NEM summary (no key).
-/// Zero or negative means the grid has more power than it can use.
-pub fn nsw_price() -> Result<f64, String> {
-    let body: serde_json::Value = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .build()
-        .get("https://visualisations.aemo.com.au/aemo/apps/api/report/ELEC_NEM_SUMMARY")
-        .call()
-        .map_err(|e| e.to_string())?
-        .into_string()
-        .map_err(|e| e.to_string())
-        .and_then(|s| serde_json::from_str(&s).map_err(|e| e.to_string()))?;
-    parse_nsw_price(&body)
-}
-
-pub fn parse_nsw_price(body: &serde_json::Value) -> Result<f64, String> {
-    body["ELEC_NEM_SUMMARY"]
-        .as_array()
-        .and_then(|rows| rows.iter().find(|r| r["REGIONID"] == "NSW1"))
-        .and_then(|r| r["PRICE"].as_f64())
-        .ok_or_else(|| "AEMO summary had no NSW1 price".into())
-}
-
 /// Current shortwave irradiance from Open-Meteo (free, no key). The
 /// location is the one the user typed; nothing is inferred from the network.
 pub fn irradiance(at: Location) -> Result<f64, String> {
@@ -321,8 +276,6 @@ pub struct Sampler {
     ip: Option<(Instant, Option<Location>)>,
     /// (location, last attempt, last good value and when it was read).
     weather: Option<(Location, Instant, Option<Good>)>,
-    /// (last attempt, last good value and when it was read).
-    grid: Option<(Instant, Option<Good>)>,
 }
 
 impl Sampler {
@@ -343,19 +296,8 @@ impl Sampler {
         let at = rules.spare_power.then(|| self.location(rules)).flatten();
         Readings {
             irradiance: at.and_then(|at| self.sunshine(at)),
-            nsw_price: at.filter(|at| in_nsw(*at)).and_then(|_| self.grid()),
             minute: Some(local_minute()),
         }
-    }
-
-    fn grid(&mut self) -> Option<f64> {
-        if self.grid.is_none_or(|(t, _)| t.elapsed() >= GRID_EVERY) {
-            let previous = self.grid.and_then(|(_, p)| p);
-            let now = Instant::now();
-            let read = nsw_price().ok().map(|p| (p, now));
-            self.grid = Some((now, read.or(previous)));
-        }
-        unless_stale(self.grid.and_then(|(_, p)| p))
     }
 
     fn sunshine(&mut self, at: Location) -> Option<f64> {
@@ -391,10 +333,9 @@ mod tests {
         lon: 151.21,
     };
 
-    fn read(w: Option<f64>, p: Option<f64>, minute: u16) -> Readings {
+    fn read(w: Option<f64>, minute: u16) -> Readings {
         Readings {
             irradiance: w,
-            nsw_price: p,
             minute: Some(minute),
         }
     }
@@ -423,32 +364,34 @@ mod tests {
 
     #[test]
     fn no_rules_always_share() {
-        assert!(evaluate(&ShareRules::default(), read(Some(1.0), Some(300.0), 0)).is_ok());
+        assert!(evaluate(&ShareRules::default(), read(Some(1.0), 0)).is_ok());
     }
 
     #[test]
-    fn spare_power_is_sunny_or_nsw_surplus() {
+    fn sunshine_threshold_and_unknown_weather() {
         let rules = ShareRules {
             spare_power: true,
             ..Default::default()
         };
-        assert!(
-            evaluate(&rules, read(Some(650.0), Some(90.0), 0)).is_ok(),
-            "sunny"
+        assert!(evaluate(&rules, read(Some(SUNNY_W_M2), 0)).is_ok());
+        assert!(evaluate(&rules, read(Some(650.0), 0)).is_ok());
+        assert_eq!(
+            evaluate(&rules, read(Some(20.0), 0)).unwrap_err(),
+            "Paused: not sunny (20 W/m²)"
         );
         assert!(
-            evaluate(&rules, read(Some(20.0), Some(-5.0), 0)).is_ok(),
-            "surplus"
-        );
-        assert!(
-            evaluate(&rules, read(Some(20.0), None, 0)).is_err(),
-            "outside NSW, dim"
-        );
-        assert!(evaluate(&rules, read(Some(20.0), Some(90.0), 0)).is_err());
-        assert!(
-            evaluate(&rules, read(None, None, 0)).is_ok(),
+            evaluate(&rules, read(None, 0)).is_ok(),
             "unknown never pauses"
         );
+        assert!(read(None, 0).power_unknown(&rules));
+        assert!(!read(Some(0.0), 0).power_unknown(&rules));
+    }
+
+    #[test]
+    fn existing_sunshine_preference_survives() {
+        let rules: ShareRules = serde_json::from_str(r#"{"spare_power":true}"#).unwrap();
+        assert!(rules.spare_power);
+        assert!(evaluate(&rules, read(Some(0.0), 0)).is_err());
     }
 
     #[test]
@@ -457,9 +400,9 @@ mod tests {
             hours_on: true,
             ..Default::default()
         };
-        assert!(evaluate(&rules, read(None, None, 11 * 60)).is_ok());
+        assert!(evaluate(&rules, read(None, 11 * 60)).is_ok());
         assert_eq!(
-            evaluate(&rules, read(None, None, 16 * 60)).unwrap_err(),
+            evaluate(&rules, read(None, 16 * 60)).unwrap_err(),
             "Paused: outside 10:00–15:00"
         );
         rules.hours = parse_hours("22:00-6").unwrap();
@@ -467,20 +410,6 @@ mod tests {
         assert!(!rules.hours.contains(12 * 60));
         assert!(parse_hours("9").is_err() && parse_hours("10-10").is_err());
         assert!(parse_hours("25:00-3:00").is_err());
-    }
-
-    #[test]
-    fn nsw_box_and_price_parse() {
-        assert!(in_nsw(SYD));
-        assert!(!in_nsw(Location {
-            lat: -37.81,
-            lon: 144.96
-        }));
-        let body = serde_json::json!({"ELEC_NEM_SUMMARY": [
-            {"REGIONID": "QLD1", "PRICE": 1.0},
-            {"REGIONID": "NSW1", "PRICE": -12.5}
-        ]});
-        assert_eq!(parse_nsw_price(&body).unwrap(), -12.5);
     }
 
     #[test]

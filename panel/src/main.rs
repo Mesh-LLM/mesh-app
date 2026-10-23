@@ -95,6 +95,12 @@ impl Panel {
             available_models: LADDER[1..].iter().map(|r| r.model.into()).collect(),
             ..Default::default()
         };
+        let conditions = std::env::var("MESH_PANEL_PREVIEW_CONDITIONS").as_deref() == Ok("1");
+        if conditions {
+            state.sharing = false;
+            state.serving = None;
+            state.share_status = "Sharing is off".into();
+        }
         state
             .preferences
             .prices
@@ -106,7 +112,7 @@ impl Panel {
             auto: Some(LADDER[1].model),
             error: Some("Read-only preview · no live Mesh connection".into()),
             picked: None,
-            conditions: false,
+            conditions,
             preview: true,
             more: false,
             agent: false,
@@ -810,11 +816,11 @@ impl Render for Panel {
             .when_some(sharing_notice(&st), |d, notice| {
                 d.child(muted(palette, notice))
             })
-            .when(st.sharing && self.conditions && rules.any(), |d| {
+            .when(self.conditions, |d| {
                 d.child(day_strip(
                     palette,
                     &rules,
-                    !st.share_status.starts_with("Paused"),
+                    st.sharing && !st.share_status.starts_with("Paused"),
                 ))
             })
             .child(
@@ -830,14 +836,10 @@ impl Render for Panel {
                     cx.notify();
                 })),
             )
-            .when(st.sharing && self.conditions, |d| {
+            .when(self.conditions, |d| {
                 d.child(
-                    switch(
-                        "spare",
-                        "Only when sunny or there's surplus energy",
-                        rules.spare_power,
-                    )
-                    .on_click(cx.listener(|p, _, _, cx| p.act("share:spare", cx))),
+                    switch("spare", "Only when sunny", rules.spare_power)
+                        .on_click(cx.listener(|p, _, _, cx| p.act("share:spare", cx))),
                 )
                 .when(rules.spare_power, |d| {
                     let loc = match rules.location {
@@ -1194,7 +1196,7 @@ fn main() {
     };
     gpui_kit::application().run(move |cx| {
         gpui_kit::init(cx);
-        let bounds = Bounds::centered(None, size(px(520.), px(720.)), cx);
+        let bounds = Bounds::centered(None, size(px(520.), px(800.)), cx);
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(TitlebarOptions {
@@ -1313,7 +1315,7 @@ fn capture_preview(output: &str) {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds {
                         origin: Default::default(),
-                        size: size(px(520.), px(720.)),
+                        size: size(px(520.), px(800.)),
                     })),
                     focus: false,
                     show: false,
@@ -1351,7 +1353,7 @@ mod tests {
         }
         for status in [
             "Paused: outside 10:00–15:00",
-            "Sharing: power status unknown (checking weather and grid)",
+            "Sharing: sunshine unknown (checking weather)",
         ] {
             state.share_status = status.into();
             assert_eq!(sharing_notice(&state).as_deref(), Some(status));
