@@ -99,15 +99,21 @@ pub fn model(port: u16) -> Result<String, String> {
         })?;
     let value: serde_json::Value =
         serde_json::from_reader(response.into_reader()).map_err(|e| e.to_string())?;
-    value["data"]
+    ready_model(&value)
+}
+
+fn ready_model(value: &serde_json::Value) -> Result<String, String> {
+    if value["data"]
         .as_array()
-        .and_then(|models| models.iter().find_map(|m| m["id"].as_str()))
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| {
+        .is_some_and(|models| !models.is_empty())
+    {
+        Ok("auto".into())
+    } else {
+        Err(
             "No models are available yet. Connect to a Mesh or enable sharing, then try again."
-                .into()
-        })
+                .into(),
+        )
+    }
 }
 
 pub fn prepare(
@@ -223,6 +229,21 @@ mod tests {
         assert!(executable(&path));
         assert!(!executable(dir.path()));
         assert!(find_agent("unknown").is_none());
+    }
+
+    #[test]
+    fn launch_uses_auto_regardless_of_model_order() {
+        for models in [
+            serde_json::json!([{"id":"first"},{"id":"second"}]),
+            serde_json::json!([{"id":"second"}]),
+        ] {
+            assert_eq!(
+                ready_model(&serde_json::json!({"data":models})).unwrap(),
+                "auto"
+            );
+        }
+        assert!(ready_model(&serde_json::json!({"data":[]})).is_err());
+        assert!(ready_model(&serde_json::json!({})).is_err());
     }
 
     #[test]
