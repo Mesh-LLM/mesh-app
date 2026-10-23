@@ -494,6 +494,16 @@ impl App {
         }
         let mut next = self.app.clone();
         let model_changed = match action {
+            Action::SetSpending {
+                enabled,
+                daily_limit_sats,
+            } => {
+                if settings::payments_visible(&self.settings.connection) {
+                    self.pay
+                        .set_spending(self.pay_target(), enabled, &daily_limit_sats);
+                }
+                return;
+            }
             Action::SetModel(model) => {
                 if model
                     .as_ref()
@@ -558,6 +568,9 @@ impl App {
             public: settings::payments_visible(&self.settings.connection),
             balance_sats: self.pay.balance().map(|m| m / 1000),
             wallet: self.pay.has_wallet(),
+            spending: self.pay.spending(),
+            spending_busy: self.pay.spending_busy(),
+            spending_error: self.pay.spending_error(),
             usd_per_btc_cents: Some(self.usd_per_btc.load(std::sync::atomic::Ordering::Relaxed))
                 .filter(|c| *c > 0),
             activity: self.snapshot.activity.filter(|_| self.snapshot.running),

@@ -28,6 +28,10 @@ pub struct State {
     pub public: bool,
     pub balance_sats: Option<u64>,
     pub wallet: bool,
+    /// Engine-confirmed spending policy, never inferred from wallet balance.
+    pub spending: Option<Spending>,
+    pub spending_busy: bool,
+    pub spending_error: Option<String>,
     /// USD cents per BTC for the "≈ $" hints; `None` until a rate is known.
     pub usd_per_btc_cents: Option<u64>,
     /// Live inference counters for the Activity card.
@@ -38,9 +42,21 @@ pub struct State {
     pub raise: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Spending {
+    pub enabled: bool,
+    pub daily_limit_msat: Option<u64>,
+    pub spent_msat: u64,
+    pub remaining_msat: u64,
+}
+
 /// Typed preference changes share the same queue as native menu actions.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub enum Action {
+    SetSpending {
+        enabled: bool,
+        daily_limit_sats: String,
+    },
     SetModel(Option<String>),
     SetPrice {
         model: String,

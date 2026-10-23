@@ -24,6 +24,8 @@ enum Job {
     /// Private mesh: turn spending off and remove every price.
     PrivateOff(u32),
     ReadPolicy,
+    ReadSpending,
+    SaveSpending(Command),
     ReadPricing(String),
     Run(Command),
     Invoice(Option<u64>),
@@ -35,6 +37,7 @@ enum Reply {
     PrivateOff(u32, Result<(), String>),
     Balance(Result<Balance, payments::Error>),
     Policy(Result<PolicyStatus, payments::Error>),
+    Spending((u16, u32), Result<PolicyStatus, payments::Error>),
     Pricing(String, Result<BTreeMap<String, Pricing>, payments::Error>),
     Done(Result<serde_json::Value, payments::Error>),
     Invoice(Result<FundingInvoice, payments::Error>),
@@ -77,6 +80,11 @@ pub struct Payments {
     private_off_pending: bool,
     next_private_off: Instant,
     last_invoice: Option<(String, String, Vec<u8>, String)>,
+    spending: Option<mesh_tray::panel_ipc::Spending>,
+    spending_target: Option<(u16, u32)>,
+    spending_busy: bool,
+    spending_error: Option<String>,
+    next_spending: Instant,
 }
 
 impl Payments {
@@ -87,7 +95,10 @@ impl Payments {
             .name("tray-payments".into())
             .spawn(move || {
                 while let Ok((port, pid, job)) = work.recv() {
-                    if reply.send(run(Client::new(port, pid), job)).is_err() {
+                    if reply
+                        .send(run((port, pid), Client::new(port, pid), job))
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -102,6 +113,11 @@ impl Payments {
             jobs,
             replies,
             last_invoice: None,
+            spending: None,
+            spending_target: None,
+            spending_busy: false,
+            spending_error: None,
+            next_spending: Instant::now(),
             reset_result: None,
             private_off: None,
             setup: None,
@@ -135,8 +151,23 @@ impl Payments {
     /// verified). Wallet files are never touched.
     pub fn tick(&mut self, target: Option<(u16, u32)>, public: bool) {
         let now = Instant::now();
+        let spending_target = target.filter(|_| public);
+        if self.spending_target != spending_target {
+            self.spending_target = spending_target;
+            self.spending = None;
+            self.spending_busy = false;
+            self.spending_error = None;
+            self.next_spending = now;
+        }
         while let Ok(reply) = self.replies.try_recv() {
             self.handle(reply, target);
+        }
+        if let Some(t) = spending_target {
+            if !self.spending_busy && now >= self.next_spending {
+                self.spending_busy = true;
+                self.next_spending = now + REFRESH;
+                self.send(t, Job::ReadSpending);
+            }
         }
         self.poll_setup();
         if public {
@@ -163,6 +194,37 @@ impl Payments {
     pub fn balance(&self) -> Option<u64> {
         self.balance
             .filter(|_| !self.balance_failed && self.wallet())
+    }
+
+    pub fn spending(&self) -> Option<mesh_tray::panel_ipc::Spending> {
+        self.spending.clone()
+    }
+
+    pub fn spending_busy(&self) -> bool {
+        self.spending_busy
+    }
+    pub fn spending_error(&self) -> Option<String> {
+        self.spending_error.clone()
+    }
+
+    pub fn set_spending(&mut self, target: Option<(u16, u32)>, enabled: bool, limit: &str) {
+        let Some(t) = target.filter(|t| Some(*t) == self.spending_target) else {
+            self.spending_error = Some("Wait for Mesh to connect, then try again.".into());
+            return;
+        };
+        if self.spending_busy {
+            return;
+        }
+        // Funding is a separate explicit action. Changing policy never installs
+        // or provisions a wallet, and disabling is always available.
+        match pay_command(enabled, limit) {
+            Ok(command) => {
+                self.spending_busy = true;
+                self.spending_error = None;
+                self.send(t, Job::SaveSpending(command));
+            }
+            Err(error) => self.spending_error = Some(describe(&error)),
+        }
     }
 
     pub fn has_wallet(&self) -> bool {
@@ -211,6 +273,31 @@ impl Payments {
 
     fn handle(&mut self, reply: Reply, target: Option<(u16, u32)>) {
         match reply {
+            Reply::Spending(t, result) => {
+                if Some(t) != self.spending_target || Some(t) != target {
+                    return;
+                }
+                self.spending_busy = false;
+                self.next_spending = Instant::now() + REFRESH;
+                match result {
+                    Ok(p) => {
+                        self.spending = Some(mesh_tray::panel_ipc::Spending {
+                            enabled: p.mode == Mode::Automatic,
+                            daily_limit_msat: p.daily_budget_msat,
+                            spent_msat: p.spent_today_msat,
+                            remaining_msat: p.remaining_daily_budget_msat,
+                        });
+                        self.spending_error = None;
+                    }
+                    Err(e) => {
+                        self.spending = None;
+                        self.spending_error = Some(format!(
+                            "Could not confirm payment settings: {}. Retry when Mesh is ready.",
+                            describe(&e)
+                        ));
+                    }
+                }
+            }
             Reply::Reset(result) => self.reset_result = Some(result),
             Reply::PrivateOff(pid, result) => {
                 self.private_off_pending = false;
@@ -511,8 +598,17 @@ pub fn earn_command(model: String, form: &EarnForm) -> Result<Command, payments:
     })
 }
 
-fn run(client: Client, job: Job) -> Reply {
+fn run(target: (u16, u32), client: Client, job: Job) -> Reply {
     match job {
+        Job::ReadSpending => {
+            Reply::Spending(target, client.execute(&Command::Policy { value: None }))
+        }
+        Job::SaveSpending(command) => Reply::Spending(
+            target,
+            client
+                .execute::<serde_json::Value>(&command)
+                .and_then(|_| client.execute(&Command::Policy { value: None })),
+        ),
         Job::Reset => Reply::Reset(crate::payment_reset::disable(&client)),
         Job::PrivateOff(pid) => Reply::PrivateOff(pid, crate::payment_reset::disable(&client)),
         Job::Balance => Reply::Balance(client.execute(&Command::Balance)),

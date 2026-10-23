@@ -15,6 +15,7 @@ use mesh_tray::panel_ipc::{self, State};
 use mesh_tray::settings;
 use std::path::PathBuf;
 use std::time::Duration;
+mod spending;
 
 #[derive(Clone, Copy)]
 struct Palette {
@@ -60,6 +61,7 @@ impl Palette {
 
 struct Panel {
     root: PathBuf,
+    daily_limit: Option<Entity<gpui_kit::component::input::InputState>>,
     state: State,
     app: AppConfig,
     auto: Option<&'static str>,
@@ -67,7 +69,7 @@ struct Panel {
     /// Mode just picked (private?), shown at once until saved or cancelled.
     picked: Option<(bool, u64)>,
     preview: bool,
-    /// "Pricing and wallet" expanded; hidden by default to keep it minimal.
+    /// "Earn for hosting and Pay for models" expanded; hidden by default to keep it minimal.
     more: bool,
     /// "Use with your agent" expanded.
     agent: bool,
@@ -90,6 +92,7 @@ impl Panel {
             serving: Some("Gemma 4 12B".into()),
             activity: Some(mesh_tray::status::Activity::default()),
             api_port: 9447,
+            spending: Some(panel_ipc::Spending::default()),
             automatic_model: Some(LADDER[1].model.into()),
             available_models: LADDER[1..].iter().map(|r| r.model.into()).collect(),
             ..Default::default()
@@ -109,13 +112,14 @@ impl Panel {
             .insert(LADDER[1].model.into(), FREE);
         Self {
             root: PathBuf::new(),
+            daily_limit: None,
             app: state.preferences.clone(),
             state,
             auto: Some(LADDER[1].model),
             error: Some("Read-only preview · no live Mesh connection".into()),
             picked: None,
             preview: true,
-            more: false,
+            more: std::env::var("MESH_PANEL_PREVIEW_PAYMENTS").as_deref() == Ok("1"),
             agent: false,
             activity: true,
             advanced: false,
@@ -133,6 +137,7 @@ impl Panel {
         Self {
             app: state.preferences.clone(),
             state,
+            daily_limit: None,
             preview: false,
             auto,
             error: None,
@@ -985,27 +990,7 @@ impl Render for Panel {
             c
         });
 
-        let pay = (!private).then(|| {
-            card(palette, "Pay for inference")
-                .child(div().child(match (st.wallet, st.balance_sats) {
-                    (true, Some(b)) => format!("Wallet balance: {} sats{}", sats(b), usd(b, &st)),
-                    (true, None) => "Wallet balance: checking…".into(),
-                    (false, _) => "No wallet yet. One is set up the first time you need it.".into(),
-                }))
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(
-                            chip("fund", "Add funds (QR)…", false)
-                                .on_click(cx.listener(|p, _, _, cx| p.act("pay:fund", cx))),
-                        )
-                        .child(
-                            chip("pay", "Pay for models…", false)
-                                .on_click(cx.listener(|p, _, _, cx| p.act("pay:pay", cx))),
-                        ),
-                )
-        });
+        let pay = (!private).then(|| self.spending_card(palette, window, cx));
 
         let api_port = st.api_port;
         let model_id = st.model_id.clone();
@@ -1097,7 +1082,7 @@ impl Render for Panel {
             .when(self.agent, |d| d.child(agent_card))
             .when(earn.is_some() || pay.is_some(), |d| {
                 d.child(
-                    fold(palette, "more", "Pricing and wallet", self.more, None)
+                    fold(palette, "more", "Earn for hosting and Pay for models", self.more, None)
                         .on_click(cx.listener(|p, _, _, cx| {
                             p.more = !p.more;
                             cx.notify();
