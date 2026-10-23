@@ -207,3 +207,8 @@ shows the day strip and the sunshine/time controls. The window defaults to
 requests were removed. Existing `spare_power` preferences now mean sunshine
 only; the existing unknown-weather fail-open policy is unchanged. Preview capture
 can set `MESH_PANEL_PREVIEW_CONDITIONS=1` to show conditions while sharing is off.
+
+Sharing conditions are always visible (no disclosure). Activity is compact and
+expanded by default immediately below Model, and can be collapsed. The remaining
+sections are Use with your agent, Pricing and wallet, Advanced, all collapsed by
+default. Applying state is shown in the header only, not repeated under sharing.

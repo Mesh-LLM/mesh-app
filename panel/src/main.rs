@@ -66,7 +66,6 @@ struct Panel {
     error: Option<String>,
     /// Mode just picked (private?), shown at once until saved or cancelled.
     picked: Option<(bool, u64)>,
-    conditions: bool,
     preview: bool,
     /// "Pricing and wallet" expanded; hidden by default to keep it minimal.
     more: bool,
@@ -112,11 +111,10 @@ impl Panel {
             auto: Some(LADDER[1].model),
             error: Some("Read-only preview · no live Mesh connection".into()),
             picked: None,
-            conditions,
             preview: true,
             more: false,
             agent: false,
-            activity: false,
+            activity: true,
             advanced: false,
             served: (0, None),
             copied: None,
@@ -129,19 +127,16 @@ impl Panel {
             .automatic_model
             .as_deref()
             .and_then(|m| LADDER.iter().find(|r| r.model == m).map(|r| r.model));
-        let activity = !state.public;
         Self {
             app: state.preferences.clone(),
             state,
-            conditions: false,
             preview: false,
             auto,
             error: None,
             picked: None,
             more: false,
             agent: false,
-            // Private mode opens with Activity expanded.
-            activity,
+            activity: true,
             advanced: false,
             served: (0, None),
             copied: None,
@@ -222,7 +217,7 @@ impl Panel {
 /// Keep routine on/off state on the switch; only explain exceptions.
 fn sharing_notice(state: &State) -> Option<String> {
     if state.busy {
-        return Some("Applying…".into());
+        return None;
     }
     if !state.sharing {
         return None;
@@ -640,7 +635,7 @@ fn dot_matrix(word: &str, color: u32, live: bool) -> Div {
             div()
                 .flex()
                 .gap(px(2.))
-                .children((0..COLS).map(|x| div().size(px(5.)).rounded_full().bg(rgb(dot(x, y)))))
+                .children((0..COLS).map(|x| div().size(px(3.)).rounded_full().bg(rgb(dot(x, y)))))
         }))
 }
 
@@ -667,37 +662,35 @@ fn activity_card(palette: Palette, a: mesh_tray::status::Activity, served: bool)
     } else {
         format!("Idle{speed}")
     };
-    card(palette, "ACTIVITY")
-        .child(dot_matrix(word, color, live || served))
+    card(palette, "")
         .child(
             div()
                 .flex()
                 .items_center()
+                .justify_between()
                 .gap_2()
-                .child(div().size(px(8.)).rounded_full().bg(rgb(if live {
-                    0x3ccf7a
-                } else {
-                    palette.idle
-                })))
+                .child(dot_matrix(word, color, live || served))
                 .child(now),
         )
-        .child(muted(
-            palette,
-            format!(
-                "{} tokens generated · {} requests done since Mesh started",
-                sats(a.output_tokens),
-                sats(a.completed)
-            ),
-        ))
-        .child(muted(
-            palette,
-            format!(
-                "{} other node{} in the Mesh, {} sharing a model",
-                a.peers,
-                if a.peers == 1 { "" } else { "s" },
-                a.serving_peers
-            ),
-        ))
+        .child(
+            div()
+                .flex()
+                .flex_wrap()
+                .gap_x_3()
+                .gap_y_1()
+                .child(muted(
+                    palette,
+                    format!(
+                        "{} tokens · {} requests since launch",
+                        sats(a.output_tokens),
+                        sats(a.completed)
+                    ),
+                ))
+                .child(muted(
+                    palette,
+                    format!("{} peers · {} sharing", a.peers, a.serving_peers),
+                )),
+        )
 }
 
 fn sats(n: u64) -> String {
@@ -816,57 +809,40 @@ impl Render for Panel {
             .when_some(sharing_notice(&st), |d, notice| {
                 d.child(muted(palette, notice))
             })
-            .when(self.conditions, |d| {
-                d.child(day_strip(
-                    palette,
-                    &rules,
-                    st.sharing && !st.share_status.starts_with("Paused"),
-                ))
+            .child(day_strip(
+                palette,
+                &rules,
+                st.sharing && !st.share_status.starts_with("Paused"),
+            ))
+            .child(
+                switch("spare", "Only when sunny", rules.spare_power)
+                    .on_click(cx.listener(|p, _, _, cx| p.act("share:spare", cx))),
+            )
+            .when(rules.spare_power, |d| {
+                let loc = match rules.location {
+                    Some(l) => format!("Location {:.2}, {:.2} · change…", l.lat, l.lon),
+                    None => "Location from your IP address · change…".into(),
+                };
+                d.child(
+                    div()
+                        .id("location")
+                        .cursor_pointer()
+                        .text_xs()
+                        .text_color(rgb(palette.accent))
+                        .child(loc)
+                        .on_click(cx.listener(|p, _, _, cx| p.act("share:location", cx))),
+                )
             })
             .child(
-                fold(
-                    palette,
-                    "conditions",
-                    "Sharing conditions",
-                    self.conditions,
-                    None,
+                switch(
+                    "hours",
+                    format!("Only between {}", rules.hours.label()),
+                    rules.hours_on,
                 )
-                .on_click(cx.listener(|p, _, _, cx| {
-                    p.conditions = !p.conditions;
-                    cx.notify();
-                })),
+                .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
             )
-            .when(self.conditions, |d| {
-                d.child(
-                    switch("spare", "Only when sunny", rules.spare_power)
-                        .on_click(cx.listener(|p, _, _, cx| p.act("share:spare", cx))),
-                )
-                .when(rules.spare_power, |d| {
-                    let loc = match rules.location {
-                        Some(l) => format!("Location {:.2}, {:.2} · change…", l.lat, l.lon),
-                        None => "Location from your IP address · change…".into(),
-                    };
-                    d.child(
-                        div()
-                            .id("location")
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(rgb(palette.accent))
-                            .child(loc)
-                            .on_click(cx.listener(|p, _, _, cx| p.act("share:location", cx))),
-                    )
-                })
-                .child(
-                    switch(
-                        "hours",
-                        format!("Only between {}", rules.hours.label()),
-                        rules.hours_on,
-                    )
-                    .on_click(cx.listener(|p, _, _, cx| p.act("share:hours", cx))),
-                )
-                .when(rules.hours_on, |d| {
-                    d.child(hours_editor(palette, rules.hours, cx))
-                })
+            .when(rules.hours_on, |d| {
+                d.child(hours_editor(palette, rules.hours, cx))
             });
 
         let choices = model_choices(&st);
@@ -1075,6 +1051,33 @@ impl Render for Panel {
             .child(network)
             .child(share)
             .child(model_card)
+            .when_some(st.activity, |d, a| {
+                let summary = div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { palette.idle })))
+                    .child(if live {
+                        format!("{} running", a.active)
+                    } else {
+                        "Idle".into()
+                    });
+                d.child(fold(palette, "activity", "Activity", self.activity, Some(summary)).on_click(
+                    cx.listener(|p, _, _, cx| {
+                        p.activity = !p.activity;
+                        cx.notify();
+                    }),
+                ))
+                .when(self.activity, |d| d.child(activity_card(palette, a, served)))
+            })
+            .child(
+                fold(palette, "agent", "Use with your agent", self.agent, None)
+                    .on_click(cx.listener(|p, _, _, cx| {
+                        p.agent = !p.agent;
+                        cx.notify();
+                    })),
+            )
+            .when(self.agent, |d| d.child(agent_card))
             .when(earn.is_some() || pay.is_some(), |d| {
                 d.child(
                     fold(palette, "more", "Pricing and wallet", self.more, None)
@@ -1085,14 +1088,6 @@ impl Render for Panel {
                 )
             })
             .when(self.more, |d| d.children(earn).children(pay))
-            .child(
-                fold(palette, "agent", "Use with your agent", self.agent, None)
-                    .on_click(cx.listener(|p, _, _, cx| {
-                        p.agent = !p.agent;
-                        cx.notify();
-                    })),
-            )
-            .when(self.agent, |d| d.child(agent_card))
             .child(fold(palette, "advanced", "Advanced", self.advanced, None).on_click(cx.listener(
                 |p, _, _, cx| {
                     p.advanced = !p.advanced;
@@ -1117,25 +1112,6 @@ impl Render for Panel {
                             "Console opens the engine web console. Reset restores default settings (it asks first; wallet funds and models are kept).",
                         )),
                 )
-            })
-            .when_some(st.activity, |d, a| {
-                let summary = div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(div().size(px(6.)).rounded_full().bg(rgb(if live { 0x3ccf7a } else { palette.idle })))
-                    .child(if live {
-                        format!("{} running", a.active)
-                    } else {
-                        "Idle".into()
-                    });
-                d.child(fold(palette, "activity", "Activity", self.activity, Some(summary)).on_click(
-                    cx.listener(|p, _, _, cx| {
-                        p.activity = !p.activity;
-                        cx.notify();
-                    }),
-                ))
-                .when(self.activity, |d| d.child(activity_card(palette, a, served)))
             })
             .when_some(self.error.clone().or(st.error), |d, e| {
                 d.child(div().text_color(rgb(if self.preview { palette.muted } else if dark { 0xff8585 } else { 0xb42318 })).child(e))
@@ -1359,8 +1335,9 @@ mod tests {
             assert_eq!(sharing_notice(&state).as_deref(), Some(status));
         }
         state.busy = true;
+        assert_eq!(sharing_notice(&state), None);
         state.sharing = false;
-        assert_eq!(sharing_notice(&state).as_deref(), Some("Applying…"));
+        assert_eq!(sharing_notice(&state), None);
     }
 
     #[test]
