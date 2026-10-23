@@ -585,7 +585,7 @@ fn clock() -> f32 {
 /// A small dot-matrix display: the word in lit dots on a faint grid. While
 /// `live`, a bright band sweeps across the letters and the grid twinkles;
 /// otherwise it sits still (no motion that implies work is happening).
-fn dot_matrix(word: &str, color: u32, live: bool) -> Div {
+fn dot_matrix(word: &str, color: u32, background: u32, live: bool) -> Div {
     const COLS: usize = 33;
     const ROWS: usize = 7;
     let mut lit = [[false; COLS]; ROWS];
@@ -623,7 +623,9 @@ fn dot_matrix(word: &str, color: u32, live: bool) -> Div {
             0.07
         };
         let mix = |c: f32, bg: f32| (bg + (c - bg) * a) as u32;
-        (mix(r, 28.0) << 16) | (mix(g, 31.0) << 8) | mix(b, 36.0)
+        (mix(r, (background >> 16) as f32) << 16)
+            | (mix(g, ((background >> 8) & 0xff) as f32) << 8)
+            | mix(b, (background & 0xff) as f32)
     };
     div()
         .flex()
@@ -669,7 +671,7 @@ fn activity_card(palette: Palette, a: mesh_tray::status::Activity, served: bool)
                 .items_center()
                 .justify_between()
                 .gap_2()
-                .child(dot_matrix(word, color, live || served))
+                .child(dot_matrix(word, color, palette.card, live || served))
                 .child(now),
         )
         .child(
