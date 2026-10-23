@@ -1027,7 +1027,11 @@ impl Render for Panel {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .child(chip("copy-prompt", "Copy setup prompt", true).on_click(cx.listener({
+                    .when(cfg!(target_os = "macos"), |d| d.child(
+                        chip("launch-goose", "Open Goose…", true)
+                            .on_click(cx.listener(|p, _, _, cx| p.act("goose", cx))),
+                    ))
+                    .child(chip("copy-prompt", "Copy setup prompt", false).on_click(cx.listener({
                         let model_id = model_id.clone();
                         move |p, _, _, cx| {
                             let text = mesh_tray::agent_setup::prompt(api_port, model_id.as_deref());

@@ -434,6 +434,31 @@ impl App {
             return;
         }
         match id {
+            "goose" => {
+                let result = (|| {
+                    if self.stopping.is_some() || self.pending_settings.is_some() {
+                        return Err("Wait for Mesh to finish restarting.".to_string());
+                    }
+                    mesh_tray::agent_launch::find_goose()?;
+                    let model = mesh_tray::agent_launch::model(self.settings.api_port)?;
+                    let Some(folder) = rfd::FileDialog::new()
+                        .set_title("Choose Goose's working folder")
+                        .pick_folder()
+                    else {
+                        return Ok(());
+                    };
+                    let command = mesh_tray::agent_launch::prepare(
+                        &self.root,
+                        &folder,
+                        self.settings.api_port,
+                        &model,
+                    )?;
+                    mesh_tray::agent_launch::open_terminal(&command)
+                })();
+                if let Err(error) = result {
+                    native::notice("Could not launch Goose", &error);
+                }
+            }
             "chat" => self.open("/chat"),
             "console" => self.open("/"),
             "panel" => {
