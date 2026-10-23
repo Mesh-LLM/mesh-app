@@ -13,7 +13,7 @@ pub struct ShareControl {
     results: Receiver<(Result<(), String>, bool)>,
     /// No full reading yet: the next one decides without debounce.
     first: bool,
-    /// Spare power is on but no fresh weather or grid reading exists.
+    /// Spare power is on but no fresh weather reading exists.
     unknown: bool,
 }
 
@@ -110,7 +110,7 @@ impl ShareControl {
         match (user_sharing, self.gate.status()) {
             (false, _) => "Sharing is off".to_string(),
             (true, Ok(())) if rules.spare_power && (self.first || self.unknown) => {
-                "Sharing: power status unknown (checking weather and grid)".to_string()
+                "Sharing: sunshine unknown (checking weather)".to_string()
             }
             (true, Ok(())) if rules.any() => "Sharing now".to_string(),
             (true, Ok(())) => "Sharing whenever Mesh runs".to_string(),

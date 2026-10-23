@@ -4,10 +4,20 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct State {
     pub status: String,
+    pub api_port: u16,
+    pub goose_available: bool,
+    pub pi_available: bool,
+    pub rules: crate::share_rules::ShareRules,
+    pub preferences: crate::app_config::AppConfig,
+    pub automatic_model: Option<String>,
+    pub available_models: Vec<String>,
+    /// Last processed command, including a cancelled native confirmation.
+    pub command_revision: u64,
+    pub error: Option<String>,
     pub sharing: bool,
     pub busy: bool,
     pub share_status: String,
@@ -18,6 +28,10 @@ pub struct State {
     pub public: bool,
     pub balance_sats: Option<u64>,
     pub wallet: bool,
+    /// Engine-confirmed spending policy, never inferred from wallet balance.
+    pub spending: Option<Spending>,
+    pub spending_busy: bool,
+    pub spending_error: Option<String>,
     /// USD cents per BTC for the "≈ $" hints; `None` until a rate is known.
     pub usd_per_btc_cents: Option<u64>,
     /// Live inference counters for the Activity card.
@@ -26,6 +40,35 @@ pub struct State {
     pub tray_pid: u32,
     /// Bumped by Settings while the panel is open: bring the window forward.
     pub raise: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct Spending {
+    pub enabled: bool,
+    pub daily_limit_msat: Option<u64>,
+    pub spent_msat: u64,
+    pub remaining_msat: u64,
+}
+
+/// Typed preference changes share the same queue as native menu actions.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub enum Action {
+    SetSpending {
+        enabled: bool,
+        daily_limit_sats: String,
+    },
+    SetModel(Option<String>),
+    SetPrice {
+        model: String,
+        price: crate::app_config::Price,
+    },
+}
+
+pub fn send_action(root: &Path, action: &Action) -> Result<(), String> {
+    send(
+        root,
+        &serde_json::to_string(action).map_err(|e| e.to_string())?,
+    )
 }
 
 fn commands(root: &Path) -> PathBuf {
@@ -86,6 +129,21 @@ pub fn read_state(root: &Path) -> Option<State> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn typed_actions_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let action = Action::SetPrice {
+            model: "model".into(),
+            price: crate::app_config::FREE,
+        };
+        send_action(dir.path(), &action).unwrap();
+        let commands = take_commands(dir.path());
+        assert_eq!(
+            serde_json::from_str::<Action>(&commands[0]).unwrap(),
+            action
+        );
+    }
+
     #[test]
     fn commands_arrive_once_in_order_and_state_round_trips() {
         let dir = tempfile::tempdir().unwrap();

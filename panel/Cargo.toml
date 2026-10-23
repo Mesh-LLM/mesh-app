@@ -6,7 +6,23 @@ edition = "2021"
 [dependencies]
 mesh-tray = { path = ".." }
 gpui-kit = "0.7"
+image = { version = "0.25", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[features]
+visual-test = ["dep:gpui-test", "dep:gpui-platform-test"]
+
+[dependencies.gpui-test]
+package = "gpui-pre"
+version = "=0.3.9"
+features = ["test-support"]
+optional = true
+
+[dependencies.gpui-platform-test]
+package = "gpui-pre-platform"
+version = "=0.3.9"
+features = ["test-support"]
+optional = true

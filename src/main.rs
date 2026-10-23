@@ -58,13 +58,16 @@ struct App {
     spawned_share: bool,
     /// Model the running engine was started with.
     spawned_model: Option<String>,
-    /// Panel-edited preferences (`mesh-app.toml`), re-read every poll.
+    /// Tray-owned preferences (`mesh-app.toml`), changed through panel actions.
     app: mesh_tray::app_config::AppConfig,
     /// (pid, model, price) last pushed to the engine.
     applied_price: Option<(u32, String, Option<mesh_tray::app_config::Price>)>,
     published: Option<mesh_tray::panel_ipc::State>,
     /// Settings clicks while the panel is open (see `panel_ipc::State::raise`).
     raise: u64,
+    automatic_model: Option<String>,
+    available_models: Vec<String>,
+    command_revision: u64,
     /// BTC/USD in cents (0 = unknown), refreshed in the background.
     usd_per_btc: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -112,6 +115,15 @@ impl App {
             applied_price: None,
             published: None,
             raise: 0,
+            automatic_model: mesh_tray::model_selection::local_model(&settings.connection)
+                .ok()
+                .flatten(),
+            available_models: mesh_tray::app_config::LADDER
+                .iter()
+                .filter(|r| mesh_tray::model_selection::fits(r.model))
+                .map(|r| r.model.to_string())
+                .collect(),
+            command_revision: 0,
             usd_per_btc: mesh_tray::fx::spawn_refresher(),
             root,
             settings,
@@ -175,6 +187,9 @@ impl App {
             return;
         }
         self.restart_at = None;
+        self.automatic_model = mesh_tray::model_selection::local_model(&self.settings.connection)
+            .ok()
+            .flatten();
         self.error = None;
         self.log_mark = std::fs::metadata(self.root.join("mesh.log"))
             .map(|m| m.len())
@@ -402,6 +417,10 @@ impl App {
         if self.resetting && id != "quit" {
             return;
         }
+        if let Ok(action) = serde_json::from_str::<mesh_tray::panel_ipc::Action>(id) {
+            self.change_preference(action);
+            return;
+        }
         let target = self.pay_target();
         let models = self.snapshot.serving_models.clone();
         if id.starts_with("pay:") && !settings::payments_visible(&self.settings.connection) {
@@ -415,6 +434,40 @@ impl App {
             return;
         }
         match id {
+            "goose" | "pi" => {
+                let result = (|| {
+                    if self.stopping.is_some() || self.pending_settings.is_some() {
+                        return Err("Wait for Mesh to finish restarting.".to_string());
+                    }
+                    mesh_tray::agent_launch::find_agent(id)
+                        .ok_or_else(|| format!("Install {id} first, then try again."))?;
+                    let model = mesh_tray::agent_launch::model(self.settings.api_port)?;
+                    let Some(folder) = rfd::FileDialog::new()
+                        .set_title(format!("Choose {id}'s working folder"))
+                        .pick_folder()
+                    else {
+                        return Ok(());
+                    };
+                    if id == "pi" && !native::confirm(
+                        "Open Pi in this folder?",
+                        "Pi can read files and execute shell commands without asking for approval. Only open a folder you trust.",
+                        "Open Pi",
+                    ) {
+                        return Ok(());
+                    }
+                    let command = mesh_tray::agent_launch::prepare(
+                        id,
+                        &self.root,
+                        &folder,
+                        self.settings.api_port,
+                        &model,
+                    )?;
+                    mesh_tray::agent_launch::open_terminal(&command)
+                })();
+                if let Err(error) = result {
+                    native::notice("Could not launch agent", &error);
+                }
+            }
             "chat" => self.open("/chat"),
             "console" => self.open("/"),
             "panel" => {
@@ -434,6 +487,56 @@ impl App {
         }
     }
 
+    fn change_preference(&mut self, action: mesh_tray::panel_ipc::Action) {
+        use mesh_tray::panel_ipc::Action;
+        if self.compute_view().1 {
+            return;
+        }
+        let mut next = self.app.clone();
+        let model_changed = match action {
+            Action::SetSpending {
+                enabled,
+                daily_limit_sats,
+            } => {
+                if settings::payments_visible(&self.settings.connection) {
+                    self.pay
+                        .set_spending(self.pay_target(), enabled, &daily_limit_sats);
+                }
+                return;
+            }
+            Action::SetModel(model) => {
+                if model
+                    .as_ref()
+                    .is_some_and(|m| !self.available_models.contains(m))
+                {
+                    self.error = Some("That model is not available on this machine.".into());
+                    return;
+                }
+                let changed = next.model != model;
+                next.model = model;
+                changed
+            }
+            Action::SetPrice { model, price } => {
+                if !settings::payments_visible(&self.settings.connection)
+                    || !self.available_models.contains(&model)
+                {
+                    return;
+                }
+                next.prices.insert(model, price);
+                false
+            }
+        };
+        match next.save(&self.root) {
+            Ok(()) => {
+                self.app = next;
+                if model_changed && self.child.is_some() {
+                    self.queue_settings(self.settings.clone());
+                }
+            }
+            Err(e) => self.error = Some(format!("Could not save preferences: {e}")),
+        }
+    }
+
     /// What the panel shows; written only when it changes.
     fn publish_state(&mut self) {
         let (sharing, busy) = self.compute_view();
@@ -448,6 +551,15 @@ impl App {
             .filter(|_| self.snapshot.running && !self.snapshot.serving_models.is_empty());
         let state = mesh_tray::panel_ipc::State {
             model_id,
+            goose_available: mesh_tray::agent_launch::find_agent("goose").is_some(),
+            pi_available: mesh_tray::agent_launch::find_agent("pi").is_some(),
+            api_port: self.settings.api_port,
+            rules: self.settings.share_rules.clone(),
+            preferences: self.app.clone(),
+            automatic_model: self.automatic_model.clone(),
+            available_models: self.available_models.clone(),
+            command_revision: self.command_revision,
+            error: self.error.clone(),
             status: self.status_line(),
             sharing,
             busy,
@@ -456,6 +568,9 @@ impl App {
             public: settings::payments_visible(&self.settings.connection),
             balance_sats: self.pay.balance().map(|m| m / 1000),
             wallet: self.pay.has_wallet(),
+            spending: self.pay.spending(),
+            spending_busy: self.pay.spending_busy(),
+            spending_error: self.pay.spending_error(),
             usd_per_btc_cents: Some(self.usd_per_btc.load(std::sync::atomic::Ordering::Relaxed))
                 .filter(|c| *c > 0),
             activity: self.snapshot.activity.filter(|_| self.snapshot.running),
@@ -478,6 +593,7 @@ impl App {
         ids.extend(mesh_tray::panel_ipc::take_commands(&self.root));
         for id in ids {
             self.dispatch(&id);
+            self.command_revision = self.command_revision.wrapping_add(1);
         }
         while let Ok(snapshot) = self.rx.try_recv() {
             self.polling = false;
@@ -544,7 +660,7 @@ impl App {
             .is_some_and(|at| at.elapsed() > Duration::from_secs(20))
         {
             self.error = Some(
-                "Mesh is still stopping. App remains open and will finish the requested change when shutdown completes. No other processes were stopped."
+                "Mesh is still stopping…\nWaiting for the owned engine to exit before applying the change. No other processes were stopped."
                     .into(),
             );
         }
@@ -648,10 +764,6 @@ impl App {
             && self.stopping.is_none()
             && self.pending_settings.is_none()
             && !self.resetting;
-        let next = mesh_tray::app_config::AppConfig::load(&self.root);
-        if next != self.app {
-            self.app = next;
-        }
         let model_changed = self.spawned_share
             && self.app.chosen_model().is_some()
             && self.app.chosen_model() != self.spawned_model.as_deref();
@@ -1150,6 +1262,14 @@ mod transaction_tests {
             .starts_with("Could not save connection or finish reset:"));
     }
 
+    #[test]
+    fn multiline_warning_keeps_header_short() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = app(root.path());
+        app.error = Some("Mesh is still stopping…\nWaiting for the owned engine to exit.".into());
+        assert_eq!(app.status_line(), "Mesh is still stopping…");
+    }
+
     #[cfg(unix)]
     #[test]
     fn slow_start_waits_for_keychain_without_stopping_or_erroring() {
@@ -1239,4 +1359,46 @@ fn open_panel() -> bool {
         ),
     }
     true
+}
+
+#[cfg(test)]
+mod panel_action_tests {
+    use super::*;
+    use mesh_tray::{
+        app_config::{AppConfig, FREE, LADDER},
+        panel_ipc::Action,
+    };
+
+    #[test]
+    fn preference_actions_are_owned_by_tray_and_validate_models() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::new(root.path().into(), settings::Settings::default());
+        app.available_models = vec![LADDER[2].model.into()];
+        app.change_preference(Action::SetModel(Some("unknown".into())));
+        assert!(!mesh_tray::app_config::path(root.path()).exists());
+        app.change_preference(Action::SetModel(Some(LADDER[2].model.into())));
+        assert_eq!(
+            AppConfig::load(root.path()).model.as_deref(),
+            Some(LADDER[2].model)
+        );
+        app.change_preference(Action::SetModel(None));
+        assert_eq!(AppConfig::load(root.path()).model, None);
+        app.change_preference(Action::SetPrice {
+            model: LADDER[2].model.into(),
+            price: FREE,
+        });
+        assert_eq!(
+            AppConfig::load(root.path()).price_for(LADDER[2].model),
+            None
+        );
+    }
+
+    #[test]
+    fn busy_actions_do_not_change_saved_preferences() {
+        let root = tempfile::tempdir().unwrap();
+        let mut app = App::new(root.path().into(), settings::Settings::default());
+        app.started = Some(Instant::now());
+        app.change_preference(Action::SetModel(None));
+        assert!(!mesh_tray::app_config::path(root.path()).exists());
+    }
 }

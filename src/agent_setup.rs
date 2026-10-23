@@ -33,11 +33,6 @@ Please:\n\
     )
 }
 
-/// A one-line check that the endpoint answers.
-pub fn curl_check(api_port: u16) -> String {
-    format!("curl -s {}/models", endpoint(api_port))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,6 +46,6 @@ mod tests {
         assert!(p.contains("one short chat request"));
         let p = prompt(1234, None);
         assert!(p.contains("Pick a model from `http://localhost:1234/v1/models`"));
-        assert_eq!(curl_check(9447), "curl -s http://localhost:9447/v1/models");
+        assert_eq!(endpoint(9447), "http://localhost:9447/v1");
     }
 }
