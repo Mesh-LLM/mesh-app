@@ -289,7 +289,7 @@ fn logo() -> Div {
     static IMAGE: std::sync::OnceLock<std::sync::Arc<RenderImage>> = std::sync::OnceLock::new();
     let image = IMAGE.get_or_init(|| {
         let mut bgra = include_bytes!("../../assets/mesh-jellyfish.rgba").to_vec();
-        for pixel in bgra.chunks_exact_mut(4) {
+        for pixel in bgra.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let buffer = image::RgbaImage::from_raw(32, 32, bgra).expect("bundled 32px logo");
