@@ -1,4 +1,4 @@
-//! An isolated Goose profile and a user-owned terminal session, not another Mesh node.
+//! An isolated agent profile and a user-owned terminal session, not another Mesh node.
 use std::path::{Path, PathBuf};
 
 pub fn config() -> String {
@@ -36,19 +36,58 @@ pub fn script(goose: &Path, profile: &Path, folder: &Path, port: u16, model: &st
     )
 }
 
-pub fn find_goose() -> Result<PathBuf, String> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|p| p.join("goose")));
+pub fn find_agent(name: &str) -> Option<PathBuf> {
+    if !matches!(name, "goose" | "pi") {
+        return None;
     }
+    let mut directories: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
     if let Some(home) = std::env::var_os("HOME") {
-        candidates.push(PathBuf::from(home).join(".local/bin/goose"));
+        directories.push(PathBuf::from(home).join(".local/bin"));
     }
-    candidates.extend([
-        PathBuf::from("/opt/homebrew/bin/goose"),
-        PathBuf::from("/usr/local/bin/goose"),
+    directories.extend([
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
     ]);
-    candidates.into_iter().find(|p| p.is_file()).ok_or_else(|| "Install the Goose CLI first, then try again. Copy setup prompt works with other agents.".into())
+    directories
+        .into_iter()
+        .map(|p| p.join(name))
+        .find(|p| executable(p))
+}
+
+fn executable(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+pub fn pi_config(port: u16, model: &str) -> String {
+    serde_json::json!({"providers": {"mesh": {
+        "baseUrl": format!("http://127.0.0.1:{port}/v1"),
+        "api": "openai-completions", "apiKey": "mesh",
+        "models": [{"id": model}]
+    }}})
+    .to_string()
+}
+
+pub fn pi_script(pi: &Path, profile: &Path, folder: &Path, model: &str) -> String {
+    format!("#!/bin/sh\nset -eu\nunset BUZZ_MANAGED_AGENT BUZZ_MANAGED_AGENT_START_NONCE BUZZ_PRIVATE_KEY BUZZ_AUTH_TAG\ncd {}\nexport PI_CODING_AGENT_DIR={}\nexport PATH={}:\"$PATH\"\nprintf '%s\\n' 'Pi · Mesh — bash + read; commands run without approval.'\nexec {} --provider mesh --model {} --tools bash,read --no-extensions --no-mcp --offline\n",
+        quote(&folder.to_string_lossy()), quote(&profile.to_string_lossy()),
+        quote(&pi.parent().unwrap_or(Path::new("/usr/bin")).to_string_lossy()),
+        quote(&pi.to_string_lossy()), quote(model))
 }
 
 pub fn model(port: u16) -> Result<String, String> {
@@ -71,19 +110,32 @@ pub fn model(port: u16) -> Result<String, String> {
         })
 }
 
-pub fn prepare(root: &Path, folder: &Path, port: u16, model: &str) -> Result<PathBuf, String> {
-    let goose = find_goose()?;
+pub fn prepare(
+    agent: &str,
+    root: &Path,
+    folder: &Path,
+    port: u16,
+    model: &str,
+) -> Result<PathBuf, String> {
+    let executable =
+        find_agent(agent).ok_or_else(|| format!("Install {agent} first, then try again."))?;
     // Each launch owns its config; a second launch cannot change an existing session.
     let launch = tempfile::Builder::new()
-        .prefix("goose-")
+        .prefix(&format!("{agent}-"))
         .tempdir_in(root)
         .map_err(|e| e.to_string())?;
     let profile = launch.path().join("profile");
     std::fs::create_dir_all(profile.join("config")).map_err(|e| e.to_string())?;
-    std::fs::write(profile.join("config/config.yaml"), config()).map_err(|e| e.to_string())?;
-    let command = launch.path().join("Launch Goose.command");
-    std::fs::write(&command, script(&goose, &profile, folder, port, model))
-        .map_err(|e| e.to_string())?;
+    let content = if agent == "pi" {
+        std::fs::write(profile.join("models.json"), pi_config(port, model))
+            .map_err(|e| e.to_string())?;
+        pi_script(&executable, &profile, folder, model)
+    } else {
+        std::fs::write(profile.join("config/config.yaml"), config()).map_err(|e| e.to_string())?;
+        script(&executable, &profile, folder, port, model)
+    };
+    let command = launch.path().join("Launch Agent.command");
+    std::fs::write(&command, content).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -108,7 +160,7 @@ pub fn open_terminal(command: &Path) -> Result<(), String> {
             Ok(())
         } else {
             Err(
-                "Could not open Terminal. Open the saved Launch Goose.command file manually."
+                "Could not open Terminal. Open the saved Launch Agent.command file manually."
                     .into(),
             )
         }
@@ -138,6 +190,41 @@ mod tests {
         assert!(text.contains("--model 'model'\\''; exit 1; '\\'''"));
         assert!(text.contains("127.0.0.1:1234"));
     }
+    #[test]
+    fn pi_uses_isolated_provider_and_literal_arguments() {
+        let value: serde_json::Value = serde_json::from_str(&pi_config(9447, "a\"b")).unwrap();
+        assert_eq!(value["providers"]["mesh"]["models"][0]["id"], "a\"b");
+        assert_eq!(
+            value["providers"]["mesh"]["baseUrl"],
+            "http://127.0.0.1:9447/v1"
+        );
+        let script = pi_script(
+            Path::new("/opt/homebrew/bin/pi"),
+            Path::new("/tmp/pi profile"),
+            Path::new("/tmp/folder"),
+            "$(false)",
+        );
+        assert!(script.contains("PI_CODING_AGENT_DIR='/tmp/pi profile'"));
+        assert!(script.contains("--model '$(false)'"));
+        assert!(script.contains("--tools bash,read --no-extensions --no-mcp"));
+        assert!(script.contains("export PATH='/opt/homebrew/bin':"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_rejects_nonexecutable_files_and_directories() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pi");
+        std::fs::write(&path, "test").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!executable(&path));
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(executable(&path));
+        assert!(!executable(dir.path()));
+        assert!(find_agent("unknown").is_none());
+    }
+
     #[test]
     fn only_shell_and_skills_enabled() {
         let text = config();

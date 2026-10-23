@@ -434,20 +434,29 @@ impl App {
             return;
         }
         match id {
-            "goose" => {
+            "goose" | "pi" => {
                 let result = (|| {
                     if self.stopping.is_some() || self.pending_settings.is_some() {
                         return Err("Wait for Mesh to finish restarting.".to_string());
                     }
-                    mesh_tray::agent_launch::find_goose()?;
+                    mesh_tray::agent_launch::find_agent(id)
+                        .ok_or_else(|| format!("Install {id} first, then try again."))?;
                     let model = mesh_tray::agent_launch::model(self.settings.api_port)?;
                     let Some(folder) = rfd::FileDialog::new()
-                        .set_title("Choose Goose's working folder")
+                        .set_title(format!("Choose {id}'s working folder"))
                         .pick_folder()
                     else {
                         return Ok(());
                     };
+                    if id == "pi" && !native::confirm(
+                        "Open Pi in this folder?",
+                        "Pi can read files and execute shell commands without asking for approval. Only open a folder you trust.",
+                        "Open Pi",
+                    ) {
+                        return Ok(());
+                    }
                     let command = mesh_tray::agent_launch::prepare(
+                        id,
                         &self.root,
                         &folder,
                         self.settings.api_port,
@@ -456,7 +465,7 @@ impl App {
                     mesh_tray::agent_launch::open_terminal(&command)
                 })();
                 if let Err(error) = result {
-                    native::notice("Could not launch Goose", &error);
+                    native::notice("Could not launch agent", &error);
                 }
             }
             "chat" => self.open("/chat"),
@@ -532,6 +541,8 @@ impl App {
             .filter(|_| self.snapshot.running && !self.snapshot.serving_models.is_empty());
         let state = mesh_tray::panel_ipc::State {
             model_id,
+            goose_available: mesh_tray::agent_launch::find_agent("goose").is_some(),
+            pi_available: mesh_tray::agent_launch::find_agent("pi").is_some(),
             api_port: self.settings.api_port,
             rules: self.settings.share_rules.clone(),
             preferences: self.app.clone(),

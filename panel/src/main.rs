@@ -1027,9 +1027,13 @@ impl Render for Panel {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .when(cfg!(target_os = "macos"), |d| d.child(
+                    .when(cfg!(target_os = "macos") && st.goose_available, |d| d.child(
                         chip("launch-goose", "Open Goose…", true)
                             .on_click(cx.listener(|p, _, _, cx| p.act("goose", cx))),
+                    ))
+                    .when(cfg!(target_os = "macos") && st.pi_available, |d| d.child(
+                        chip("launch-pi", "Open Pi…", true)
+                            .on_click(cx.listener(|p, _, _, cx| p.act("pi", cx))),
                     ))
                     .child(chip("copy-prompt", "Copy setup prompt", false).on_click(cx.listener({
                         let model_id = model_id.clone();

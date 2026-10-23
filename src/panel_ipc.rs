@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 pub struct State {
     pub status: String,
     pub api_port: u16,
+    pub goose_available: bool,
+    pub pi_available: bool,
     pub rules: crate::share_rules::ShareRules,
     pub preferences: crate::app_config::AppConfig,
     pub automatic_model: Option<String>,
