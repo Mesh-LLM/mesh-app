@@ -55,7 +55,7 @@ fn archive_name(triple: &str) -> String {
 
 fn archive_url(triple: &str) -> String {
     format!(
-        "https://github.com/Mesh-LLM/lexe-wallet/releases/download/v{VERSION}/{}",
+        "https://github.com/Mesh-LLM/lexe-wallet-plugin/releases/download/v{VERSION}/{}",
         archive_name(triple)
     )
 }
@@ -204,7 +204,7 @@ mod tests {
     fn release_urls_match_the_published_asset_names() {
         assert_eq!(
             archive_url("aarch64-apple-darwin"),
-            "https://github.com/Mesh-LLM/lexe-wallet/releases/download/v0.1.0/lexe-wallet-v0.1.0-aarch64-apple-darwin.tar.gz"
+            "https://github.com/Mesh-LLM/lexe-wallet-plugin/releases/download/v0.1.0/lexe-wallet-v0.1.0-aarch64-apple-darwin.tar.gz"
         );
         assert!(archive_name("x86_64-pc-windows-msvc").ends_with(".zip"));
     }
